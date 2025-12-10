@@ -25,7 +25,7 @@ FROM base AS builder
 RUN npm ci
 
 # Copy source
-COPY tsconfig.json ./
+COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 
 # Build TypeScript

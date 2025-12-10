@@ -1,164 +1,156 @@
-import Docker from 'dockerode';
+/**
+ * Container Manager - Portainer API Implementation
+ * Uses Portainer REST API instead of Docker socket.
+ */
 import { config, agentConfigs } from '../lib/config.js';
 import { createLogger } from '../lib/logger.js';
 import { agentRepo, eventRepo } from '../lib/db.js';
 import { setAgentStatus, acquireLock, releaseLock, keys } from '../lib/redis.js';
-import type { AgentType, AgentStatus, ContainerConfig, HealthStatus } from '../lib/types.js';
+import type { AgentType, ContainerConfig, HealthStatus } from '../lib/types.js';
 
 const logger = createLogger('container');
 
-// Docker client
-const docker = new Docker({ socketPath: config.DOCKER_SOCKET });
+// Portainer API configuration
+const portainerUrl = config.PORTAINER_URL;
+const portainerApiKey = config.PORTAINER_API_KEY;
+const portainerEnvId = config.PORTAINER_ENV_ID;
+const isPortainerConfigured = !!(portainerUrl && portainerApiKey && portainerEnvId);
+
+// Portainer API client
+async function portainerFetch<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
+  if (!isPortainerConfigured) throw new Error('Portainer not configured');
+  const url = portainerUrl + path;
+  const headers = { 'X-API-Key': portainerApiKey!, 'Content-Type': 'application/json', ...options.headers };
+  const response = await fetch(url, { ...options, headers });
+  if (!response.ok) throw new Error('Portainer API error: ' + response.status);
+  const text = await response.text();
+  return text ? JSON.parse(text) : ({} as T);
+}
+
+// Docker API via Portainer
+async function dockerApi<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
+  return portainerFetch<T>('/api/endpoints/' + portainerEnvId + '/docker' + path, options);
+}
+
+// Types
+interface ContainerInfo { Id: string; Names: string[]; State: string; Status: string; Labels: Record<string, string>; }
+interface ContainerStats { memory_stats?: { usage?: number }; cpu_stats?: { cpu_usage?: { total_usage?: number }; system_cpu_usage?: number }; precpu_stats?: { cpu_usage?: { total_usage?: number }; system_cpu_usage?: number }; }
 
 // Container name prefix
 const CONTAINER_PREFIX = 'aito-';
-
-// Base agent image
 const AGENT_IMAGE = 'aito-agent:latest';
 
-// Get container name for agent
 function getContainerName(agentType: AgentType): string {
-  return `${CONTAINER_PREFIX}${agentType}`;
+  return CONTAINER_PREFIX + agentType;
 }
 
-// Get container config for agent type
 function getContainerConfig(agentType: AgentType, agentId: string): ContainerConfig {
   const agentConfig = agentConfigs[agentType];
-
   return {
     image: AGENT_IMAGE,
     name: getContainerName(agentType),
     environment: {
       AGENT_ID: agentId,
       AGENT_TYPE: agentType,
-      AGENT_PROFILE: `/profiles/${agentType}.md`,
+      AGENT_PROFILE: '/profiles/' + agentType + '.md',
       LOOP_INTERVAL: String(agentConfig.loopInterval),
       POSTGRES_URL: config.POSTGRES_URL,
       REDIS_URL: config.REDIS_URL,
       OLLAMA_URL: config.OLLAMA_URL,
       GITHUB_TOKEN: config.GITHUB_TOKEN || '',
       GITHUB_ORG: config.GITHUB_ORG,
-      ...(agentConfig.gitFilter && { GIT_FILTER: agentConfig.gitFilter }),
+      ...('gitFilter' in agentConfig && agentConfig.gitFilter && { GIT_FILTER: agentConfig.gitFilter }),
     },
-    volumes: [
-      `${process.cwd()}/profiles:/profiles:ro`,
-      `${process.cwd()}/memory/${agentType}:/memory`,
-    ],
+    volumes: [process.cwd() + '/profiles:/profiles:ro', process.cwd() + '/memory/' + agentType + ':/memory'],
     memory: '512m',
     cpus: '1',
     restart: 'unless-stopped',
   };
 }
 
-// Convert config to Docker create options
-function toDockerCreateOptions(containerConfig: ContainerConfig): Docker.ContainerCreateOptions {
-  const env = Object.entries(containerConfig.environment).map(
-    ([k, v]) => `${k}=${v}`
-  );
-
+function toDockerCreateBody(containerConfig: ContainerConfig): Record<string, unknown> {
+  const env = Object.entries(containerConfig.environment).map(([k, v]) => k + '=' + v);
   return {
     Image: containerConfig.image,
-    name: containerConfig.name,
     Env: env,
     HostConfig: {
       Binds: containerConfig.volumes,
       Memory: containerConfig.memory ? parseMemory(containerConfig.memory) : undefined,
       NanoCpus: containerConfig.cpus ? parseCpus(containerConfig.cpus) : undefined,
-      RestartPolicy: containerConfig.restart
-        ? { Name: containerConfig.restart }
-        : undefined,
+      RestartPolicy: containerConfig.restart ? { Name: containerConfig.restart } : undefined,
       NetworkMode: 'aito-network',
     },
-    Labels: {
-      'aito.managed': 'true',
-      'aito.type': containerConfig.name.replace(CONTAINER_PREFIX, ''),
-    },
+    Labels: { 'aito.managed': 'true', 'aito.type': containerConfig.name.replace(CONTAINER_PREFIX, '') },
   };
 }
 
-// Parse memory string (e.g., "512m" -> bytes)
 function parseMemory(mem: string): number {
-  const units: Record<string, number> = {
-    b: 1,
-    k: 1024,
-    m: 1024 * 1024,
-    g: 1024 * 1024 * 1024,
-  };
+  const units: Record<string, number> = { b: 1, k: 1024, m: 1024 * 1024, g: 1024 * 1024 * 1024 };
   const match = mem.toLowerCase().match(/^(\d+)([bkmg])?$/);
-  if (!match) return 512 * 1024 * 1024; // Default 512MB
+  if (!match) return 512 * 1024 * 1024;
   return parseInt(match[1]) * (units[match[2] || 'b'] || 1);
 }
 
-// Parse CPU string (e.g., "1" -> nanoseconds)
 function parseCpus(cpus: string): number {
   return parseFloat(cpus) * 1e9;
 }
 
-// Start an agent container
 export async function startAgent(agentType: AgentType): Promise<string> {
+  if (!isPortainerConfigured) {
+    logger.warn({ agentType }, 'Portainer not configured - skipping');
+    return 'mock-container-id';
+  }
+
   const lockKey = keys.lock.container(agentType);
   const lockAcquired = await acquireLock(lockKey, 120);
-
-  if (!lockAcquired) {
-    throw new Error(`Container ${agentType} is already being modified`);
-  }
+  if (!lockAcquired) throw new Error('Container ' + agentType + ' is already being modified');
 
   try {
     const containerName = getContainerName(agentType);
-    logger.info({ agentType, containerName }, 'Starting agent container');
+    logger.info({ agentType, containerName }, 'Starting agent container via Portainer');
 
-    // Check if container already exists
-    const existingContainers = await docker.listContainers({
-      all: true,
-      filters: { name: [containerName] },
-    });
+    const containers = await dockerApi<ContainerInfo[]>(
+      '/containers/json?all=true&filters=' + encodeURIComponent(JSON.stringify({ name: [containerName] }))
+    );
 
-    if (existingContainers.length > 0) {
-      const existing = existingContainers[0];
+    if (containers.length > 0) {
+      const existing = containers[0];
       if (existing.State === 'running') {
         logger.info({ agentType }, 'Container already running');
         return existing.Id;
       }
-
-      // Remove stopped container
-      const container = docker.getContainer(existing.Id);
-      await container.remove({ force: true });
+      await dockerApi('/containers/' + existing.Id + '?force=true', { method: 'DELETE' });
       logger.info({ agentType }, 'Removed existing stopped container');
     }
 
-    // Get or create agent in database
     let agent = await agentRepo.findByType(agentType);
     if (!agent) {
       const agentConfig = agentConfigs[agentType];
       agent = await agentRepo.create({
         type: agentType,
         name: agentConfig.name,
-        profilePath: `/profiles/${agentType}.md`,
+        profilePath: '/profiles/' + agentType + '.md',
         loopInterval: agentConfig.loopInterval,
         gitRepo: config.GITHUB_ORG,
-        gitFilter: agentConfig.gitFilter,
+        gitFilter: 'gitFilter' in agentConfig ? agentConfig.gitFilter : undefined,
         status: 'starting',
       });
     }
 
-    // Update status to starting
     await agentRepo.updateStatus(agent.id, 'starting');
-
-    // Get container config
     const containerConfig = getContainerConfig(agentType, agent.id);
-    const createOptions = toDockerCreateOptions(containerConfig);
+    const createBody = toDockerCreateBody(containerConfig);
 
-    // Create and start container
-    const container = await docker.createContainer(createOptions);
-    await container.start();
+    const createResult = await dockerApi<{ Id: string }>(
+      '/containers/create?name=' + containerName,
+      { method: 'POST', body: JSON.stringify(createBody) }
+    );
 
-    const containerId = container.id;
-    logger.info({ agentType, containerId }, 'Container started');
+    const containerId = createResult.Id;
+    await dockerApi('/containers/' + containerId + '/start', { method: 'POST' });
+    logger.info({ agentType, containerId }, 'Container started via Portainer');
 
-    // Update agent status
     await agentRepo.updateStatus(agent.id, 'active', containerId);
-
-    // Set Redis status
     await setAgentStatus(agent.id, {
       agentId: agent.id,
       status: 'healthy',
@@ -167,7 +159,6 @@ export async function startAgent(agentType: AgentType): Promise<string> {
       containerStatus: 'running',
     });
 
-    // Log event
     await eventRepo.log({
       eventType: 'agent_started',
       sourceAgent: agent.id,
@@ -180,23 +171,23 @@ export async function startAgent(agentType: AgentType): Promise<string> {
   }
 }
 
-// Stop an agent container
 export async function stopAgent(agentType: AgentType): Promise<void> {
+  if (!isPortainerConfigured) {
+    logger.warn({ agentType }, 'Portainer not configured - skipping');
+    return;
+  }
+
   const lockKey = keys.lock.container(agentType);
   const lockAcquired = await acquireLock(lockKey, 120);
-
-  if (!lockAcquired) {
-    throw new Error(`Container ${agentType} is already being modified`);
-  }
+  if (!lockAcquired) throw new Error('Container ' + agentType + ' is already being modified');
 
   try {
     const containerName = getContainerName(agentType);
-    logger.info({ agentType, containerName }, 'Stopping agent container');
+    logger.info({ agentType, containerName }, 'Stopping agent container via Portainer');
 
-    const containers = await docker.listContainers({
-      all: true,
-      filters: { name: [containerName] },
-    });
+    const containers = await dockerApi<ContainerInfo[]>(
+      '/containers/json?all=true&filters=' + encodeURIComponent(JSON.stringify({ name: [containerName] }))
+    );
 
     if (containers.length === 0) {
       logger.info({ agentType }, 'Container not found');
@@ -204,83 +195,51 @@ export async function stopAgent(agentType: AgentType): Promise<void> {
     }
 
     const containerInfo = containers[0];
-    const container = docker.getContainer(containerInfo.Id);
-
     if (containerInfo.State === 'running') {
-      await container.stop({ t: 30 }); // 30 sec grace period
+      await dockerApi('/containers/' + containerInfo.Id + '/stop?t=30', { method: 'POST' });
       logger.info({ agentType }, 'Container stopped');
     }
 
-    // Update database
     const agent = await agentRepo.findByType(agentType);
     if (agent) {
       await agentRepo.updateStatus(agent.id, 'inactive');
-
-      // Log event
-      await eventRepo.log({
-        eventType: 'agent_stopped',
-        sourceAgent: agent.id,
-        payload: { agentType },
-      });
+      await eventRepo.log({ eventType: 'agent_stopped', sourceAgent: agent.id, payload: { agentType } });
     }
   } finally {
     await releaseLock(lockKey);
   }
 }
 
-// Restart an agent container
 export async function restartAgent(agentType: AgentType): Promise<string> {
   await stopAgent(agentType);
   return startAgent(agentType);
 }
 
-// Get agent container status
-export async function getAgentContainerStatus(
-  agentType: AgentType
-): Promise<HealthStatus | null> {
+export async function getAgentContainerStatus(agentType: AgentType): Promise<HealthStatus | null> {
+  if (!isPortainerConfigured) return null;
+
   const containerName = getContainerName(agentType);
+  const containers = await dockerApi<ContainerInfo[]>(
+    '/containers/json?all=true&filters=' + encodeURIComponent(JSON.stringify({ name: [containerName] }))
+  );
 
-  const containers = await docker.listContainers({
-    all: true,
-    filters: { name: [containerName] },
-  });
-
-  if (containers.length === 0) {
-    return null;
-  }
+  if (containers.length === 0) return null;
 
   const containerInfo = containers[0];
   const agent = await agentRepo.findByType(agentType);
+  if (!agent) return null;
 
-  if (!agent) {
-    return null;
-  }
-
-  // Get detailed stats if running
   let memoryUsage: number | undefined;
   let cpuUsage: number | undefined;
 
   if (containerInfo.State === 'running') {
     try {
-      const container = docker.getContainer(containerInfo.Id);
-      const stats = await container.stats({ stream: false });
-
-      // Calculate memory usage
-      if (stats.memory_stats?.usage) {
-        memoryUsage = stats.memory_stats.usage;
-      }
-
-      // Calculate CPU usage
+      const stats = await dockerApi<ContainerStats>('/containers/' + containerInfo.Id + '/stats?stream=false');
+      if (stats.memory_stats?.usage) memoryUsage = stats.memory_stats.usage;
       if (stats.cpu_stats?.cpu_usage?.total_usage) {
-        const cpuDelta =
-          stats.cpu_stats.cpu_usage.total_usage -
-          (stats.precpu_stats?.cpu_usage?.total_usage || 0);
-        const systemDelta =
-          stats.cpu_stats.system_cpu_usage -
-          (stats.precpu_stats?.system_cpu_usage || 0);
-        if (systemDelta > 0) {
-          cpuUsage = (cpuDelta / systemDelta) * 100;
-        }
+        const cpuDelta = stats.cpu_stats.cpu_usage.total_usage - (stats.precpu_stats?.cpu_usage?.total_usage || 0);
+        const systemDelta = (stats.cpu_stats.system_cpu_usage || 0) - (stats.precpu_stats?.system_cpu_usage || 0);
+        if (systemDelta > 0) cpuUsage = (cpuDelta / systemDelta) * 100;
       }
     } catch (err) {
       logger.warn({ err, agentType }, 'Failed to get container stats');
@@ -298,26 +257,20 @@ export async function getAgentContainerStatus(
   };
 }
 
-// Get all AITO-managed containers
-export async function listManagedContainers(): Promise<Docker.ContainerInfo[]> {
-  return docker.listContainers({
-    all: true,
-    filters: { label: ['aito.managed=true'] },
-  });
+export async function listManagedContainers(): Promise<ContainerInfo[]> {
+  if (!isPortainerConfigured) return [];
+  return dockerApi<ContainerInfo[]>(
+    '/containers/json?all=true&filters=' + encodeURIComponent(JSON.stringify({ label: ['aito.managed=true'] }))
+  );
 }
 
-// Check container health
-export async function checkContainerHealth(
-  agentType: AgentType
-): Promise<boolean> {
+export async function checkContainerHealth(agentType: AgentType): Promise<boolean> {
   const status = await getAgentContainerStatus(agentType);
   return status?.status === 'healthy';
 }
 
-// Auto-restart unhealthy containers
 export async function autoRestartUnhealthy(): Promise<void> {
   const agents = await agentRepo.findAll();
-
   for (const agent of agents) {
     if (agent.status === 'active') {
       const healthy = await checkContainerHealth(agent.type);
@@ -327,62 +280,57 @@ export async function autoRestartUnhealthy(): Promise<void> {
           await restartAgent(agent.type);
         } catch (err) {
           logger.error({ err, agentType: agent.type }, 'Failed to restart container');
-
-          // Update status to error
           await agentRepo.updateStatus(agent.id, 'error');
-
-          // Log event
-          await eventRepo.log({
-            eventType: 'agent_error',
-            sourceAgent: agent.id,
-            payload: { error: String(err) },
-          });
+          await eventRepo.log({ eventType: 'agent_error', sourceAgent: agent.id, payload: { error: String(err) } });
         }
       }
     }
   }
 }
 
-// Ensure network exists
 export async function ensureNetwork(): Promise<void> {
-  const networks = await docker.listNetworks({
-    filters: { name: ['aito-network'] },
-  });
-
+  if (!isPortainerConfigured) {
+    logger.warn('Portainer not configured - skipping network check');
+    return;
+  }
+  const networks = await dockerApi<{ Name: string }[]>(
+    '/networks?filters=' + encodeURIComponent(JSON.stringify({ name: ['aito-network'] }))
+  );
   if (networks.length === 0) {
-    await docker.createNetwork({
-      Name: 'aito-network',
-      Driver: 'bridge',
-    });
-    logger.info('Created aito-network');
+    await dockerApi('/networks/create', { method: 'POST', body: JSON.stringify({ Name: 'aito-network', Driver: 'bridge' }) });
+    logger.info('Created aito-network via Portainer');
   }
 }
 
-// Initialize container manager
 export async function initialize(): Promise<void> {
   logger.info('Initializing container manager');
-  await ensureNetwork();
-
-  // Check Docker connection
+  if (!isPortainerConfigured) {
+    logger.warn('Portainer not configured - container management disabled');
+    logger.info('Set PORTAINER_URL, PORTAINER_API_KEY, PORTAINER_ENV_ID to enable');
+    return;
+  }
   try {
-    await docker.ping();
-    logger.info('Docker connection established');
+    const status = await portainerFetch<{ Version: string }>('/api/status');
+    logger.info({ version: status.Version }, 'Portainer connection established');
+    await ensureNetwork();
   } catch (err) {
-    logger.error({ err }, 'Failed to connect to Docker');
+    logger.error({ err }, 'Failed to connect to Portainer');
     throw err;
   }
 }
 
-// Cleanup
 export async function cleanup(): Promise<void> {
-  // Stop all managed containers gracefully
+  if (!isPortainerConfigured) return;
   const containers = await listManagedContainers();
   for (const containerInfo of containers) {
     if (containerInfo.State === 'running') {
-      const container = docker.getContainer(containerInfo.Id);
-      await container.stop({ t: 30 });
+      try {
+        await dockerApi('/containers/' + containerInfo.Id + '/stop?t=30', { method: 'POST' });
+      } catch (err) {
+        logger.warn({ err, containerId: containerInfo.Id }, 'Failed to stop container during cleanup');
+      }
     }
   }
 }
 
-export { docker };
+export { isPortainerConfigured, portainerFetch, dockerApi };

@@ -77,8 +77,8 @@ async function checkDockerHealth(): Promise<ComponentHealth> {
   const start = Date.now();
   try {
     // Import dynamically to avoid circular dependency
-    const { docker } = await import('./container.js');
-    await docker.ping();
+    const { isPortainerConfigured, portainerFetch } = await import('./container.js');
+    if (!isPortainerConfigured) return { status: 'unhealthy', latencyMs: Date.now() - start, error: 'Not configured' }; await portainerFetch('/api/status');
     return {
       status: 'healthy',
       latencyMs: Date.now() - start,

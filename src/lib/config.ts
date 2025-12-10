@@ -9,7 +9,12 @@ const configSchema = z.object({
   POSTGRES_URL: z.string(),
   REDIS_URL: z.string().default('redis://localhost:6379'),
 
-  // Docker
+  // Portainer API (replaces Docker socket)
+  PORTAINER_URL: z.string().optional(),
+  PORTAINER_API_KEY: z.string().optional(),
+  PORTAINER_ENV_ID: z.string().optional(),
+
+  // Docker (deprecated)
   DOCKER_SOCKET: z.string().default('/var/run/docker.sock'),
 
   // AI (Ollama for local, Claude Code CLI for complex - NO API!)
