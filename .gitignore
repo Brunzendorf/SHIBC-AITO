@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Environment
+.env
+.env.local
+.env.*.local
+*.env
+
+# Build
+dist/
+build/
+*.js.map
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Docker
+docker-compose.override.yml
+
+# Database
+*.db
+*.sqlite
+
+# Claude
+.claude/
+.claude-auth/
+
+# N8N
+n8n-data/
+
+# Secrets
+secrets/
+*.pem
+*.key
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Test
+coverage/
+.nyc_output/
+
+# Temp
+tmp/
+temp/
+.tmp/
