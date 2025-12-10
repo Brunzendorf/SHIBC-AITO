@@ -132,14 +132,15 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-info}
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
-      DOCKER_SOCKET: /var/run/docker.sock
+      PORTAINER_URL: http://portainer:9000
+      PORTAINER_API_KEY: ${PORTAINER_API_KEY}
+      PORTAINER_ENV_ID: ${PORTAINER_ENV_ID:-4}
       OLLAMA_URL: http://ollama:11434
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID}
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - ./profiles:/app/profiles:ro
       - orchestrator_logs:/app/logs
     ports:
@@ -149,6 +150,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      portainer:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 30s
