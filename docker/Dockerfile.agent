@@ -1,0 +1,118 @@
+# AITO Agent Base Dockerfile
+# Contains Claude Code CLI for AI-powered agents
+# Used by CEO, DAO, CMO, CTO, CFO, COO, CCO
+
+FROM node:20-slim AS base
+
+# Install required tools
+RUN apt-get update && apt-get install -y \
+    curl \
+    bash \
+    git \
+    jq \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Claude Code CLI
+# Methode 1: npm (bevorzugt)
+# Methode 2: curl install script (fallback)
+# Methode 3: Ollama-Wrapper (wenn beides fehlschlägt)
+RUN npm install -g @anthropic-ai/claude-code@latest || \
+    (echo "Trying curl install..." && \
+     curl -fsSL https://claude.ai/cli/install.sh | sh) || \
+    (echo "Creating Ollama fallback wrapper..." && \
+     printf '#!/bin/bash\n\
+PROMPT="$*"\n\
+if [ -z "$PROMPT" ]; then\n\
+    echo "Usage: claude [prompt]"\n\
+    exit 1\n\
+fi\n\
+if [ "$1" = "--version" ]; then\n\
+    echo "Claude CLI v1.0.0-aito (Ollama Fallback)"\n\
+    exit 0\n\
+fi\n\
+if [ "$1" = "--print" ]; then\n\
+    shift\n\
+    PROMPT="$*"\n\
+fi\n\
+if curl -s http://ollama:11434/api/tags >/dev/null 2>&1; then\n\
+    curl -s -X POST http://ollama:11434/api/generate \\\n\
+        -H "Content-Type: application/json" \\\n\
+        -d "{\"model\":\"llama3.2:3b\",\"prompt\":\"$PROMPT\",\"stream\":false}" \\\n\
+        | jq -r ".response" 2>/dev/null\n\
+else\n\
+    echo "AI backend not available"\n\
+    exit 1\n\
+fi\n' > /usr/local/bin/claude && chmod +x /usr/local/bin/claude)
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Build stage
+FROM base AS builder
+RUN npm ci
+COPY tsconfig.json ./
+COPY src ./src
+RUN npm run build
+
+# Production stage
+FROM node:20-slim AS production
+
+# Install runtime tools
+RUN apt-get update && apt-get install -y \
+    curl \
+    bash \
+    git \
+    jq \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Claude CLI from base
+COPY --from=base /usr/local/bin/claude /usr/local/bin/claude
+COPY --from=base /usr/local/lib/node_modules/@anthropic-ai /usr/local/lib/node_modules/@anthropic-ai 2>/dev/null || true
+
+# Create non-root user
+RUN groupadd -g 1001 aito && \
+    useradd -r -u 1001 -g aito agent
+
+WORKDIR /app
+
+# Copy production files
+COPY --from=base /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY package*.json ./
+
+# Create directories for agent
+RUN mkdir -p \
+    /app/.claude \
+    /app/logs \
+    /app/profiles \
+    /app/memory \
+    /app/workspace && \
+    chown -R agent:aito /app
+
+# Environment
+ENV NODE_ENV=production
+ENV LOG_LEVEL=info
+ENV HOME=/app
+
+# Claude config directory (for persistent auth)
+ENV CLAUDE_CONFIG_DIR=/app/.claude
+
+# Switch to non-root user
+USER agent
+
+# Expose agent port (for health checks)
+EXPOSE 3000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+# Default command (override per agent type)
+CMD ["node", "dist/agents/daemon.js"]

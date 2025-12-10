@@ -1,0 +1,402 @@
+# AITO 2.0 - Docker Compose Configuration
+# Full infrastructure for autonomous AI CEO system
+
+version: '3.8'
+
+services:
+  # ============================================
+  # TIER 1: INFRASTRUCTURE (Always Running)
+  # ============================================
+
+  postgres:
+    image: pgvector/pgvector:pg15
+    container_name: aito-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aito}
+      POSTGRES_USER: ${POSTGRES_USER:-aito}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-aito}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aito-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: aito-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aito-network
+
+  # ============================================
+  # TIER 2: AI INFRASTRUCTURE (Always Running)
+  # ============================================
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: aito-ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+    ports:
+      - "11434:11434"
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aito-network
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: aito-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aito-network
+
+  # ============================================
+  # TIER 3: WORKFLOW & AUTOMATION
+  # ============================================
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: aito-n8n
+    restart: unless-stopped
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:-admin}
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:?N8N_ENCRYPTION_KEY required}
+      WEBHOOK_URL: ${N8N_WEBHOOK_URL:-http://localhost:5678}
+      GENERIC_TIMEZONE: UTC
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n-workflows:/home/node/workflows:ro
+    ports:
+      - "5678:5678"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aito-network
+
+  # ============================================
+  # ORCHESTRATOR (Container Manager)
+  # ============================================
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.orchestrator
+    container_name: aito-orchestrator
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
+      REDIS_URL: redis://redis:6379
+      DOCKER_SOCKET: /var/run/docker.sock
+      OLLAMA_URL: http://ollama:11434
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./profiles:/app/profiles:ro
+      - orchestrator_logs:/app/logs
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - aito-network
+
+  # ============================================
+  # HEAD LAYER AGENTS (CEO + DAO)
+  # ============================================
+
+  ceo-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    container_name: aito-ceo
+    restart: unless-stopped
+    environment:
+      AGENT_TYPE: ceo
+      AGENT_PROFILE: /profiles/ceo.md
+      LOOP_INTERVAL: 3600
+      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
+      REDIS_URL: redis://redis:6379
+      OLLAMA_URL: http://ollama:11434
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
+    volumes:
+      - ./profiles:/profiles:ro
+      - ceo_memory:/app/memory
+      - ceo_claude_config:/app/.claude
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - aito-network
+    profiles:
+      - agents
+
+  dao-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    container_name: aito-dao
+    restart: unless-stopped
+    environment:
+      AGENT_TYPE: dao
+      AGENT_PROFILE: /profiles/dao.md
+      LOOP_INTERVAL: 21600
+      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
+      REDIS_URL: redis://redis:6379
+      OLLAMA_URL: http://ollama:11434
+      SNAPSHOT_SPACE: ${SNAPSHOT_SPACE:-shibaclassic.eth}
+      GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
+    volumes:
+      - ./profiles:/profiles:ro
+      - dao_memory:/app/memory
+      - dao_claude_config:/app/.claude
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - aito-network
+    profiles:
+      - agents
+
+  # ============================================
+  # C-LEVEL LAYER AGENTS
+  # ============================================
+
+  cmo-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    container_name: aito-cmo
+    restart: unless-stopped
+    environment:
+      AGENT_TYPE: cmo
+      AGENT_PROFILE: /profiles/cmo.md
+      LOOP_INTERVAL: 14400
+      GIT_FILTER: content/*
+      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
+      REDIS_URL: redis://redis:6379
+      OLLAMA_URL: http://ollama:11434
+      TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      DEEPL_API_KEY: ${DEEPL_API_KEY}
+    volumes:
+      - ./profiles:/profiles:ro
+      - cmo_memory:/app/memory
+      - cmo_claude_config:/app/.claude
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - aito-network
+    profiles:
+      - agents
+
+  cto-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    container_name: aito-cto
+    restart: unless-stopped
+    environment:
+      AGENT_TYPE: cto
+      AGENT_PROFILE: /profiles/cto.md
+      LOOP_INTERVAL: 3600
+      GIT_FILTER: website/*
+      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
+      REDIS_URL: redis://redis:6379
+      OLLAMA_URL: http://ollama:11434
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      DIRECTUS_URL: ${DIRECTUS_URL}
+      DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
+    volumes:
+      - ./profiles:/profiles:ro
+      - cto_memory:/app/memory
+      - cto_claude_config:/app/.claude
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - aito-network
+    profiles:
+      - agents
+
+  cfo-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    container_name: aito-cfo
+    restart: unless-stopped
+    environment:
+      AGENT_TYPE: cfo
+      AGENT_PROFILE: /profiles/cfo.md
+      LOOP_INTERVAL: 21600
+      GIT_FILTER: treasury/*
+      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
+      REDIS_URL: redis://redis:6379
+      OLLAMA_URL: http://ollama:11434
+      ETHERSCAN_API_KEY: ${ETHERSCAN_API_KEY}
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY}
+      QUICKNODE_HTTP_URL: ${QUICKNODE_HTTP_URL}
+      GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
+    volumes:
+      - ./profiles:/profiles:ro
+      - cfo_memory:/app/memory
+      - cfo_claude_config:/app/.claude
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - aito-network
+    profiles:
+      - agents
+
+  coo-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    container_name: aito-coo
+    restart: unless-stopped
+    environment:
+      AGENT_TYPE: coo
+      AGENT_PROFILE: /profiles/coo.md
+      LOOP_INTERVAL: 7200
+      GIT_FILTER: community/*
+      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
+      REDIS_URL: redis://redis:6379
+      OLLAMA_URL: http://ollama:11434
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+    volumes:
+      - ./profiles:/profiles:ro
+      - coo_memory:/app/memory
+      - coo_claude_config:/app/.claude
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - aito-network
+    profiles:
+      - agents
+
+  cco-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    container_name: aito-cco
+    restart: unless-stopped
+    environment:
+      AGENT_TYPE: cco
+      AGENT_PROFILE: /profiles/cco.md
+      LOOP_INTERVAL: 86400
+      GIT_FILTER: legal/*
+      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
+      REDIS_URL: redis://redis:6379
+      OLLAMA_URL: http://ollama:11434
+    volumes:
+      - ./profiles:/profiles:ro
+      - cco_memory:/app/memory
+      - cco_claude_config:/app/.claude
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+    networks:
+      - aito-network
+    profiles:
+      - agents
+
+# ============================================
+# NETWORKS
+# ============================================
+
+networks:
+  aito-network:
+    driver: bridge
+    name: aito-network
+
+# ============================================
+# VOLUMES
+# ============================================
+
+volumes:
+  # Infrastructure
+  postgres_data:
+  redis_data:
+  ollama_data:
+  qdrant_data:
+  n8n_data:
+  orchestrator_logs:
+
+  # Agent Memory (Persistent State)
+  ceo_memory:
+  dao_memory:
+  cmo_memory:
+  cto_memory:
+  cfo_memory:
+  coo_memory:
+  cco_memory:
+
+  # Claude CLI Auth (Persistent!)
+  ceo_claude_config:
+  dao_claude_config:
+  cmo_claude_config:
+  cto_claude_config:
+  cfo_claude_config:
+  coo_claude_config:
+  cco_claude_config:

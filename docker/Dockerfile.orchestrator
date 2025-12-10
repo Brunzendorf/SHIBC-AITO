@@ -1,0 +1,73 @@
+# AITO Orchestrator Dockerfile
+# Lightweight container for container lifecycle management
+# NO AI - just Node.js for coordination
+
+FROM node:20-slim AS base
+
+# Install required tools
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies
+RUN npm ci --only=production
+
+# Build stage
+FROM base AS builder
+
+# Install dev dependencies for build
+RUN npm ci
+
+# Copy source
+COPY tsconfig.json ./
+COPY src ./src
+
+# Build TypeScript
+RUN npm run build
+
+# Production stage
+FROM node:20-slim AS production
+
+# Install curl for healthcheck
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN groupadd -g 1001 aito && \
+    useradd -r -u 1001 -g aito orchestrator
+
+WORKDIR /app
+
+# Copy production dependencies
+COPY --from=base /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY package*.json ./
+
+# Create directories
+RUN mkdir -p /app/logs /app/profiles /app/memory && \
+    chown -R orchestrator:aito /app
+
+# Switch to non-root user
+USER orchestrator
+
+# Environment
+ENV NODE_ENV=production
+ENV LOG_LEVEL=info
+
+# Expose API port
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Start orchestrator
+CMD ["node", "dist/orchestrator/index.js"]
