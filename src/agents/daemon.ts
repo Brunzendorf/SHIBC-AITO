@@ -321,6 +321,9 @@ export class AgentDaemon {
       // Build prompt
       const systemPrompt = generateSystemPrompt(this.profile);
       const loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data });
+      logger.info({ systemPromptLength: systemPrompt.length, loopPromptLength: loopPrompt.length }, 'Prompt lengths');
+      logger.debug({ systemPrompt }, 'System prompt');
+      logger.debug({ loopPrompt }, 'Loop prompt');
 
       // Execute AI
       let result;
@@ -328,7 +331,7 @@ export class AgentDaemon {
         result = await executeClaudeCode({
           prompt: loopPrompt,
           systemPrompt,
-          timeout: 120000, // 2 minutes
+          timeout: 300000, // 5 minutes
         });
       } else {
         logger.warn('Claude unavailable, using Ollama fallback');

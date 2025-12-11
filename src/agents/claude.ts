@@ -68,9 +68,10 @@ export async function executeClaudeCode(session: ClaudeSession): Promise<ClaudeR
     }
 
     // Use shell: false to avoid escaping issues with multi-line prompts
+    // stdin must be 'ignore' - otherwise Claude waits for input and hangs
     const proc = spawn('claude', args, {
       shell: false,
-      stdio: 'pipe',
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
         // Ensure non-interactive mode
