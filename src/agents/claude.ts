@@ -30,7 +30,7 @@ export interface ClaudeResult {
 export async function isClaudeAvailable(): Promise<boolean> {
   return new Promise((resolve) => {
     const proc = spawn('claude', ['--version'], {
-      shell: true,
+      shell: false,
       stdio: 'pipe',
     });
 
@@ -67,8 +67,9 @@ export async function executeClaudeCode(session: ClaudeSession): Promise<ClaudeR
       args.unshift('--system-prompt', session.systemPrompt);
     }
 
+    // Use shell: false to avoid escaping issues with multi-line prompts
     const proc = spawn('claude', args, {
-      shell: true,
+      shell: false,
       stdio: 'pipe',
       env: {
         ...process.env,

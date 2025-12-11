@@ -66,6 +66,14 @@ export class AgentDaemon {
       this.profile = await loadProfile(this.config.profilePath, this.config.agentType);
       logger.info({ profileName: this.profile.name }, 'Profile loaded');
 
+      // 1.5. Load agent from DB and use DB-assigned ID
+      const dbAgent = await agentRepo.findByType(this.config.agentType);
+      if (!dbAgent) {
+        throw new Error(`Agent type ${this.config.agentType} not found in database. Run init-db.sql first.`);
+      }
+      this.config.agentId = dbAgent.id;
+      logger.info({ dbAgentId: dbAgent.id, agentType: this.config.agentType }, 'Using DB agent ID');
+
       // 2. Initialize state manager
       this.state = createStateManager(this.config.agentId, this.config.agentType);
       logger.info('State manager initialized');

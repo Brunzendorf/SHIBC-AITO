@@ -56,7 +56,7 @@ RUN npm ci --only=production
 # Build stage
 FROM base AS builder
 RUN npm ci
-COPY tsconfig.json ./
+COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 RUN npm run build
 
@@ -74,7 +74,7 @@ RUN apt-get update && apt-get install -y \
 
 # Copy Claude CLI from base
 COPY --from=base /usr/local/bin/claude /usr/local/bin/claude
-COPY --from=base /usr/local/lib/node_modules/@anthropic-ai /usr/local/lib/node_modules/@anthropic-ai 2>/dev/null || true
+COPY --from=base /usr/local/lib/node_modules/@anthropic-ai /usr/local/lib/node_modules/@anthropic-ai
 
 # Create non-root user
 RUN groupadd -g 1001 aito && \
@@ -108,11 +108,11 @@ ENV CLAUDE_CONFIG_DIR=/app/.claude
 USER agent
 
 # Expose agent port (for health checks)
-EXPOSE 3000
+EXPOSE 3001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:3000/health || exit 1
+    CMD curl -f http://localhost:3001/health || exit 1
 
 # Default command (override per agent type)
-CMD ["node", "dist/agents/daemon.js"]
+CMD ["node", "dist/agents/index.js"]

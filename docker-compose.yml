@@ -172,7 +172,7 @@ services:
     restart: unless-stopped
     environment:
       AGENT_TYPE: ceo
-      AGENT_PROFILE: /profiles/ceo.md
+      AGENT_PROFILE: /app/profiles/ceo.md
       LOOP_INTERVAL: 3600
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
@@ -180,7 +180,7 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
     volumes:
-      - ./profiles:/profiles:ro
+      - ./profiles:/app/profiles:ro
       - ceo_memory:/app/memory
       - ceo_claude_config:/app/.claude
     depends_on:
@@ -199,7 +199,7 @@ services:
     restart: unless-stopped
     environment:
       AGENT_TYPE: dao
-      AGENT_PROFILE: /profiles/dao.md
+      AGENT_PROFILE: /app/profiles/dao.md
       LOOP_INTERVAL: 21600
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
@@ -207,7 +207,7 @@ services:
       SNAPSHOT_SPACE: ${SNAPSHOT_SPACE:-shibaclassic.eth}
       GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
     volumes:
-      - ./profiles:/profiles:ro
+      - ./profiles:/app/profiles:ro
       - dao_memory:/app/memory
       - dao_claude_config:/app/.claude
     depends_on:
@@ -230,7 +230,7 @@ services:
     restart: unless-stopped
     environment:
       AGENT_TYPE: cmo
-      AGENT_PROFILE: /profiles/cmo.md
+      AGENT_PROFILE: /app/profiles/cmo.md
       LOOP_INTERVAL: 14400
       GIT_FILTER: content/*
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
@@ -240,7 +240,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       DEEPL_API_KEY: ${DEEPL_API_KEY}
     volumes:
-      - ./profiles:/profiles:ro
+      - ./profiles:/app/profiles:ro
       - cmo_memory:/app/memory
       - cmo_claude_config:/app/.claude
     depends_on:
@@ -259,7 +259,7 @@ services:
     restart: unless-stopped
     environment:
       AGENT_TYPE: cto
-      AGENT_PROFILE: /profiles/cto.md
+      AGENT_PROFILE: /app/profiles/cto.md
       LOOP_INTERVAL: 3600
       GIT_FILTER: website/*
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
@@ -269,7 +269,7 @@ services:
       DIRECTUS_URL: ${DIRECTUS_URL}
       DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
     volumes:
-      - ./profiles:/profiles:ro
+      - ./profiles:/app/profiles:ro
       - cto_memory:/app/memory
       - cto_claude_config:/app/.claude
     depends_on:
@@ -288,7 +288,7 @@ services:
     restart: unless-stopped
     environment:
       AGENT_TYPE: cfo
-      AGENT_PROFILE: /profiles/cfo.md
+      AGENT_PROFILE: /app/profiles/cfo.md
       LOOP_INTERVAL: 21600
       GIT_FILTER: treasury/*
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
@@ -299,7 +299,7 @@ services:
       QUICKNODE_HTTP_URL: ${QUICKNODE_HTTP_URL}
       GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
     volumes:
-      - ./profiles:/profiles:ro
+      - ./profiles:/app/profiles:ro
       - cfo_memory:/app/memory
       - cfo_claude_config:/app/.claude
     depends_on:
@@ -318,7 +318,7 @@ services:
     restart: unless-stopped
     environment:
       AGENT_TYPE: coo
-      AGENT_PROFILE: /profiles/coo.md
+      AGENT_PROFILE: /app/profiles/coo.md
       LOOP_INTERVAL: 7200
       GIT_FILTER: community/*
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
@@ -327,7 +327,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
     volumes:
-      - ./profiles:/profiles:ro
+      - ./profiles:/app/profiles:ro
       - coo_memory:/app/memory
       - coo_claude_config:/app/.claude
     depends_on:
@@ -346,14 +346,14 @@ services:
     restart: unless-stopped
     environment:
       AGENT_TYPE: cco
-      AGENT_PROFILE: /profiles/cco.md
+      AGENT_PROFILE: /app/profiles/cco.md
       LOOP_INTERVAL: 86400
       GIT_FILTER: legal/*
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
     volumes:
-      - ./profiles:/profiles:ro
+      - ./profiles:/app/profiles:ro
       - cco_memory:/app/memory
       - cco_claude_config:/app/.claude
     depends_on:
