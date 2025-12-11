@@ -38,7 +38,10 @@ interface ContainerStats { memory_stats?: { usage?: number }; cpu_stats?: { cpu_
 
 // Container name prefix
 const CONTAINER_PREFIX = 'aito-';
-const AGENT_IMAGE = 'aito-agent:latest';
+
+function getAgentImage(agentType: AgentType): string {
+  return 'shibc-aito-' + agentType + '-agent:latest';
+}
 
 function getContainerName(agentType: AgentType): string {
   return CONTAINER_PREFIX + agentType;
@@ -47,7 +50,7 @@ function getContainerName(agentType: AgentType): string {
 function getContainerConfig(agentType: AgentType, agentId: string): ContainerConfig {
   const agentConfig = agentConfigs[agentType];
   return {
-    image: AGENT_IMAGE,
+    image: getAgentImage(agentType),
     name: getContainerName(agentType),
     environment: {
       AGENT_ID: agentId,
@@ -61,7 +64,11 @@ function getContainerConfig(agentType: AgentType, agentId: string): ContainerCon
       GITHUB_ORG: config.GITHUB_ORG,
       ...('gitFilter' in agentConfig && agentConfig.gitFilter && { GIT_FILTER: agentConfig.gitFilter }),
     },
-    volumes: [process.cwd() + '/profiles:/profiles:ro', process.cwd() + '/memory/' + agentType + ':/memory'],
+    volumes: [
+      // Named volumes for consistency with docker-compose
+      agentType + '_memory:/app/memory',
+      'shared_claude_config:/app/.claude',
+    ],
     memory: '512m',
     cpus: '1',
     restart: 'unless-stopped',

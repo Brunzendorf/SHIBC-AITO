@@ -26,9 +26,14 @@ import {
   Stop as StopIcon,
   Refresh as RestartIcon,
   ArrowBack as BackIcon,
+  ExpandMore as ExpandMoreIcon,
+  Message as MessageIcon,
 } from '@mui/icons-material';
+import Accordion from '@mui/material/Accordion';
+import AccordionSummary from '@mui/material/AccordionSummary';
+import AccordionDetails from '@mui/material/AccordionDetails';
 import Link from 'next/link';
-import { useAgent } from '@/hooks/useAgents';
+import { useAgent, useAgentHistory, AgentHistory } from '@/hooks/useAgents';
 import { startAgent, stopAgent, restartAgent } from '@/lib/api';
 import { agentColors, statusColors } from '@/theme/theme';
 import { formatDate, formatDistanceToNow } from '@/lib/utils';
@@ -49,6 +54,7 @@ const agentIcons: Record<string, string> = {
 export default function AgentDetailPage({ params }: { params: Promise<{ type: string }> }) {
   const { type } = use(params);
   const { data: agent, error, isLoading, mutate } = useAgent(type);
+  const { data: history } = useAgentHistory(type);
 
   const handleStart = async () => {
     await startAgent(type);
@@ -188,7 +194,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ type: st
                   </TableRow>
                   <TableRow>
                     <TableCell sx={{ color: 'text.secondary', border: 'none' }}>Container Status</TableCell>
-                    <TableCell sx={{ border: 'none' }}>{agent.containerStatus || 'N/A'}</TableCell>
+                    <TableCell sx={{ border: 'none' }}>{agent.containerStatus?.status || 'N/A'}</TableCell>
                   </TableRow>
                   <TableRow>
                     <TableCell sx={{ color: 'text.secondary', border: 'none' }}>Created</TableCell>
@@ -239,46 +245,113 @@ export default function AgentDetailPage({ params }: { params: Promise<{ type: st
           </Card>
         </Grid>
 
-        {/* History */}
+        {/* History with Details */}
         <Grid item xs={12}>
           <Card>
             <CardContent>
               <Typography variant="h6" gutterBottom>
-                History
+                Communication History
               </Typography>
-              {!agent.history?.length ? (
+              {!history?.length ? (
                 <EmptyState title="No history" description="No actions recorded yet." />
               ) : (
-                <TableContainer>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Time</TableCell>
-                        <TableCell>Action</TableCell>
-                        <TableCell>Summary</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {agent.history.slice(0, 20).map((entry) => (
-                        <TableRow key={entry.id}>
-                          <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  {history.slice(0, 20).map((entry) => {
+                    const details = entry.details as Record<string, unknown> | undefined;
+                    const messages = details?.messages as Array<{to: string; content: string}> | undefined;
+                    const actions = details?.actions as Array<{type: string; data: unknown}> | undefined;
+                    
+                    return (
+                      <Accordion key={entry.id} sx={{ backgroundColor: 'rgba(255,255,255,0.03)' }}>
+                        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, width: '100%' }}>
                             <Tooltip title={formatDate(entry.createdAt)}>
-                              <span>{formatDistanceToNow(entry.createdAt)}</span>
+                              <Typography variant="caption" color="text.secondary" sx={{ minWidth: 80 }}>
+                                {formatDistanceToNow(entry.createdAt)}
+                              </Typography>
                             </Tooltip>
-                          </TableCell>
-                          <TableCell>
                             <Chip
                               label={entry.actionType}
                               size="small"
                               sx={{ fontSize: '0.7rem' }}
                             />
-                          </TableCell>
-                          <TableCell>{entry.summary}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
+                            {messages && messages.length > 0 && (
+                              <Chip
+                                icon={<MessageIcon sx={{ fontSize: 14 }} />}
+                                label={`${messages.length} msg`}
+                                size="small"
+                                color="info"
+                                variant="outlined"
+                                sx={{ fontSize: '0.65rem' }}
+                              />
+                            )}
+                            <Typography variant="body2" sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {entry.summary}
+                            </Typography>
+                          </Box>
+                        </AccordionSummary>
+                        <AccordionDetails>
+                          {/* Full Summary */}
+                          <Typography variant="body2" sx={{ mb: 2, whiteSpace: 'pre-wrap' }}>
+                            {entry.summary}
+                          </Typography>
+                          
+                          {/* Messages Section */}
+                          {messages && messages.length > 0 && (
+                            <Box sx={{ mb: 2 }}>
+                              <Typography variant="subtitle2" sx={{ mb: 1, color: 'info.main' }}>
+                                📨 Messages Sent
+                              </Typography>
+                              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                                {messages.map((msg, idx) => (
+                                  <Paper key={idx} variant="outlined" sx={{ p: 1.5, backgroundColor: 'rgba(0,0,0,0.2)' }}>
+                                    <Typography variant="caption" color="primary" sx={{ fontWeight: 600 }}>
+                                      To: {msg.to}
+                                    </Typography>
+                                    <Typography variant="body2" sx={{ mt: 0.5, fontFamily: 'monospace', fontSize: '0.8rem' }}>
+                                      {msg.content}
+                                    </Typography>
+                                  </Paper>
+                                ))}
+                              </Box>
+                            </Box>
+                          )}
+                          
+                          {/* Actions Section */}
+                          {actions && actions.length > 0 && (
+                            <Box sx={{ mb: 2 }}>
+                              <Typography variant="subtitle2" sx={{ mb: 1, color: 'success.main' }}>
+                                ⚡ Actions Performed
+                              </Typography>
+                              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                                {actions.map((action, idx) => (
+                                  <Box key={idx} sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
+                                    <Chip label={action.type} size="small" variant="outlined" sx={{ fontSize: '0.65rem' }} />
+                                    <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
+                                      {JSON.stringify(action.data, null, 0).slice(0, 200)}...
+                                    </Typography>
+                                  </Box>
+                                ))}
+                              </Box>
+                            </Box>
+                          )}
+                          
+                          {/* Raw Details Fallback */}
+                          {details && !messages && !actions && (
+                            <Box>
+                              <Typography variant="subtitle2" sx={{ mb: 1, color: 'text.secondary' }}>
+                                Raw Details
+                              </Typography>
+                              <pre style={{ fontSize: '0.7rem', overflow: 'auto', maxHeight: 200 }}>
+                                {JSON.stringify(details, null, 2)}
+                              </pre>
+                            </Box>
+                          )}
+                        </AccordionDetails>
+                      </Accordion>
+                    );
+                  })}
+                </Box>
               )}
             </CardContent>
           </Card>

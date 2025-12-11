@@ -10,7 +10,9 @@ const fetcher = async (url: string) => {
   if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
   }
-  return response.json();
+
+  const result = await response.json();
+  return result?.data;
 };
 
 // Custom hook options

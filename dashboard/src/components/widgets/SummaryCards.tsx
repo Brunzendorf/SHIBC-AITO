@@ -10,6 +10,7 @@ import {
 import { useAgents } from '@/hooks/useAgents';
 import { usePendingDecisions, usePendingEscalations } from '@/hooks/useDecisions';
 import { agentColors, statusColors } from '@/theme/theme';
+import {useEffect} from "react";
 
 interface SummaryCardProps {
   title: string;

@@ -120,6 +120,16 @@ export interface AgentHealth {
   errorCount?: number;
 }
 
+export interface ContainerStatus {
+  agentId: string;
+  status: string;
+  lastCheck: string;
+  containerId?: string;
+  containerStatus?: string;
+  memoryUsage?: number;
+  cpuUsage?: number;
+}
+
 export interface Agent {
   id: string;
   type: string;
@@ -128,7 +138,7 @@ export interface Agent {
   profilePath: string;
   loopInterval: number;
   containerId?: string;
-  containerStatus?: string;
+  containerStatus?: ContainerStatus | null;
   createdAt: string;
   updatedAt: string;
 }

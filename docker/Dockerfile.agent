@@ -36,9 +36,9 @@ if [ "$1" = "--print" ]; then\n\
     PROMPT="$*"\n\
 fi\n\
 if curl -s http://ollama:11434/api/tags >/dev/null 2>&1; then\n\
-    curl -s -X POST http://ollama:11434/api/generate \\\n\
-        -H "Content-Type: application/json" \\\n\
-        -d "{\"model\":\"llama3.2:3b\",\"prompt\":\"$PROMPT\",\"stream\":false}" \\\n\
+    curl -s -X POST http://ollama:11434/api/generate \\n\
+        -H "Content-Type: application/json" \\n\
+        -d "{\"model\":\"llama3.2:3b\",\"prompt\":\"$PROMPT\",\"stream\":false}" \\n\
         | jq -r ".response" 2>/dev/null\n\
 else\n\
     echo "AI backend not available"\n\
@@ -87,11 +87,13 @@ COPY --from=base /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY package*.json ./
 
+# Copy agent profiles into image (no volume mount needed for Portainer API)
+COPY profiles ./profiles
+
 # Create directories for agent
 RUN mkdir -p \
     /app/.claude \
     /app/logs \
-    /app/profiles \
     /app/memory \
     /app/workspace && \
     chown -R agent:aito /app

@@ -113,7 +113,7 @@ export default function AgentCard({ agent, onStart, onStop, onRestart }: AgentCa
               Container
             </Typography>
             <Typography variant="body2" sx={{ fontWeight: 500 }}>
-              {agent.containerStatus || 'N/A'}
+              {agent.containerStatus?.status || 'N/A'}
             </Typography>
           </Box>
         </Box>

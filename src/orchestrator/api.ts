@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { createLogger } from '../lib/logger.js';
 import { numericConfig } from '../lib/config.js';
-import { agentRepo, eventRepo, taskRepo, decisionRepo, escalationRepo } from '../lib/db.js';
+import { agentRepo, eventRepo, taskRepo, decisionRepo, escalationRepo, historyRepo } from '../lib/db.js';
 import { startAgent, stopAgent, restartAgent, getAgentContainerStatus, listManagedContainers } from './container.js';
 import { getScheduledJobs, pauseJob, resumeJob } from './scheduler.js';
 import { getSystemHealth, isAlive, isReady, getAgentHealth } from './health.js';
@@ -110,6 +110,20 @@ app.get('/agents/:type', asyncHandler(async (req, res) => {
 
   const containerStatus = await getAgentContainerStatus(agentType);
   sendResponse(res, { ...agent, containerStatus });
+}));
+
+// Get agent history
+app.get('/agents/:type/history', asyncHandler(async (req, res) => {
+  const agentType = req.params.type as AgentType;
+  const limit = parseInt(req.query.limit as string) || 50;
+  const agent = await agentRepo.findByType(agentType);
+
+  if (!agent) {
+    return sendError(res, 'Agent not found', 404);
+  }
+
+  const history = await historyRepo.getRecent(agent.id, limit);
+  sendResponse(res, history);
 }));
 
 // Start agent
