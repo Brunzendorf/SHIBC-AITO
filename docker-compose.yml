@@ -65,12 +65,34 @@ services:
         reservations:
           memory: 2G
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 30s
       timeout: 10s
       retries: 3
     networks:
       - aito-network
+
+  # Ollama Model Initializer - pulls required models on startup
+  ollama-init:
+    image: curlimages/curl:latest
+    container_name: aito-ollama-init
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Pulling Ollama models..."
+        # Embedding model for RAG (multilingual, 1024 dims, 72% accuracy)
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "bge-m3"}'
+        echo "bge-m3 pulled"
+        # Optional: Smaller embedding model as fallback
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "nomic-embed-text"}'
+        echo "nomic-embed-text pulled"
+        echo "All models ready!"
+    networks:
+      - aito-network
+    restart: "no"
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -125,6 +147,8 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.orchestrator
+      args:
+        GIT_HASH: ${GIT_HASH:-unknown}
     container_name: aito-orchestrator
     restart: unless-stopped
     environment:
@@ -136,6 +160,7 @@ services:
       PORTAINER_API_KEY: ${PORTAINER_API_KEY}
       PORTAINER_ENV_ID: ${PORTAINER_ENV_ID:-4}
       OLLAMA_URL: http://ollama:11434
+      QDRANT_URL: http://qdrant:6333
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID}
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
@@ -151,6 +176,8 @@ services:
       redis:
         condition: service_healthy
       portainer:
+        condition: service_started
+      qdrant:
         condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
@@ -183,6 +210,7 @@ services:
       - ./profiles:/app/profiles:ro
       - ceo_memory:/app/memory
       - shared_claude_config:/app/.claude
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -210,6 +238,7 @@ services:
       - ./profiles:/app/profiles:ro
       - dao_memory:/app/memory
       - shared_claude_config:/app/.claude
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -243,6 +272,7 @@ services:
       - ./profiles:/app/profiles:ro
       - cmo_memory:/app/memory
       - shared_claude_config:/app/.claude
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -272,6 +302,7 @@ services:
       - ./profiles:/app/profiles:ro
       - cto_memory:/app/memory
       - shared_claude_config:/app/.claude
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -302,6 +333,7 @@ services:
       - ./profiles:/app/profiles:ro
       - cfo_memory:/app/memory
       - shared_claude_config:/app/.claude
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -330,6 +362,7 @@ services:
       - ./profiles:/app/profiles:ro
       - coo_memory:/app/memory
       - shared_claude_config:/app/.claude
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -356,6 +389,7 @@ services:
       - ./profiles:/app/profiles:ro
       - cco_memory:/app/memory
       - shared_claude_config:/app/.claude
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy

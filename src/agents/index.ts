@@ -90,13 +90,17 @@ async function main(): Promise<void> {
     }, 'Agent running');
 
   } catch (error) {
-    logger.error({ error }, 'Failed to start agent');
+    const errMsg = error instanceof Error ? error.message : String(error);
+    const errStack = error instanceof Error ? error.stack : undefined;
+    logger.error({ error: errMsg, stack: errStack }, 'Failed to start agent');
     process.exit(1);
   }
 }
 
 // Run
 main().catch((error) => {
-  logger.error({ error }, 'Unhandled error');
+  const errMsg = error instanceof Error ? error.message : String(error);
+  const errStack = error instanceof Error ? error.stack : undefined;
+  logger.error({ error: errMsg, stack: errStack }, 'Unhandled error');
   process.exit(1);
 });

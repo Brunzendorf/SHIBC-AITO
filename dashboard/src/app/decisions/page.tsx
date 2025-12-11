@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import {
   Typography,
   Box,
@@ -12,91 +13,157 @@ import {
   TableHead,
   TableRow,
   Chip,
-  Paper,
+  Tabs,
+  Tab,
+  Tooltip,
 } from '@mui/material';
-import { usePendingDecisions } from '@/hooks/useDecisions';
-import { formatDistanceToNow, formatDate } from '@/lib/utils';
+import { usePendingDecisions, useAllDecisions } from '@/hooks/useDecisions';
+import { useAgents } from '@/hooks/useAgents';
+import { formatDistanceToNow } from '@/lib/utils';
 import Loading from '@/components/common/Loading';
 import ErrorDisplay from '@/components/common/ErrorDisplay';
 import EmptyState from '@/components/common/EmptyState';
-import { HowToVote as DecisionIcon } from '@mui/icons-material';
+import { HowToVote as DecisionIcon, History as HistoryIcon } from '@mui/icons-material';
 
 const statusColors: Record<string, string> = {
-  pending: '#45b7d1',
+  pending: '#ffa502',
   approved: '#00ff88',
-  rejected: '#ff4757',
-  vetoed: '#ffa502',
+  rejected: '#ff0055',
+  vetoed: '#ff6b35',
+  escalated: '#ff0055',
+};
+
+const tierColors: Record<string, string> = {
+  operational: '#00ff88',
+  minor: '#ffd700',
+  major: '#ff6b35',
+  critical: '#ff0055',
 };
 
 const voteColors: Record<string, string> = {
   approve: '#00ff88',
-  reject: '#ff4757',
+  veto: '#ff0055',
   abstain: '#666666',
 };
 
-export default function DecisionsPage() {
-  const { data: decisions, error, isLoading, mutate } = usePendingDecisions();
+const statusLabels: Record<string, string> = {
+  pending: 'Ausstehend',
+  approved: 'Genehmigt',
+  rejected: 'Abgelehnt',
+  vetoed: 'Veto',
+  escalated: 'Eskaliert',
+};
 
-  if (isLoading) return <Loading message="Loading decisions..." />;
+export default function DecisionsPage() {
+  const [tab, setTab] = useState(0);
+  const { data: pending, error: pendingError, isLoading: pendingLoading, mutate: mutatePending } = usePendingDecisions();
+  const { data: all, error: allError, isLoading: allLoading, mutate: mutateAll } = useAllDecisions(100);
+  const { data: agents } = useAgents();
+
+  // Map agent ID to name
+  const getAgentName = (id?: string): string => {
+    if (!id || !agents) return '—';
+    const agent = agents.find(a => a.id === id);
+    return agent ? agent.type.toUpperCase() : id.substring(0, 8);
+  };
+
+  const isLoading = tab === 0 ? pendingLoading : allLoading;
+  const error = tab === 0 ? pendingError : allError;
+  const mutate = tab === 0 ? mutatePending : mutateAll;
+  const decisions = tab === 0 ? pending : all;
+
+  if (isLoading) return <Loading message="Lade Entscheidungen..." />;
   if (error) return <ErrorDisplay error={error} onRetry={() => mutate()} />;
 
   return (
     <Box>
       <Typography variant="h4" gutterBottom sx={{ fontWeight: 700 }}>
-        Pending Decisions
+        Entscheidungen
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>
-        Decisions awaiting votes or human intervention
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+        Alle Governance-Entscheidungen im System
       </Typography>
+
+      <Tabs
+        value={tab}
+        onChange={(_, v) => setTab(v)}
+        sx={{ mb: 3, '& .MuiTab-root': { color: 'rgba(255,255,255,0.7)' }, '& .Mui-selected': { color: '#ffd700' } }}
+      >
+        <Tab icon={<DecisionIcon />} iconPosition="start" label={`Ausstehend (${pending?.length || 0})`} />
+        <Tab icon={<HistoryIcon />} iconPosition="start" label="History" />
+      </Tabs>
 
       {!decisions?.length ? (
         <EmptyState
-          title="No pending decisions"
-          description="All decisions have been resolved."
+          title={tab === 0 ? "Keine ausstehenden Entscheidungen" : "Keine Entscheidungen"}
+          description={tab === 0 ? "Alle Entscheidungen wurden bearbeitet." : "Noch keine Entscheidungen im System."}
           icon={<DecisionIcon sx={{ fontSize: 64 }} />}
         />
       ) : (
         <Card>
-          <CardContent>
+          <CardContent sx={{ p: 0, '&:last-child': { pb: 0 } }}>
             <TableContainer>
-              <Table>
+              <Table size="small">
                 <TableHead>
                   <TableRow>
-                    <TableCell>Title</TableCell>
-                    <TableCell>Proposed By</TableCell>
+                    <TableCell>Titel</TableCell>
+                    <TableCell>Tier</TableCell>
+                    <TableCell>Von</TableCell>
                     <TableCell>Status</TableCell>
-                    <TableCell>Veto Round</TableCell>
-                    <TableCell>CEO Vote</TableCell>
-                    <TableCell>DAO Vote</TableCell>
-                    <TableCell>Created</TableCell>
+                    <TableCell>CEO</TableCell>
+                    <TableCell>DAO</TableCell>
+                    <TableCell>Erstellt</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {decisions.map((decision) => (
-                    <TableRow key={decision.id} hover>
-                      <TableCell>
-                        <Typography variant="body2" fontWeight={600}>
-                          {decision.title}
-                        </Typography>
-                        {decision.description && (
-                          <Typography variant="caption" color="text.secondary">
-                            {decision.description.slice(0, 100)}...
+                    <TableRow
+                      key={decision.id}
+                      hover
+                      sx={{
+                        opacity: decision.status === 'pending' || decision.status === 'escalated' ? 1 : 0.7,
+                        '&:hover': { opacity: 1 },
+                      }}
+                    >
+                      <TableCell sx={{ maxWidth: 300 }}>
+                        <Tooltip title={decision.description || decision.title}>
+                          <Typography variant="body2" fontWeight={600} noWrap>
+                            {decision.title}
                           </Typography>
-                        )}
+                        </Tooltip>
                       </TableCell>
-                      <TableCell>{decision.proposedBy}</TableCell>
                       <TableCell>
                         <Chip
-                          label={decision.status}
+                          label={decision.decisionType}
+                          size="small"
+                          sx={{
+                            backgroundColor: `${tierColors[decision.decisionType] || '#666'}20`,
+                            color: tierColors[decision.decisionType] || '#666',
+                            fontWeight: 600,
+                            fontSize: '0.7rem',
+                          }}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={getAgentName(decision.proposedBy)}
+                          size="small"
+                          variant="outlined"
+                          sx={{ fontSize: '0.7rem' }}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Chip
+                          label={statusLabels[decision.status] || decision.status}
                           size="small"
                           sx={{
                             backgroundColor: `${statusColors[decision.status] || '#666'}20`,
                             color: statusColors[decision.status] || '#666',
                             fontWeight: 600,
+                            fontSize: '0.7rem',
                           }}
                         />
                       </TableCell>
-                      <TableCell>{decision.vetoRound}</TableCell>
                       <TableCell>
                         {decision.ceoVote ? (
                           <Chip
@@ -105,12 +172,11 @@ export default function DecisionsPage() {
                             sx={{
                               backgroundColor: `${voteColors[decision.ceoVote] || '#666'}20`,
                               color: voteColors[decision.ceoVote] || '#666',
+                              fontSize: '0.7rem',
                             }}
                           />
                         ) : (
-                          <Typography variant="caption" color="text.secondary">
-                            Pending
-                          </Typography>
+                          <Typography variant="caption" color="text.secondary">—</Typography>
                         )}
                       </TableCell>
                       <TableCell>
@@ -121,16 +187,17 @@ export default function DecisionsPage() {
                             sx={{
                               backgroundColor: `${voteColors[decision.daoVote] || '#666'}20`,
                               color: voteColors[decision.daoVote] || '#666',
+                              fontSize: '0.7rem',
                             }}
                           />
                         ) : (
-                          <Typography variant="caption" color="text.secondary">
-                            Pending
-                          </Typography>
+                          <Typography variant="caption" color="text.secondary">—</Typography>
                         )}
                       </TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap' }}>
-                        {formatDistanceToNow(decision.createdAt)}
+                        <Typography variant="caption">
+                          {formatDistanceToNow(decision.createdAt)}
+                        </Typography>
                       </TableCell>
                     </TableRow>
                   ))}

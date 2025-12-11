@@ -60,8 +60,15 @@ export async function executeClaudeCode(session: ClaudeSession): Promise<ClaudeR
   logger.info({ promptLength: session.prompt.length, timeout }, 'Executing Claude Code');
 
   return new Promise((resolve) => {
-    // Use --print for non-interactive mode
-    const args = ['--print', session.prompt];
+    // Use --print for non-interactive mode with tools enabled
+    // --tools default enables all tools (Bash, Edit, Read, Write, etc.)
+    // --dangerously-skip-permissions bypasses permission dialogs (safe in sandbox)
+    const args = [
+      '--print',
+      '--tools', 'default',
+      '--dangerously-skip-permissions',
+      session.prompt
+    ];
 
     if (session.systemPrompt) {
       args.unshift('--system-prompt', session.systemPrompt);
@@ -72,6 +79,7 @@ export async function executeClaudeCode(session: ClaudeSession): Promise<ClaudeR
     const proc = spawn('claude', args, {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: '/app/workspace', // Working directory for file operations
       env: {
         ...process.env,
         // Ensure non-interactive mode
@@ -142,12 +150,26 @@ export async function executeClaudeCode(session: ClaudeSession): Promise<ClaudeR
 }
 
 /**
+ * Pending Decision for HEAD agents to vote on
+ */
+export interface PendingDecision {
+  id: string;
+  title: string;
+  description?: string;
+  tier: string;
+  proposedBy?: string;
+  createdAt: Date;
+}
+
+/**
  * Build context prompt for agent loop
  */
 export function buildLoopPrompt(
   profile: AgentProfile,
   state: Record<string, unknown>,
-  trigger: { type: string; data?: unknown }
+  trigger: { type: string; data?: unknown },
+  pendingDecisions?: PendingDecision[],
+  ragContext?: string
 ): string {
   const parts = [
     '# Agent Loop Execution',
@@ -172,13 +194,96 @@ export function buildLoopPrompt(
     );
   }
 
+  // Add RAG context if available
+  if (ragContext) {
+    parts.push(ragContext, '');
+  }
+
+  // Add pending decisions for HEAD agents (CEO/DAO)
+  if (pendingDecisions && pendingDecisions.length > 0 &&
+      (profile.codename === 'ceo' || profile.codename === 'dao')) {
+    parts.push(
+      '## ⚠️ PENDING DECISIONS AWAITING YOUR VOTE',
+      '',
+      'You MUST vote on these decisions! Use the `vote` action for each.',
+      ''
+    );
+    for (const decision of pendingDecisions) {
+      parts.push(
+        '### Decision: ' + decision.title,
+        '- **ID:** `' + decision.id + '`',
+        '- **Tier:** ' + decision.tier,
+        '- **Proposed by:** ' + (decision.proposedBy || 'unknown'),
+        '- **Created:** ' + decision.createdAt.toISOString(),
+        decision.description ? '- **Description:** ' + decision.description : '',
+        ''
+      );
+    }
+    parts.push(
+      'Use this format to vote:',
+      '```json',
+      '{ "type": "vote", "data": { "decisionId": "<id>", "vote": "approve|veto|abstain", "reason": "Your reasoning" } }',
+      '```',
+      ''
+    );
+  }
+
   parts.push(
     '## Instructions',
     'Execute your loop according to your profile.',
     'Analyze the current state and trigger.',
     'Take appropriate actions and return results.',
     '',
+    '## IMPORTANT: You have TOOLS available!',
+    '',
+    'You are running with full tool access (Write, Edit, Read, Bash).',
+    'Working directory: /app/workspace',
+    '',
+    '**For operational tasks (file writes, logs, status updates):**',
+    '- DIRECTLY USE YOUR TOOLS to create/update files',
+    '- Write to /app/workspace/' + profile.codename + '/ for your agent-specific files',
+    '- Example: Use Write tool to create /app/workspace/' + profile.codename + '/status.md',
+    '- After executing, include the action in your JSON response for tracking',
+    '',
+    '## Decision Tiers (choose the right one!)',
+    '',
+    '| Tier | Use For | Approval | Timeout |',
+    '|------|---------|----------|---------|',
+    '| operational | File writes, logs, status checks, internal tasks | None (auto-execute) | N/A |',
+    '| minor | Task delegation, config changes, routine campaigns | CEO can veto (auto-approve after 4h) | 4h |',
+    '| major | Budget >$500, partnerships, new initiatives | CEO + DAO required | 24h |',
+    '| critical | Smart contracts, token burns, legal matters | CEO + DAO + Human | 48h |',
+    '',
+    '## Action Types',
+    '',
+    '### operational - Execute immediately with tools, then log',
+    'For file operations: USE YOUR TOOLS DIRECTLY, then include in actions:',
+    '```json',
+    '{ "type": "operational", "data": { "title": "Created status report", "description": "Wrote status to /app/workspace/' + profile.codename + '/status.md", "filesCreated": ["status.md"] } }',
+    '```',
+    '',
+    '### propose_decision - Formal decision with tier',
+    '```json',
+    '{ "type": "propose_decision", "data": { "tier": "minor|major|critical", "title": "...", "description": "...", "context": {...} } }',
+    '```',
+    '',
+    '### create_task - Assign task to another agent',
+    '```json',
+    '{ "type": "create_task", "data": { "assignTo": "cmo|cto|cfo|coo|cco", "title": "...", "description": "...", "priority": "normal" } }',
+    '```',
+    '',
+    '### vote - Cast vote on pending decision (CEO/DAO only)',
+    '```json',
+    '{ "type": "vote", "data": { "decisionId": "...", "vote": "approve|veto|abstain", "reason": "..." } }',
+    '```',
+    '',
+    '### alert - Send alert to orchestrator',
+    '```json',
+    '{ "type": "alert", "data": { "alertType": "general|security|budget", "severity": "low|medium|high|critical", "message": "..." } }',
+    '```',
+    '',
     '## Expected Output Format',
+    'After using your tools for any file operations, output this JSON:',
     '```json',
     '{',
     '  "actions": [{ "type": "...", "data": {...} }],',

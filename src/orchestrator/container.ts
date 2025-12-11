@@ -68,6 +68,7 @@ function getContainerConfig(agentType: AgentType, agentId: string): ContainerCon
       // Named volumes for consistency with docker-compose
       agentType + '_memory:/app/memory',
       'shared_claude_config:/app/.claude',
+      'shared_workspace:/app/workspace',  // Shared workspace for all agents
     ],
     memory: '512m',
     cpus: '1',
@@ -280,19 +281,52 @@ export async function autoRestartUnhealthy(): Promise<void> {
   const agents = await agentRepo.findAll();
   for (const agent of agents) {
     if (agent.status === 'active') {
-      const healthy = await checkContainerHealth(agent.type);
-      if (!healthy) {
-        logger.warn({ agentType: agent.type }, 'Unhealthy container detected, restarting');
+      const containerStatus = await getAgentContainerStatus(agent.type);
+
+      // Container doesn't exist or is not running
+      if (!containerStatus || containerStatus.containerStatus !== 'running') {
+        const action = containerStatus?.containerStatus === 'exited' ? 'starting stopped' : 'creating';
+        logger.warn({ agentType: agent.type, containerStatus: containerStatus?.containerStatus }, `${action} container`);
         try {
-          await restartAgent(agent.type);
+          // Use startAgent for stopped/missing containers (it creates if needed)
+          await startAgent(agent.type);
+          logger.info({ agentType: agent.type }, 'Container started successfully');
         } catch (err) {
-          logger.error({ err, agentType: agent.type }, 'Failed to restart container');
+          logger.error({ err, agentType: agent.type }, 'Failed to start container');
           await agentRepo.updateStatus(agent.id, 'error');
           await eventRepo.log({ eventType: 'agent_error', sourceAgent: agent.id, payload: { error: String(err) } });
         }
       }
     }
   }
+}
+
+// Ensure all active agents have running containers (called at startup)
+export async function ensureAllAgentsRunning(): Promise<void> {
+  logger.info('Ensuring all active agents have running containers...');
+  const agents = await agentRepo.findAll();
+  let started = 0;
+  let alreadyRunning = 0;
+
+  for (const agent of agents) {
+    if (agent.status === 'active') {
+      const containerStatus = await getAgentContainerStatus(agent.type);
+
+      if (!containerStatus || containerStatus.containerStatus !== 'running') {
+        logger.info({ agentType: agent.type }, 'Starting agent container');
+        try {
+          await startAgent(agent.type);
+          started++;
+        } catch (err) {
+          logger.error({ err, agentType: agent.type }, 'Failed to start agent container');
+        }
+      } else {
+        alreadyRunning++;
+      }
+    }
+  }
+
+  logger.info({ started, alreadyRunning }, 'Agent startup check complete');
 }
 
 export async function ensureNetwork(): Promise<void> {

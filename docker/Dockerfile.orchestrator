@@ -58,6 +58,10 @@ RUN mkdir -p /app/logs /app/profiles /app/memory && \
 # Switch to non-root user
 USER orchestrator
 
+# Git hash for RAG auto-index (passed at build time)
+ARG GIT_HASH=unknown
+ENV GIT_HASH=${GIT_HASH}
+
 # Environment
 ENV NODE_ENV=production
 ENV LOG_LEVEL=info

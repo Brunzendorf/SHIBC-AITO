@@ -100,6 +100,7 @@ CREATE TABLE events (
     source_agent UUID REFERENCES agents(id),
     target_agent UUID REFERENCES agents(id),
     payload JSONB,
+    correlation_id VARCHAR(255),
     created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -107,6 +108,7 @@ CREATE INDEX idx_events_type ON events(event_type);
 CREATE INDEX idx_events_source ON events(source_agent);
 CREATE INDEX idx_events_target ON events(target_agent);
 CREATE INDEX idx_events_created ON events(created_at DESC);
+CREATE INDEX idx_events_correlation ON events(correlation_id);
 
 -- Human Escalations
 CREATE TABLE escalations (

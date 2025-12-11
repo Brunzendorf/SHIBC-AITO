@@ -69,12 +69,27 @@ export async function getAgentEvents(agentId: string, limit = 20) {
 }
 
 // Decisions
+export async function getAllDecisions(limit = 50, offset = 0) {
+  return fetchApi<Decision[]>(`/decisions?limit=${limit}&offset=${offset}`);
+}
+
 export async function getPendingDecisions() {
   return fetchApi<Decision[]>('/decisions/pending');
 }
 
 export async function getDecision(id: string) {
   return fetchApi<Decision>(`/decisions/${id}`);
+}
+
+export async function getEscalatedDecisions() {
+  return fetchApi<Decision[]>('/decisions/escalated');
+}
+
+export async function submitHumanDecision(id: string, decision: 'approve' | 'reject', reason?: string) {
+  return fetchApi<{ status: string; decision: string }>(`/decisions/${id}/human-decision`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, reason }),
+  });
 }
 
 // Escalations

@@ -2,11 +2,12 @@ import express, { Request, Response, NextFunction } from 'express';
 import { createLogger } from '../lib/logger.js';
 import { numericConfig } from '../lib/config.js';
 import { agentRepo, eventRepo, taskRepo, decisionRepo, escalationRepo, historyRepo } from '../lib/db.js';
+import { publisher, channels } from '../lib/redis.js';
 import { startAgent, stopAgent, restartAgent, getAgentContainerStatus, listManagedContainers } from './container.js';
 import { getScheduledJobs, pauseJob, resumeJob } from './scheduler.js';
 import { getSystemHealth, isAlive, isReady, getAgentHealth } from './health.js';
 import { triggerEscalation } from './events.js';
-import type { AgentType, ApiResponse } from '../lib/types.js';
+import type { AgentType, ApiResponse, DecisionStatus } from '../lib/types.js';
 
 const logger = createLogger('api');
 
@@ -243,19 +244,73 @@ app.patch('/tasks/:id/status', asyncHandler(async (req, res) => {
 
 // === Decision Endpoints ===
 
+// Get all decisions (history)
+app.get('/decisions', asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit as string) || 50;
+  const offset = parseInt(req.query.offset as string) || 0;
+  const decisions = await decisionRepo.findAll(limit, offset);
+  sendResponse(res, decisions);
+}));
+
 // Get pending decisions
 app.get('/decisions/pending', asyncHandler(async (_req, res) => {
   const decisions = await decisionRepo.findPending();
   sendResponse(res, decisions);
 }));
 
-// Get decision by ID
+// Get escalated decisions (waiting for human) - MUST be before :id route
+app.get('/decisions/escalated', asyncHandler(async (_req, res) => {
+  const decisions = await decisionRepo.findEscalated();
+  sendResponse(res, decisions);
+}));
+
+// Get decision by ID - MUST be after specific routes
 app.get('/decisions/:id', asyncHandler(async (req, res) => {
   const decision = await decisionRepo.findById(req.params.id);
   if (!decision) {
     return sendError(res, 'Decision not found', 404);
   }
   sendResponse(res, decision);
+}));
+
+// Human decision on escalated decision
+app.post('/decisions/:id/human-decision', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { decision, reason } = req.body;
+
+  if (!decision || !['approve', 'reject'].includes(decision)) {
+    return sendError(res, 'Invalid decision. Must be "approve" or "reject"', 400);
+  }
+
+  const existingDecision = await decisionRepo.findById(id);
+  if (!existingDecision) {
+    return sendError(res, 'Decision not found', 404);
+  }
+
+  if (existingDecision.status !== 'escalated') {
+    return sendError(res, 'Decision is not in escalated status', 400);
+  }
+
+  // Update decision status
+  const newStatus: DecisionStatus = decision === 'approve' ? 'approved' : 'rejected';
+  await decisionRepo.updateStatus(id, newStatus, new Date());
+  await decisionRepo.setHumanDecision(id, decision, reason);
+
+  // Broadcast result
+  await publisher.publish(channels.broadcast, JSON.stringify({
+    type: 'decision_result',
+    from: 'orchestrator',
+    payload: {
+      decisionId: id,
+      title: existingDecision.title,
+      status: newStatus,
+      humanDecision: decision,
+      reason,
+    },
+  }));
+
+  logger.info({ decisionId: id, decision, reason }, 'Human decision recorded');
+  sendResponse(res, { status: newStatus, decision, reason });
 }));
 
 // === Escalation Endpoints ===

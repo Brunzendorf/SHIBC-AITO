@@ -42,9 +42,49 @@ export interface AgentHistory {
 }
 
 // Decisions & Veto
-export type DecisionType = 'minor' | 'major' | 'critical';
-export type DecisionStatus = 'pending' | 'approved' | 'vetoed' | 'escalated';
+export type DecisionType = 'operational' | 'minor' | 'major' | 'critical';
+export type DecisionStatus = 'pending' | 'approved' | 'rejected' | 'vetoed' | 'escalated';
 export type VoteValue = 'approve' | 'veto' | 'abstain';
+
+// Approval Requirements per Tier
+export interface ApprovalRequirements {
+  ceoRequired: boolean;
+  daoRequired: boolean;
+  humanRequired: boolean;
+  timeoutMs: number;
+  autoApproveOnTimeout: boolean; // true for minor (auto-approve), false for major/critical (escalate)
+}
+
+export const APPROVAL_REQUIREMENTS: Record<DecisionType, ApprovalRequirements> = {
+  operational: {
+    ceoRequired: false,
+    daoRequired: false,
+    humanRequired: false,
+    timeoutMs: 0,
+    autoApproveOnTimeout: true,
+  },
+  minor: {
+    ceoRequired: true,
+    daoRequired: false,
+    humanRequired: false,
+    timeoutMs: 4 * 60 * 60 * 1000, // 4 hours
+    autoApproveOnTimeout: true, // CEO can only veto, otherwise auto-approve
+  },
+  major: {
+    ceoRequired: true,
+    daoRequired: true,
+    humanRequired: false,
+    timeoutMs: 24 * 60 * 60 * 1000, // 24 hours
+    autoApproveOnTimeout: false, // Escalate to human on timeout
+  },
+  critical: {
+    ceoRequired: true,
+    daoRequired: true,
+    humanRequired: true,
+    timeoutMs: 48 * 60 * 60 * 1000, // 48 hours
+    autoApproveOnTimeout: false, // Escalate to human on timeout
+  },
+};
 
 export interface Decision {
   id: string;
@@ -102,6 +142,7 @@ export interface Event {
   sourceAgent?: string;
   targetAgent?: string;
   payload: unknown;
+  correlationId?: string; // Links related events in a chain
   createdAt: Date;
 }
 
@@ -128,6 +169,7 @@ export interface AgentMessage {
   timestamp: Date;
   requiresResponse: boolean;
   responseDeadline?: Date;
+  correlationId?: string; // Links related events in a chain (e.g., decision -> vote -> result)
 }
 
 // Escalations

@@ -257,6 +257,39 @@ export const decisionRepo = {
   async incrementVetoRound(id: string): Promise<void> {
     await query(`UPDATE decisions SET veto_round = veto_round + 1 WHERE id = $1`, [id]);
   },
+
+  async findEscalated(): Promise<Decision[]> {
+    return query<Decision>(
+      `SELECT id, title, description, proposed_by as "proposedBy",
+              decision_type as "decisionType", status, veto_round as "vetoRound",
+              ceo_vote as "ceoVote", dao_vote as "daoVote",
+              c_level_votes as "cLevelVotes", human_decision as "humanDecision",
+              resolved_at as "resolvedAt", created_at as "createdAt"
+       FROM decisions WHERE status = 'escalated'
+       ORDER BY created_at ASC`
+    );
+  },
+
+  async setHumanDecision(id: string, decision: string, reason?: string): Promise<void> {
+    await query(
+      `UPDATE decisions SET human_decision = $1, human_reason = $2 WHERE id = $3`,
+      [decision, reason || null, id]
+    );
+  },
+
+  async findAll(limit = 50, offset = 0): Promise<Decision[]> {
+    return query<Decision>(
+      `SELECT id, title, description, proposed_by as "proposedBy",
+              decision_type as "decisionType", status, veto_round as "vetoRound",
+              ceo_vote as "ceoVote", dao_vote as "daoVote",
+              c_level_votes as "cLevelVotes", human_decision as "humanDecision",
+              resolved_at as "resolvedAt", created_at as "createdAt"
+       FROM decisions
+       ORDER BY created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset]
+    );
+  },
 };
 
 // Task Repository
@@ -310,11 +343,12 @@ export const taskRepo = {
 export const eventRepo = {
   async log(event: Omit<Event, 'id' | 'createdAt'>): Promise<Event> {
     const [result] = await query<Event>(
-      `INSERT INTO events (event_type, source_agent, target_agent, payload)
-       VALUES ($1, $2, $3, $4)
+      `INSERT INTO events (event_type, source_agent, target_agent, payload, correlation_id)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING id, event_type as "eventType", source_agent as "sourceAgent",
-                 target_agent as "targetAgent", payload, created_at as "createdAt"`,
-      [event.eventType, event.sourceAgent, event.targetAgent, JSON.stringify(event.payload)]
+                 target_agent as "targetAgent", payload, correlation_id as "correlationId",
+                 created_at as "createdAt"`,
+      [event.eventType, event.sourceAgent, event.targetAgent, JSON.stringify(event.payload), event.correlationId]
     );
     return result;
   },
@@ -322,7 +356,8 @@ export const eventRepo = {
   async getRecent(limit = 100): Promise<Event[]> {
     return query<Event>(
       `SELECT id, event_type as "eventType", source_agent as "sourceAgent",
-              target_agent as "targetAgent", payload, created_at as "createdAt"
+              target_agent as "targetAgent", payload, correlation_id as "correlationId",
+              created_at as "createdAt"
        FROM events ORDER BY created_at DESC LIMIT $1`,
       [limit]
     );
@@ -331,7 +366,8 @@ export const eventRepo = {
   async getByAgent(agentId: string, limit = 50): Promise<Event[]> {
     return query<Event>(
       `SELECT id, event_type as "eventType", source_agent as "sourceAgent",
-              target_agent as "targetAgent", payload, created_at as "createdAt"
+              target_agent as "targetAgent", payload, correlation_id as "correlationId",
+              created_at as "createdAt"
        FROM events
        WHERE source_agent = $1 OR target_agent = $1
        ORDER BY created_at DESC LIMIT $2`,

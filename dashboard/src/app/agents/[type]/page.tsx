@@ -36,7 +36,7 @@ import Link from 'next/link';
 import { useAgent, useAgentHistory, AgentHistory } from '@/hooks/useAgents';
 import { startAgent, stopAgent, restartAgent } from '@/lib/api';
 import { agentColors, statusColors } from '@/theme/theme';
-import { formatDate, formatDistanceToNow } from '@/lib/utils';
+import { formatDate, formatDistanceToNow, truncate } from '@/lib/utils';
 import Loading from '@/components/common/Loading';
 import ErrorDisplay from '@/components/common/ErrorDisplay';
 import EmptyState from '@/components/common/EmptyState';
@@ -286,7 +286,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ type: st
                               />
                             )}
                             <Typography variant="body2" sx={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                              {entry.summary}
+                              {truncate(entry.summary, 80)}
                             </Typography>
                           </Box>
                         </AccordionSummary>

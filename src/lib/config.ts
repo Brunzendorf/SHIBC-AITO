@@ -20,6 +20,9 @@ const configSchema = z.object({
   // AI (Ollama for local, Claude Code CLI for complex - NO API!)
   OLLAMA_URL: z.string().default('http://localhost:11434'),
 
+  // RAG / Vector DB
+  QDRANT_URL: z.string().default('http://localhost:6333'),
+
   // Communication
   TELEGRAM_BOT_TOKEN: z.string().optional(),
   TELEGRAM_ADMIN_CHAT_ID: z.string().optional(),
@@ -35,10 +38,15 @@ const configSchema = z.object({
   HEALTH_CHECK_INTERVAL: z.string().default('30'), // 30 seconds
   MAX_VETO_ROUNDS: z.string().default('3'),
 
-  // Timeouts
+  // Timeouts (legacy)
   ESCALATION_TIMEOUT_CRITICAL: z.string().default('14400'), // 4 hours
   ESCALATION_TIMEOUT_HIGH: z.string().default('43200'), // 12 hours
   ESCALATION_TIMEOUT_NORMAL: z.string().default('86400'), // 24 hours
+
+  // Decision Tier Timeouts (in ms)
+  DECISION_TIMEOUT_MINOR: z.string().default('14400000'), // 4 hours (auto-approve)
+  DECISION_TIMEOUT_MAJOR: z.string().default('86400000'), // 24 hours (escalate)
+  DECISION_TIMEOUT_CRITICAL: z.string().default('172800000'), // 48 hours (escalate)
 });
 
 type Config = z.infer<typeof configSchema>;
@@ -67,6 +75,12 @@ export const numericConfig = {
     critical: parseInt(config.ESCALATION_TIMEOUT_CRITICAL, 10),
     high: parseInt(config.ESCALATION_TIMEOUT_HIGH, 10),
     normal: parseInt(config.ESCALATION_TIMEOUT_NORMAL, 10),
+  },
+  // Decision tier timeouts (in ms)
+  decisionTimeouts: {
+    minor: parseInt(config.DECISION_TIMEOUT_MINOR, 10),    // 4h auto-approve
+    major: parseInt(config.DECISION_TIMEOUT_MAJOR, 10),    // 24h escalate
+    critical: parseInt(config.DECISION_TIMEOUT_CRITICAL, 10), // 48h escalate
   },
 };
 

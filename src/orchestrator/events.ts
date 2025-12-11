@@ -1,6 +1,6 @@
 import { v4 as uuid } from 'uuid';
 import { createLogger } from '../lib/logger.js';
-import { eventRepo, decisionRepo, escalationRepo, agentRepo } from '../lib/db.js';
+import { eventRepo, decisionRepo, escalationRepo, agentRepo, historyRepo } from '../lib/db.js';
 import {
   subscribe,
   publish,
@@ -17,12 +17,15 @@ import type {
   VoteValue,
   AgentType,
 } from '../lib/types.js';
+import { APPROVAL_REQUIREMENTS } from '../lib/types.js';
 
 const logger = createLogger('events');
 
 // Message handlers registry
 type MessageHandler = (message: AgentMessage) => Promise<void>;
 const messageHandlers: Map<string, MessageHandler> = new Map();
+// Timeout tracking for decisions
+const decisionTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
 // Register a message handler for a specific message type
 export function registerHandler(
@@ -33,16 +36,23 @@ export function registerHandler(
   logger.debug({ messageType }, 'Registered message handler');
 }
 
+// UUID regex for validation
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isValidUUID(str: string): boolean {
+  return UUID_REGEX.test(str);
+}
+
 // Process incoming message
 async function processMessage(message: AgentMessage): Promise<void> {
   logger.debug({ messageType: message.type, from: message.from, to: message.to }, 'Processing message');
 
-  // Log event
+  // Log event - only use UUIDs for agent fields, skip non-UUID strings like "orchestrator"
   await eventRepo.log({
     eventType: message.type as EventType,
-    sourceAgent: message.from,
-    targetAgent: typeof message.to === 'string' ? message.to : undefined,
+    sourceAgent: isValidUUID(message.from) ? message.from : undefined,
+    targetAgent: typeof message.to === 'string' && isValidUUID(message.to) ? message.to : undefined,
     payload: message.payload,
+    correlationId: message.correlationId,
   });
 
   // Find and execute handler
@@ -96,23 +106,91 @@ registerHandler('task', async (message) => {
   }
 });
 
-// Handle decision proposals
+// Handle decision proposals - with tiered approval system
 registerHandler('decision', async (message) => {
   const payload = message.payload as any;
+  const tier = (payload.type as DecisionType) || 'major';
+  const requirements = APPROVAL_REQUIREMENTS[tier];
 
-  // Create decision record
+  logger.info({ tier, title: payload.title, from: message.from }, 'Decision proposal received');
+
+  // === OPERATIONAL TIER: Auto-execute, no decision record ===
+  if (tier === 'operational') {
+    logger.info({ title: payload.title, from: message.from }, 'Operational task - auto-executing');
+
+    // Log to agent history
+    const agent = await agentRepo.findByType(message.from as AgentType);
+    if (agent) {
+      await historyRepo.add({
+        agentId: agent.id,
+        actionType: 'decision',
+        summary: `[OPERATIONAL] ${payload.title}`,
+        details: { tier, description: payload.description, autoApproved: true },
+      });
+    }
+
+    // Broadcast completion immediately
+    await publish(channels.broadcast, {
+      id: uuid(),
+      type: 'broadcast',
+      from: 'orchestrator',
+      to: 'all',
+      payload: {
+        eventType: 'operational_completed',
+        title: payload.title,
+        executedBy: message.from,
+        tier: 'operational',
+      },
+      priority: 'low',
+      timestamp: new Date(),
+      requiresResponse: false,
+    } as AgentMessage);
+
+    return;
+  }
+
+  // === MINOR/MAJOR/CRITICAL: Create decision record ===
   const decision = await decisionRepo.create({
     title: payload.title,
     description: payload.description,
     proposedBy: message.from,
-    decisionType: payload.type as DecisionType || 'major',
+    decisionType: tier,
     status: 'pending',
     vetoRound: 0,
   });
 
-  logger.info({ decisionId: decision.id, title: decision.title }, 'Decision proposed');
+  logger.info({ decisionId: decision.id, title: decision.title, tier }, 'Decision created');
 
-  // Notify HEAD layer (CEO + DAO)
+  // === MINOR TIER: Notify CEO only, auto-approve after timeout ===
+  if (tier === 'minor') {
+    const notifyMessage: AgentMessage = {
+      id: uuid(),
+      type: 'vote',
+      from: 'orchestrator',
+      to: 'ceo', // CEO only for minor decisions
+      payload: {
+        decisionId: decision.id,
+        title: decision.title,
+        description: decision.description,
+        proposedBy: message.from,
+        type: tier,
+        round: 1,
+        action: 'veto_or_ignore', // CEO can veto or let it auto-approve
+      },
+      priority: 'normal',
+      timestamp: new Date(),
+      requiresResponse: false, // Not required - will auto-approve
+      responseDeadline: new Date(Date.now() + requirements.timeoutMs),
+    };
+
+    await publish(channels.head, notifyMessage);
+
+    // Schedule auto-approve timeout
+    scheduleDecisionTimeout(decision.id, tier, requirements.timeoutMs);
+    return;
+  }
+
+  // === MAJOR/CRITICAL TIER: Notify HEAD layer (CEO + DAO) ===
   const notifyMessage: AgentMessage = {
     id: uuid(),
     type: 'vote',
@@ -123,16 +201,20 @@ registerHandler('decision', async (message) => {
       title: decision.title,
       description: decision.description,
       proposedBy: message.from,
-      type: decision.decisionType,
+      type: tier,
       round: 1,
+      humanRequired: requirements.humanRequired, // Flag for critical
     },
     priority: 'high',
     timestamp: new Date(),
     requiresResponse: true,
-    responseDeadline: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24h
+    responseDeadline: new Date(Date.now() + requirements.timeoutMs),
   };
 
   await publish(channels.head, notifyMessage);
+
+  // Schedule escalation timeout (major/critical escalate to human on timeout)
+  scheduleDecisionTimeout(decision.id, tier, requirements.timeoutMs);
 });
 
 // Handle votes
@@ -155,13 +237,21 @@ registerHandler('vote', async (message) => {
     decisionId: decision.id,
     voter: voterType,
     vote,
+    tier: decision.decisionType,
   }, 'Vote recorded');
 
-  // Check if both HEAD members have voted
-  const updatedDecision = await decisionRepo.findById(decision.id);
-  if (updatedDecision?.ceoVote && updatedDecision?.daoVote) {
-    await processDecisionResult(updatedDecision);
+  // Clear any pending timeout since we got a vote
+  const timeout = decisionTimeouts.get(decision.id);
+  if (timeout) {
+    clearTimeout(timeout);
+    decisionTimeouts.delete(decision.id);
   }
+
+  // Process based on tier
+  const updatedDecision = await decisionRepo.findById(decision.id);
+  if (!updatedDecision) return;
+
+  await processDecisionResult(updatedDecision);
 });
 
 // Handle alerts
@@ -184,27 +274,94 @@ registerHandler('alert', async (message) => {
   }
 });
 
+// === Decision Timeout Scheduling ===
+
+function scheduleDecisionTimeout(decisionId: string, tier: DecisionType, timeoutMs: number): void {
+  if (timeoutMs <= 0) return;
+
+  const requirements = APPROVAL_REQUIREMENTS[tier];
+
+  logger.debug({ decisionId, tier, timeoutMs }, 'Scheduling decision timeout');
+
+  const timeout = setTimeout(async () => {
+    decisionTimeouts.delete(decisionId);
+
+    const decision = await decisionRepo.findById(decisionId);
+    if (!decision || decision.status !== 'pending') {
+      logger.debug({ decisionId }, 'Decision already resolved, skipping timeout');
+      return;
+    }
+
+    logger.info({ decisionId, tier }, 'Decision timeout reached');
+
+    if (requirements.autoApproveOnTimeout) {
+      // Minor tier: auto-approve
+      logger.info({ decisionId }, 'Auto-approving decision after timeout');
+      await decisionRepo.updateStatus(decisionId, 'approved', new Date());
+      await broadcastDecisionResult(decision, 'approved');
+    } else {
+      // Major/Critical tier: escalate to human
+      logger.warn({ decisionId }, 'Escalating decision to human after timeout');
+      await escalateToHuman(decision);
+    }
+  }, timeoutMs);
+
+  decisionTimeouts.set(decisionId, timeout);
+}
+
 // === Decision Processing ===
 
 async function processDecisionResult(decision: Decision): Promise<void> {
   const ceoVote = decision.ceoVote;
   const daoVote = decision.daoVote;
+  const tier = decision.decisionType;
+  const requirements = APPROVAL_REQUIREMENTS[tier];
 
-  // Both approve → Approved
+  logger.debug({ decisionId: decision.id, tier, ceoVote, daoVote }, 'Processing decision result');
+
+  // === MINOR TIER: Only CEO vote matters ===
+  if (tier === 'minor') {
+    if (ceoVote === 'veto') {
+      await decisionRepo.updateStatus(decision.id, 'vetoed', new Date());
+      await broadcastDecisionResult(decision, 'vetoed');
+      return;
+    }
+    if (ceoVote === 'approve') {
+      await decisionRepo.updateStatus(decision.id, 'approved', new Date());
+      await broadcastDecisionResult(decision, 'approved');
+      return;
+    }
+    // If CEO hasn't voted yet, timeout will handle auto-approve
+    return;
+  }
+
+  // === MAJOR/CRITICAL TIER: Need both CEO and DAO votes ===
+  if (!ceoVote || !daoVote) {
+    // Wait for both votes
+    return;
+  }
+
+  // Both approve
   if (ceoVote === 'approve' && daoVote === 'approve') {
+    // Critical tier needs human confirmation even after CEO+DAO approve
+    if (requirements.humanRequired) {
+      logger.info({ decisionId: decision.id }, 'Critical decision approved by CEO+DAO, requiring human confirmation');
+      await escalateToHuman(decision);
+      return;
+    }
     await decisionRepo.updateStatus(decision.id, 'approved', new Date());
     await broadcastDecisionResult(decision, 'approved');
     return;
   }
 
-  // Both veto → Rejected
+  // Both veto
   if (ceoVote === 'veto' && daoVote === 'veto') {
     await decisionRepo.updateStatus(decision.id, 'vetoed', new Date());
     await broadcastDecisionResult(decision, 'vetoed');
     return;
   }
 
-  // One veto → Proceed to next round
+  // One veto, one approve → Proceed to next round
   const currentRound = decision.vetoRound || 0;
 
   if (currentRound >= numericConfig.maxVetoRounds) {
@@ -246,12 +403,16 @@ async function startCLevelRound(decision: Decision): Promise<void> {
 }
 
 async function escalateToHuman(decision: Decision): Promise<void> {
-  logger.warn({ decisionId: decision.id }, 'Escalating decision to human');
+  logger.warn({ decisionId: decision.id, tier: decision.decisionType }, 'Escalating decision to human');
 
   await decisionRepo.updateStatus(decision.id, 'escalated');
 
+  const reason = decision.decisionType === 'critical'
+    ? `Critical decision requires human confirmation: ${decision.title}`
+    : `Decision deadlock after ${numericConfig.maxVetoRounds} rounds: ${decision.title}`;
+
   await triggerEscalation({
-    reason: `Decision deadlock after ${numericConfig.maxVetoRounds} rounds: ${decision.title}`,
+    reason,
     decisionId: decision.id,
     channels: ['telegram', 'email', 'dashboard'],
   });
@@ -261,6 +422,13 @@ async function broadcastDecisionResult(
   decision: Decision,
   result: 'approved' | 'vetoed'
 ): Promise<void> {
+  // Clear any pending timeout
+  const timeout = decisionTimeouts.get(decision.id);
+  if (timeout) {
+    clearTimeout(timeout);
+    decisionTimeouts.delete(decision.id);
+  }
+
   const message: AgentMessage = {
     id: uuid(),
     type: 'broadcast',
@@ -270,6 +438,7 @@ async function broadcastDecisionResult(
       eventType: 'decision_resolved',
       decisionId: decision.id,
       title: decision.title,
+      tier: decision.decisionType,
       result,
       ceoVote: decision.ceoVote,
       daoVote: decision.daoVote,
@@ -308,6 +477,40 @@ export async function triggerEscalation(request: EscalationRequest): Promise<str
 
 // === Subscription Setup ===
 
+// Restore timeouts for pending decisions on startup
+async function restoreDecisionTimeouts(): Promise<void> {
+  const pendingDecisions = await decisionRepo.findPending();
+
+  for (const decision of pendingDecisions) {
+    // Skip escalated decisions - they're waiting for human
+    if (decision.status === 'escalated') continue;
+    // Skip operational tier - no timeouts
+    if (decision.decisionType === 'operational') continue;
+
+    const requirements = APPROVAL_REQUIREMENTS[decision.decisionType];
+    if (!requirements || requirements.timeoutMs <= 0) continue;
+
+    // Calculate remaining time
+    const elapsed = Date.now() - new Date(decision.createdAt).getTime();
+    const remaining = requirements.timeoutMs - elapsed;
+
+    if (remaining <= 0) {
+      // Already expired - process immediately
+      logger.info({ decisionId: decision.id, tier: decision.decisionType }, 'Decision timeout already expired, processing now');
+      if (requirements.autoApproveOnTimeout) {
+        await decisionRepo.updateStatus(decision.id, 'approved', new Date());
+        await broadcastDecisionResult(decision, 'approved');
+      } else {
+        await escalateToHuman(decision);
+      }
+    } else {
+      // Schedule remaining timeout
+      logger.info({ decisionId: decision.id, tier: decision.decisionType, remainingMs: remaining }, 'Restoring decision timeout');
+      scheduleDecisionTimeout(decision.id, decision.decisionType, remaining);
+    }
+  }
+}
+
 export async function initialize(): Promise<void> {
   logger.info('Initializing event system');
 
@@ -318,6 +521,9 @@ export async function initialize(): Promise<void> {
 
   // Subscribe to orchestrator-specific channel
   await subscribe('channel:orchestrator', processMessage);
+
+  // Restore timeouts for any pending decisions from DB
+  await restoreDecisionTimeouts();
 
   logger.info('Event system initialized');
 }
@@ -374,3 +580,6 @@ export async function broadcast(
   await publish(channel, message);
   return message.id;
 }
+
+// Export for testing
+export { decisionTimeouts };

@@ -19,33 +19,52 @@ import {
   DialogContent,
   DialogActions,
   TextField,
+  Stack,
+  Divider,
+  Alert,
 } from '@mui/material';
-import { usePendingEscalations } from '@/hooks/useDecisions';
-import { respondToEscalation, Escalation } from '@/lib/api';
-import { formatDistanceToNow, formatDate } from '@/lib/utils';
+import { usePendingEscalations, useEscalatedDecisions } from '@/hooks/useDecisions';
+import { respondToEscalation, submitHumanDecision, Escalation, Decision } from '@/lib/api';
+import { formatDistanceToNow } from '@/lib/utils';
 import Loading from '@/components/common/Loading';
 import ErrorDisplay from '@/components/common/ErrorDisplay';
 import EmptyState from '@/components/common/EmptyState';
-import { Warning as EscalationIcon } from '@mui/icons-material';
+import {
+  Warning as EscalationIcon,
+  CheckCircle as ApproveIcon,
+  Cancel as RejectIcon,
+  Gavel as DecisionIcon,
+} from '@mui/icons-material';
+
+const tierColors: Record<string, string> = {
+  operational: '#00ff88',
+  minor: '#ffd700',
+  major: '#ff6b35',
+  critical: '#ff0055',
+};
 
 const statusColors: Record<string, string> = {
   pending: '#ffa502',
+  escalated: '#ff0055',
   resolved: '#00ff88',
 };
 
 export default function EscalationsPage() {
-  const { data: escalations, error, isLoading, mutate } = usePendingEscalations();
+  const { data: escalations, error: escError, isLoading: escLoading, mutate: mutateEsc } = usePendingEscalations();
+  const { data: escalatedDecisions, error: decError, isLoading: decLoading, mutate: mutateDec } = useEscalatedDecisions();
+
   const [selectedEscalation, setSelectedEscalation] = useState<Escalation | null>(null);
+  const [selectedDecision, setSelectedDecision] = useState<Decision | null>(null);
   const [response, setResponse] = useState('');
+  const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const handleRespond = async () => {
+  const handleRespondEscalation = async () => {
     if (!selectedEscalation || !response.trim()) return;
-
     setSubmitting(true);
     try {
       await respondToEscalation(selectedEscalation.id, response);
-      mutate();
+      mutateEsc();
       setSelectedEscalation(null);
       setResponse('');
     } catch (err) {
@@ -55,36 +74,177 @@ export default function EscalationsPage() {
     }
   };
 
-  if (isLoading) return <Loading message="Loading escalations..." />;
-  if (error) return <ErrorDisplay error={error} onRetry={() => mutate()} />;
+  const handleHumanDecision = async (decision: 'approve' | 'reject') => {
+    if (!selectedDecision) return;
+    setSubmitting(true);
+    try {
+      await submitHumanDecision(selectedDecision.id, decision, reason || undefined);
+      mutateDec();
+      setSelectedDecision(null);
+      setReason('');
+    } catch (err) {
+      console.error('Failed to submit decision:', err);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (escLoading || decLoading) return <Loading message="Lade Eskalationen..." />;
+  if (escError) return <ErrorDisplay error={escError} onRetry={() => mutateEsc()} />;
+  if (decError) return <ErrorDisplay error={decError} onRetry={() => mutateDec()} />;
+
+  const hasEscalatedDecisions = escalatedDecisions && escalatedDecisions.length > 0;
+  const hasEscalations = escalations && escalations.length > 0;
 
   return (
     <Box>
       <Typography variant="h4" gutterBottom sx={{ fontWeight: 700 }}>
-        Escalations
+        Eskalationen
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>
-        Issues requiring human intervention
+        Entscheidungen und Probleme, die menschliche Bestätigung benötigen
       </Typography>
 
-      {!escalations?.length ? (
-        <EmptyState
-          title="No pending escalations"
-          description="No issues require human intervention at this time."
-          icon={<EscalationIcon sx={{ fontSize: 64 }} />}
-        />
-      ) : (
-        <Card>
-          <CardContent>
+      {/* Critical Decisions Section */}
+      {hasEscalatedDecisions && (
+        <Box sx={{ mb: 4 }}>
+          <Alert severity="warning" sx={{ mb: 2, backgroundColor: 'rgba(255, 0, 85, 0.1)', borderColor: '#ff0055' }}>
+            <Typography variant="subtitle2">
+              {escalatedDecisions.length} kritische Entscheidung(en) warten auf deine Bestätigung
+            </Typography>
+          </Alert>
+
+          <Card sx={{ borderLeft: '4px solid #ff0055' }}>
+            <CardContent>
+              <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+                <DecisionIcon sx={{ color: '#ff0055' }} />
+                Kritische Entscheidungen
+              </Typography>
+              <TableContainer>
+                <Table>
+                  <TableHead>
+                    <TableRow>
+                      <TableCell>Entscheidung</TableCell>
+                      <TableCell>Tier</TableCell>
+                      <TableCell>CEO</TableCell>
+                      <TableCell>DAO</TableCell>
+                      <TableCell>Erstellt</TableCell>
+                      <TableCell>Aktion</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {escalatedDecisions.map((decision) => (
+                      <TableRow key={decision.id} hover>
+                        <TableCell>
+                          <Typography variant="body2" fontWeight={600}>
+                            {decision.title}
+                          </Typography>
+                          {decision.description && (
+                            <Typography variant="caption" color="text.secondary">
+                              {decision.description.substring(0, 100)}...
+                            </Typography>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={decision.decisionType}
+                            size="small"
+                            sx={{
+                              backgroundColor: `${tierColors[decision.decisionType] || '#666'}20`,
+                              color: tierColors[decision.decisionType] || '#666',
+                              fontWeight: 600,
+                            }}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={decision.ceoVote || '—'}
+                            size="small"
+                            sx={{
+                              backgroundColor: decision.ceoVote === 'approve' ? 'rgba(0, 255, 136, 0.2)' :
+                                             decision.ceoVote === 'veto' ? 'rgba(255, 0, 85, 0.2)' : 'rgba(102, 102, 102, 0.2)',
+                              color: decision.ceoVote === 'approve' ? '#00ff88' :
+                                     decision.ceoVote === 'veto' ? '#ff0055' : '#666',
+                            }}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={decision.daoVote || '—'}
+                            size="small"
+                            sx={{
+                              backgroundColor: decision.daoVote === 'approve' ? 'rgba(0, 255, 136, 0.2)' :
+                                             decision.daoVote === 'veto' ? 'rgba(255, 0, 85, 0.2)' : 'rgba(102, 102, 102, 0.2)',
+                              color: decision.daoVote === 'approve' ? '#00ff88' :
+                                     decision.daoVote === 'veto' ? '#ff0055' : '#666',
+                            }}
+                          />
+                        </TableCell>
+                        <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          {formatDistanceToNow(decision.createdAt)}
+                        </TableCell>
+                        <TableCell>
+                          <Stack direction="row" spacing={1}>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              color="success"
+                              startIcon={<ApproveIcon />}
+                              onClick={() => setSelectedDecision(decision)}
+                              sx={{ backgroundColor: '#00ff88', color: '#000', '&:hover': { backgroundColor: '#00cc6a' } }}
+                            >
+                              Approve
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              color="error"
+                              startIcon={<RejectIcon />}
+                              onClick={() => setSelectedDecision(decision)}
+                              sx={{ backgroundColor: '#ff0055', '&:hover': { backgroundColor: '#cc0044' } }}
+                            >
+                              Reject
+                            </Button>
+                          </Stack>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </CardContent>
+          </Card>
+        </Box>
+      )}
+
+      {/* General Escalations Section */}
+      <Card>
+        <CardContent>
+          <Typography variant="h6" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <EscalationIcon sx={{ color: '#ffa502' }} />
+            Allgemeine Eskalationen
+          </Typography>
+
+          {!hasEscalations && !hasEscalatedDecisions ? (
+            <EmptyState
+              title="Keine offenen Eskalationen"
+              description="Aktuell gibt es keine Probleme, die menschliche Intervention benötigen."
+              icon={<EscalationIcon sx={{ fontSize: 64 }} />}
+            />
+          ) : !hasEscalations ? (
+            <Typography variant="body2" color="text.secondary">
+              Keine allgemeinen Eskalationen vorhanden.
+            </Typography>
+          ) : (
             <TableContainer>
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell>Reason</TableCell>
+                    <TableCell>Grund</TableCell>
                     <TableCell>Status</TableCell>
-                    <TableCell>Channels Notified</TableCell>
-                    <TableCell>Created</TableCell>
-                    <TableCell>Actions</TableCell>
+                    <TableCell>Kanäle</TableCell>
+                    <TableCell>Erstellt</TableCell>
+                    <TableCell>Aktion</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -107,7 +267,7 @@ export default function EscalationsPage() {
                         />
                       </TableCell>
                       <TableCell>
-                        {escalation.channelsNotified?.join(', ') || 'None'}
+                        {escalation.channelsNotified?.join(', ') || 'Keine'}
                       </TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap' }}>
                         {formatDistanceToNow(escalation.createdAt)}
@@ -116,11 +276,10 @@ export default function EscalationsPage() {
                         {escalation.status === 'pending' && (
                           <Button
                             size="small"
-                            variant="contained"
-                            color="primary"
+                            variant="outlined"
                             onClick={() => setSelectedEscalation(escalation)}
                           >
-                            Respond
+                            Antworten
                           </Button>
                         )}
                       </TableCell>
@@ -129,18 +288,85 @@ export default function EscalationsPage() {
                 </TableBody>
               </Table>
             </TableContainer>
-          </CardContent>
-        </Card>
-      )}
+          )}
+        </CardContent>
+      </Card>
 
-      {/* Response Dialog */}
+      {/* Human Decision Dialog */}
+      <Dialog
+        open={!!selectedDecision}
+        onClose={() => { setSelectedDecision(null); setReason(''); }}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <DecisionIcon sx={{ color: '#ff0055' }} />
+          Entscheidung bestätigen
+        </DialogTitle>
+        <DialogContent>
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="subtitle1" fontWeight={600}>
+              {selectedDecision?.title}
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+              {selectedDecision?.description}
+            </Typography>
+          </Box>
+
+          <Divider sx={{ my: 2 }} />
+
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="caption" color="text.secondary">
+              CEO Vote: <strong>{selectedDecision?.ceoVote || '—'}</strong> |
+              DAO Vote: <strong>{selectedDecision?.daoVote || '—'}</strong>
+            </Typography>
+          </Box>
+
+          <TextField
+            multiline
+            rows={3}
+            fullWidth
+            label="Begründung (optional)"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Optional: Erkläre deine Entscheidung..."
+          />
+        </DialogContent>
+        <DialogActions sx={{ p: 2, gap: 1 }}>
+          <Button onClick={() => { setSelectedDecision(null); setReason(''); }}>
+            Abbrechen
+          </Button>
+          <Button
+            onClick={() => handleHumanDecision('reject')}
+            variant="contained"
+            color="error"
+            disabled={submitting}
+            startIcon={<RejectIcon />}
+            sx={{ backgroundColor: '#ff0055' }}
+          >
+            Ablehnen
+          </Button>
+          <Button
+            onClick={() => handleHumanDecision('approve')}
+            variant="contained"
+            color="success"
+            disabled={submitting}
+            startIcon={<ApproveIcon />}
+            sx={{ backgroundColor: '#00ff88', color: '#000' }}
+          >
+            Genehmigen
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* General Escalation Response Dialog */}
       <Dialog
         open={!!selectedEscalation}
         onClose={() => setSelectedEscalation(null)}
         maxWidth="sm"
         fullWidth
       >
-        <DialogTitle>Respond to Escalation</DialogTitle>
+        <DialogTitle>Auf Eskalation antworten</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             {selectedEscalation?.reason}
@@ -150,20 +376,20 @@ export default function EscalationsPage() {
             multiline
             rows={4}
             fullWidth
-            label="Your Response"
+            label="Deine Antwort"
             value={response}
             onChange={(e) => setResponse(e.target.value)}
-            placeholder="Enter your decision or instructions..."
+            placeholder="Gib deine Entscheidung oder Anweisungen ein..."
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setSelectedEscalation(null)}>Cancel</Button>
+          <Button onClick={() => setSelectedEscalation(null)}>Abbrechen</Button>
           <Button
-            onClick={handleRespond}
+            onClick={handleRespondEscalation}
             variant="contained"
             disabled={!response.trim() || submitting}
           >
-            {submitting ? 'Submitting...' : 'Submit Response'}
+            {submitting ? 'Wird gesendet...' : 'Antwort senden'}
           </Button>
         </DialogActions>
       </Dialog>

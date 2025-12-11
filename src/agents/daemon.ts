@@ -14,7 +14,8 @@ import {
   keys,
   setAgentStatus,
 } from '../lib/redis.js';
-import { agentRepo, historyRepo, eventRepo } from '../lib/db.js';
+import { agentRepo, historyRepo, eventRepo, decisionRepo } from '../lib/db.js';
+import { rag } from '../lib/rag.js';
 import { loadProfile, generateSystemPrompt, type AgentProfile } from './profile.js';
 import { createStateManager, StateKeys, type StateManager } from './state.js';
 import {
@@ -23,6 +24,7 @@ import {
   isClaudeAvailable,
   buildLoopPrompt,
   parseClaudeOutput,
+  type PendingDecision,
 } from './claude.js';
 import type { AgentType, AgentMessage, EventType } from '../lib/types.js';
 
@@ -108,7 +110,9 @@ export class AgentDaemon {
       }
 
     } catch (error) {
-      logger.error({ error }, 'Failed to start daemon');
+      const errMsg = error instanceof Error ? error.message : String(error);
+      const errStack = error instanceof Error ? error.stack : undefined;
+      logger.error({ error: errMsg, stack: errStack }, 'Failed to start daemon');
       await this.updateStatus('error');
       throw error;
     }
@@ -130,8 +134,9 @@ export class AgentDaemon {
       // Unsubscribe from Redis
       await subscriber.unsubscribe();
 
-      // Update status
-      await this.updateStatus('inactive');
+      // NOTE: We intentionally do NOT set status to 'inactive' on shutdown.
+      // The 'active' status means the agent SHOULD be running, not that it IS running.
+      // The orchestrator will restart the container based on status='active'.
 
       // Log event
       await this.logEvent('agent_stopped', { reason: 'graceful_shutdown' });
@@ -140,7 +145,8 @@ export class AgentDaemon {
       logger.info('Agent daemon stopped');
 
     } catch (error) {
-      logger.error({ error }, 'Error during shutdown');
+      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.error({ error: errMsg }, 'Error during shutdown');
     }
   }
 
@@ -197,7 +203,7 @@ export class AgentDaemon {
    */
   private shouldTriggerAI(message: AgentMessage): boolean {
     // Always trigger AI for these types
-    const aiRequired: AgentMessage['type'][] = ['task', 'decision', 'alert'];
+    const aiRequired: AgentMessage['type'][] = ['task', 'decision', 'alert', 'vote'];
     if (aiRequired.includes(message.type)) {
       return true;
     }
@@ -276,7 +282,8 @@ export class AgentDaemon {
       try {
         await this.runLoop('scheduled');
       } catch (error) {
-        logger.error({ error }, 'Scheduled loop failed');
+        const errMsg = error instanceof Error ? error.message : String(error);
+        logger.error({ error: errMsg }, 'Scheduled loop failed');
       }
     });
   }
@@ -318,9 +325,44 @@ export class AgentDaemon {
       // Get current state
       const currentState = await this.state.getAll();
 
+      // Fetch pending decisions for HEAD agents (CEO/DAO)
+      let pendingDecisions: PendingDecision[] = [];
+      if (this.profile.codename === 'ceo' || this.profile.codename === 'dao') {
+        const rawDecisions = await decisionRepo.findPending();
+        pendingDecisions = rawDecisions.map(d => ({
+          id: d.id,
+          title: d.title,
+          description: d.description ?? undefined,
+          tier: d.decisionType,
+          proposedBy: d.proposedBy ?? undefined,
+          createdAt: d.createdAt,
+        }));
+        if (pendingDecisions.length > 0) {
+          logger.info({ count: pendingDecisions.length }, 'Found pending decisions for HEAD agent');
+        }
+      }
+
+      // RAG: Build query from agent type + trigger + data
+      let ragContext = '';
+      try {
+        const queryParts = [this.profile.codename, trigger];
+        if (data && typeof data === 'object' && 'message' in data) {
+          queryParts.push(String((data as { message?: string }).message || ''));
+        }
+        const ragQuery = queryParts.join(' ');
+        const ragResults = await rag.search(ragQuery, 5);
+        if (ragResults.length > 0) {
+          ragContext = rag.buildContext(ragResults, 1500);
+          logger.debug({ query: ragQuery, resultsCount: ragResults.length }, 'RAG context retrieved');
+        }
+      } catch (ragError) {
+        const errMsg = ragError instanceof Error ? ragError.message : String(ragError);
+        logger.warn({ error: errMsg }, 'RAG search failed, continuing without context');
+      }
+
       // Build prompt
       const systemPrompt = generateSystemPrompt(this.profile);
-      const loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data });
+      const loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data }, pendingDecisions, ragContext);
       logger.info({ systemPromptLength: systemPrompt.length, loopPromptLength: loopPrompt.length }, 'Prompt lengths');
       logger.debug({ systemPrompt }, 'System prompt');
       logger.debug({ loopPrompt }, 'Loop prompt');
@@ -424,19 +466,123 @@ export class AgentDaemon {
    */
   private async processAction(action: { type: string; data?: unknown }): Promise<void> {
     logger.debug({ actionType: action.type }, 'Processing action');
+    const actionData = action.data as Record<string, unknown> | undefined;
 
     switch (action.type) {
-      case 'create_task':
-        // TODO: Implement task creation
+      case 'create_task': {
+        // Create task for another agent
+        const taskMessage: AgentMessage = {
+          id: crypto.randomUUID(),
+          type: 'task',
+          from: this.config.agentId,
+          to: (actionData?.assignTo as string) || 'clevel',
+          payload: {
+            task_id: crypto.randomUUID(),
+            title: actionData?.title || 'Untitled Task',
+            description: actionData?.description || '',
+            deadline: actionData?.deadline,
+          },
+          priority: (actionData?.priority as 'low' | 'normal' | 'high' | 'urgent') || 'normal',
+          timestamp: new Date(),
+          requiresResponse: false,
+        };
+        await publisher.publish('channel:orchestrator', JSON.stringify(taskMessage));
+        logger.info({ taskTitle: actionData?.title, assignTo: actionData?.assignTo }, 'Task created');
         break;
+      }
 
-      case 'propose_decision':
-        // TODO: Implement decision proposal
-        break;
+      case 'propose_decision': {
+        // Propose a decision with tier classification
+        // Tier can be: operational, minor, major, critical
+        const tier = (actionData?.tier as string) || 'major';
 
-      case 'alert':
-        // TODO: Implement alert sending
+        const decisionMessage: AgentMessage = {
+          id: crypto.randomUUID(),
+          type: 'decision',
+          from: this.config.agentId,
+          to: 'orchestrator',
+          payload: {
+            title: actionData?.title || 'Untitled Decision',
+            description: actionData?.description || '',
+            type: tier, // This is the DecisionType tier
+            context: actionData?.context,
+            options: actionData?.options,
+          },
+          priority: tier === 'critical' ? 'urgent' : tier === 'major' ? 'high' : 'normal',
+          timestamp: new Date(),
+          requiresResponse: tier !== 'operational',
+        };
+        await publisher.publish('channel:orchestrator', JSON.stringify(decisionMessage));
+        logger.info({ decisionTitle: actionData?.title, tier }, 'Decision proposed');
         break;
+      }
+
+      case 'operational': {
+        // Execute operational task immediately (no approval needed)
+        // This is a shorthand for propose_decision with tier=operational
+        const opMessage: AgentMessage = {
+          id: crypto.randomUUID(),
+          type: 'decision',
+          from: this.config.agentId,
+          to: 'orchestrator',
+          payload: {
+            title: actionData?.title || 'Operational Task',
+            description: actionData?.description || '',
+            type: 'operational',
+            executedAction: actionData?.action,
+          },
+          priority: 'low',
+          timestamp: new Date(),
+          requiresResponse: false,
+        };
+        await publisher.publish('channel:orchestrator', JSON.stringify(opMessage));
+        logger.info({ title: actionData?.title }, 'Operational task executed');
+        break;
+      }
+
+      case 'vote': {
+        // Cast a vote on a pending decision (for CEO/DAO)
+        const voteMessage: AgentMessage = {
+          id: crypto.randomUUID(),
+          type: 'vote',
+          from: this.config.agentId,
+          to: 'orchestrator',
+          payload: {
+            decisionId: actionData?.decisionId,
+            voterType: this.config.agentType, // ceo or dao
+            vote: actionData?.vote || 'abstain', // approve, veto, abstain
+            reason: actionData?.reason,
+          },
+          priority: 'high',
+          timestamp: new Date(),
+          requiresResponse: false,
+        };
+        await publisher.publish('channel:orchestrator', JSON.stringify(voteMessage));
+        logger.info({ decisionId: actionData?.decisionId, vote: actionData?.vote }, 'Vote cast');
+        break;
+      }
+
+      case 'alert': {
+        // Send alert to orchestrator
+        const alertMessage: AgentMessage = {
+          id: crypto.randomUUID(),
+          type: 'alert',
+          from: this.config.agentId,
+          to: 'orchestrator',
+          payload: {
+            type: actionData?.alertType || 'general',
+            severity: actionData?.severity || 'low',
+            message: actionData?.message || '',
+            relatedDecisionId: actionData?.decisionId,
+          },
+          priority: (actionData?.severity === 'critical') ? 'urgent' : 'high',
+          timestamp: new Date(),
+          requiresResponse: false,
+        };
+        await publisher.publish('channel:orchestrator', JSON.stringify(alertMessage));
+        logger.info({ alertType: actionData?.alertType, severity: actionData?.severity }, 'Alert sent');
+        break;
+      }
 
       default:
         logger.debug({ actionType: action.type }, 'Unknown action type');
