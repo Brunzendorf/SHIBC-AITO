@@ -155,7 +155,10 @@ export type MessageType =
   | 'vote'
   | 'alert'
   | 'broadcast'
-  | 'direct';
+  | 'direct'
+  | 'pr_approved_by_rag'   // PR passed RAG quality check, needs CEO approval
+  | 'pr_rejected'          // PR failed RAG quality check
+  | 'pr_review_requested'; // Agent requests RAG to review PR
 
 export type MessagePriority = 'low' | 'normal' | 'high' | 'urgent';
 

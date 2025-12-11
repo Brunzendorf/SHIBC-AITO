@@ -414,33 +414,56 @@ export class AgentDaemon {
           // Log to history
           await this.logHistory('decision', parsed.summary || 'Loop completed', parsed);
 
-          // Commit workspace changes to git
+          // Commit workspace changes to git (with PR if enabled)
           if (await workspace.hasUncommittedChanges()) {
-            const commitResult = await workspace.commitAndPush(
+            const commitResult = await workspace.commitAndCreatePR(
               this.config.agentType,
-              parsed.summary || `Loop ${loopCount + 1} completed`
+              parsed.summary || `Loop ${loopCount + 1} completed`,
+              loopCount + 1
             );
             if (commitResult.success && commitResult.filesChanged) {
               logger.info({
                 filesChanged: commitResult.filesChanged,
-                commitHash: commitResult.commitHash
+                commitHash: commitResult.commitHash,
+                prNumber: commitResult.prNumber,
+                prUrl: commitResult.prUrl,
               }, 'Workspace changes committed');
 
-              // Notify orchestrator to index new files (RAG)
-              const changedFiles = await workspace.getChangedFiles();
-              if (changedFiles.length > 0) {
+              // If PR was created, request RAG quality review
+              if (commitResult.prNumber) {
                 await publisher.publish(channels.orchestrator, JSON.stringify({
                   id: crypto.randomUUID(),
-                  type: 'workspace_update',
+                  type: 'pr_review_requested',
                   from: this.config.agentId,
                   to: 'orchestrator',
                   payload: {
                     agentType: this.config.agentType,
+                    prNumber: commitResult.prNumber,
+                    prUrl: commitResult.prUrl,
+                    branchName: commitResult.branchName,
                     commitHash: commitResult.commitHash,
-                    filesChanged: changedFiles,
+                    filesChanged: await workspace.getChangedFiles(),
                     summary: parsed.summary,
                   },
                 }));
+                logger.info({ prNumber: commitResult.prNumber }, 'PR review requested');
+              } else {
+                // No PR (direct push) - just index the files
+                const changedFiles = await workspace.getChangedFiles();
+                if (changedFiles.length > 0) {
+                  await publisher.publish(channels.orchestrator, JSON.stringify({
+                    id: crypto.randomUUID(),
+                    type: 'workspace_update',
+                    from: this.config.agentId,
+                    to: 'orchestrator',
+                    payload: {
+                      agentType: this.config.agentType,
+                      commitHash: commitResult.commitHash,
+                      filesChanged: changedFiles,
+                      summary: parsed.summary,
+                    },
+                  }));
+                }
               }
             }
           }

@@ -37,7 +37,8 @@ const configSchema = z.object({
   WORKSPACE_REPO_URL: z.string().default('https://github.com/Brunzendorf/shibc-workspace.git'),
   WORKSPACE_BRANCH: z.string().default('main'),
   WORKSPACE_AUTO_COMMIT: z.string().default('true'),  // Auto-commit on file changes
-  WORKSPACE_AUTO_PUSH: z.string().default('true'),    // Auto-push after commits
+  WORKSPACE_USE_PR: z.string().default('true'),       // Use branch+PR workflow (quality gate)
+  WORKSPACE_AUTO_MERGE: z.string().default('false'),  // Auto-merge PRs after RAG approval
 
   // Agent Defaults
   DEFAULT_LOOP_INTERVAL: z.string().default('3600'), // 1 hour
@@ -95,12 +96,18 @@ export const workspaceConfig = {
   repoUrl: config.WORKSPACE_REPO_URL,
   branch: config.WORKSPACE_BRANCH,
   autoCommit: config.WORKSPACE_AUTO_COMMIT === 'true',
-  autoPush: config.WORKSPACE_AUTO_PUSH === 'true',
+  usePR: config.WORKSPACE_USE_PR === 'true',       // Branch+PR workflow
+  autoMerge: config.WORKSPACE_AUTO_MERGE === 'true', // Auto-merge after approval
   // Build authenticated URL if token available
   getAuthenticatedUrl: () => {
     if (!config.GITHUB_TOKEN) return config.WORKSPACE_REPO_URL;
     const url = new URL(config.WORKSPACE_REPO_URL);
     return `https://${config.GITHUB_TOKEN}@${url.host}${url.pathname}`;
+  },
+  // Get repo owner/name for gh CLI
+  getRepoSlug: () => {
+    const url = new URL(config.WORKSPACE_REPO_URL);
+    return url.pathname.replace(/^\//, '').replace(/\.git$/, '');
   },
 };
 

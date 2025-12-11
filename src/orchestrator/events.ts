@@ -298,6 +298,102 @@ registerHandler('workspace_update', async (message) => {
   }
 });
 
+// Handle PR review requests - RAG quality gate for agent content
+registerHandler('pr_review_requested', async (message) => {
+  const payload = message.payload as any;
+
+  logger.info({
+    agentType: payload.agentType,
+    prNumber: payload.prNumber,
+    filesChanged: payload.filesChanged?.length || 0,
+  }, 'PR review requested, running RAG quality check');
+
+  try {
+    const { reviewPRContent } = await import('../lib/rag.js');
+
+    // Run RAG quality check on PR content
+    const reviewResult = await reviewPRContent(
+      payload.agentType,
+      payload.summary || '',
+      payload.filesChanged || []
+    );
+
+    if (reviewResult.approved) {
+      logger.info({
+        prNumber: payload.prNumber,
+        score: reviewResult.score,
+      }, 'PR passed RAG quality check');
+
+      // Auto-merge if enabled, otherwise notify CEO
+      const { workspaceConfig } = await import('../lib/config.js');
+      if (workspaceConfig.autoMerge) {
+        const { mergePullRequest } = await import('../agents/workspace.js');
+        await mergePullRequest(payload.prNumber);
+        logger.info({ prNumber: payload.prNumber }, 'PR auto-merged after RAG approval');
+      } else {
+        // Notify CEO for final review
+        await publish(channels.head, {
+          id: uuid(),
+          type: 'pr_approved_by_rag',
+          from: 'orchestrator',
+          to: 'head',
+          payload: {
+            prNumber: payload.prNumber,
+            prUrl: payload.prUrl,
+            agentType: payload.agentType,
+            summary: payload.summary,
+            ragScore: reviewResult.score,
+            ragFeedback: reviewResult.feedback,
+          },
+          priority: 'normal',
+          timestamp: new Date(),
+          requiresResponse: false,
+        });
+        logger.info({ prNumber: payload.prNumber }, 'CEO notified for final PR approval');
+      }
+
+      // Index the content for RAG
+      const { indexAgentOutput } = await import('../lib/rag.js');
+      await indexAgentOutput(
+        message.from as string,
+        payload.agentType,
+        payload.summary || 'Agent workspace update'
+      );
+    } else {
+      logger.warn({
+        prNumber: payload.prNumber,
+        score: reviewResult.score,
+        issues: reviewResult.issues,
+      }, 'PR failed RAG quality check');
+
+      // Close PR with feedback
+      const { closePullRequest } = await import('../agents/workspace.js');
+      const feedbackMessage = `Quality score: ${reviewResult.score}/100\n\nIssues found:\n${reviewResult.issues.map((i: string) => `- ${i}`).join('\n')}\n\nSuggestions:\n${reviewResult.feedback}`;
+      await closePullRequest(payload.prNumber, feedbackMessage);
+
+      // Notify agent about rejection
+      await publish(channels.agent(message.from as string), {
+        id: uuid(),
+        type: 'pr_rejected',
+        from: 'orchestrator',
+        to: message.from,
+        payload: {
+          prNumber: payload.prNumber,
+          score: reviewResult.score,
+          issues: reviewResult.issues,
+          feedback: reviewResult.feedback,
+        },
+        priority: 'normal',
+        timestamp: new Date(),
+        requiresResponse: false,
+      });
+    }
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error({ error: errMsg, prNumber: payload.prNumber }, 'Failed to review PR content');
+  }
+});
+
 // === Decision Timeout Scheduling ===
 
 function scheduleDecisionTimeout(decisionId: string, tier: DecisionType, timeoutMs: number): void {

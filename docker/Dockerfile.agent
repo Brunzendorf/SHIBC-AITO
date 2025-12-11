@@ -13,6 +13,11 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# Install GitHub CLI (gh) for PR workflow
+RUN curl -fsSL https://github.com/cli/cli/releases/download/v2.63.2/gh_2.63.2_linux_amd64.tar.gz | tar xz \
+    && mv gh_2.63.2_linux_amd64/bin/gh /usr/local/bin/ \
+    && rm -rf gh_2.63.2_linux_amd64
+
 # Install Claude Code CLI
 # Methode 1: npm (bevorzugt)
 # Methode 2: curl install script (fallback)
@@ -75,6 +80,9 @@ RUN apt-get update && apt-get install -y \
 # Copy Claude CLI from base
 COPY --from=base /usr/local/bin/claude /usr/local/bin/claude
 COPY --from=base /usr/local/lib/node_modules/@anthropic-ai /usr/local/lib/node_modules/@anthropic-ai
+
+# Copy GitHub CLI from base
+COPY --from=base /usr/local/bin/gh /usr/local/bin/gh
 
 # Create non-root user
 RUN groupadd -g 1001 aito && \

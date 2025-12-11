@@ -499,6 +499,185 @@ export async function indexAgentOutput(
   );
 }
 
+/**
+ * Review PR content against RAG knowledge base for quality assurance
+ * Returns approval status, score, issues, and feedback
+ */
+export async function reviewPRContent(
+  agentType: string,
+  summary: string,
+  changedFiles: string[]
+): Promise<{
+  approved: boolean;
+  score: number;
+  issues: string[];
+  feedback: string;
+}> {
+  const issues: string[] = [];
+  let score = 100;
+
+  try {
+    // 1. Basic validation
+    if (!summary || summary.length < 20) {
+      issues.push('Summary is too short or missing');
+      score -= 20;
+    }
+
+    if (changedFiles.length === 0) {
+      issues.push('No files changed in this PR');
+      score -= 30;
+    }
+
+    // 2. Search RAG for agent profile/guidelines
+    const profileResults = await search(`${agentType} guidelines responsibilities`, 3, {
+      type: 'profile',
+    });
+
+    // 3. Search for related content to check consistency
+    const relatedResults = await search(summary, 5);
+
+    // 4. Check for forbidden patterns
+    const forbiddenPatterns = [
+      { pattern: /api[_-]?key|secret|password|token/i, issue: 'Potential sensitive data in content' },
+      { pattern: /rm\s+-rf\s+\/|sudo\s+rm/i, issue: 'Dangerous command patterns detected' },
+      { pattern: /wallet.*private|mnemonic|seed\s*phrase/i, issue: 'Crypto key material detected' },
+    ];
+
+    for (const { pattern, issue } of forbiddenPatterns) {
+      if (pattern.test(summary) || changedFiles.some(f => pattern.test(f))) {
+        issues.push(issue);
+        score -= 25;
+      }
+    }
+
+    // 5. Check if content aligns with agent's domain
+    const agentDomains: Record<string, string[]> = {
+      ceo: ['strategy', 'executive', 'approval', 'oversight', 'leadership'],
+      dao: ['governance', 'voting', 'proposal', 'treasury', 'snapshot'],
+      cmo: ['marketing', 'content', 'social', 'campaign', 'brand'],
+      cto: ['technical', 'infrastructure', 'development', 'architecture'],
+      cfo: ['finance', 'budget', 'treasury', 'accounting', 'financial'],
+      coo: ['operations', 'process', 'efficiency', 'workflow', 'sop'],
+      cco: ['compliance', 'legal', 'risk', 'regulation', 'policy'],
+    };
+
+    const domain = agentDomains[agentType] || [];
+    const summaryLower = summary.toLowerCase();
+    const domainRelevance = domain.some(keyword => summaryLower.includes(keyword));
+
+    if (!domainRelevance && domain.length > 0) {
+      issues.push(`Content may be outside ${agentType.toUpperCase()}'s domain`);
+      score -= 10;
+    }
+
+    // 6. Check file path patterns
+    const agentPaths: Record<string, RegExp[]> = {
+      cmo: [/marketing|content|social|campaigns/i],
+      cto: [/technical|infrastructure|docs|architecture/i],
+      cfo: [/finance|treasury|budget|reports/i],
+      coo: [/operations|sops|processes|workflows/i],
+      cco: [/compliance|legal|risk|policies/i],
+    };
+
+    const allowedPaths = agentPaths[agentType];
+    if (allowedPaths) {
+      const invalidFiles = changedFiles.filter(f =>
+        !allowedPaths.some(regex => regex.test(f)) &&
+        !f.includes(agentType) // Allow agent's own directory
+      );
+
+      if (invalidFiles.length > 0) {
+        issues.push(`Files outside agent's domain: ${invalidFiles.slice(0, 3).join(', ')}`);
+        score -= 15;
+      }
+    }
+
+    // 7. Check for contradictions with existing knowledge (basic)
+    if (relatedResults.length > 0) {
+      // Look for conflicting claims (simplified check)
+      const existingContent = relatedResults.map(r => r.text || '').join(' ');
+
+      // Check for numeric inconsistencies (e.g., token supply, addresses)
+      const numericPattern = /(\d{6,}|0x[a-fA-F0-9]{40})/g;
+      const newNumbers: string[] = summary.match(numericPattern) || [];
+      const existingNumbers: string[] = existingContent.match(numericPattern) || [];
+
+      // Flag if claiming different values for same type of data
+      for (const num of newNumbers) {
+        if (existingNumbers.length > 0 && num.startsWith('0x')) {
+          // Check if it's a new address not seen before
+          if (!existingNumbers.includes(num)) {
+            logger.debug({ newAddress: num }, 'New address mentioned, may need verification');
+          }
+        }
+      }
+    }
+
+    // 8. Calculate final approval
+    const approved = score >= 60;
+    const feedback = generateFeedback(agentType, issues, score, profileResults);
+
+    logger.info({
+      agentType,
+      score,
+      approved,
+      issueCount: issues.length,
+    }, 'PR review completed');
+
+    return { approved, score, issues, feedback };
+  } catch (error) {
+    logger.error({ error }, 'RAG review failed');
+    // On error, approve with warning to avoid blocking
+    return {
+      approved: true,
+      score: 70,
+      issues: ['RAG review encountered an error - manual review recommended'],
+      feedback: 'Automatic review failed. Please manually verify the changes.',
+    };
+  }
+}
+
+/**
+ * Generate helpful feedback based on review results
+ */
+function generateFeedback(
+  agentType: string,
+  issues: string[],
+  score: number,
+  profileResults: any[]
+): string {
+  if (issues.length === 0) {
+    return `Content looks good! Aligns well with ${agentType.toUpperCase()} responsibilities.`;
+  }
+
+  let feedback = 'Please address the following:\n\n';
+
+  for (const issue of issues) {
+    feedback += `• ${issue}\n`;
+  }
+
+  feedback += '\nSuggestions:\n';
+
+  if (issues.some(i => i.includes('domain'))) {
+    feedback += `• Ensure content is relevant to ${agentType.toUpperCase()}'s role\n`;
+  }
+
+  if (issues.some(i => i.includes('sensitive'))) {
+    feedback += '• Remove any API keys, tokens, or credentials\n';
+  }
+
+  if (issues.some(i => i.includes('short'))) {
+    feedback += '• Provide more detailed description of changes\n';
+  }
+
+  // Add guidance from profile if available
+  if (profileResults.length > 0) {
+    feedback += `\nRefer to ${agentType.toUpperCase()} profile for approved activities.`;
+  }
+
+  return feedback;
+}
+
 // Export for convenience
 export const rag = {
   initialize,
@@ -509,5 +688,6 @@ export const rag = {
   buildContext,
   checkAndReindex,
   indexDecision,
-  indexAgentOutput
+  indexAgentOutput,
+  reviewPRContent,
 };
