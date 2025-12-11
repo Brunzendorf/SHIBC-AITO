@@ -1,9 +1,0 @@
-{
-  "/_not-found/page": "/_not-found",
-  "/decisions/page": "/decisions",
-  "/agents/page": "/agents",
-  "/agents/[type]/page": "/agents/[type]",
-  "/escalations/page": "/escalations",
-  "/events/page": "/events",
-  "/page": "/"
-}
