@@ -56,3 +56,6 @@ coverage/
 tmp/
 temp/
 .tmp/
+
+# Workspace is a separate git repository
+workspace/

@@ -33,6 +33,12 @@ const configSchema = z.object({
   GITHUB_TOKEN: z.string().optional(),
   GITHUB_ORG: z.string().default('og-shibaclassic'),
 
+  // Workspace Git Repository
+  WORKSPACE_REPO_URL: z.string().default('https://github.com/Brunzendorf/shibc-workspace.git'),
+  WORKSPACE_BRANCH: z.string().default('main'),
+  WORKSPACE_AUTO_COMMIT: z.string().default('true'),  // Auto-commit on file changes
+  WORKSPACE_AUTO_PUSH: z.string().default('true'),    // Auto-push after commits
+
   // Agent Defaults
   DEFAULT_LOOP_INTERVAL: z.string().default('3600'), // 1 hour
   HEALTH_CHECK_INTERVAL: z.string().default('30'), // 30 seconds
@@ -81,6 +87,20 @@ export const numericConfig = {
     minor: parseInt(config.DECISION_TIMEOUT_MINOR, 10),    // 4h auto-approve
     major: parseInt(config.DECISION_TIMEOUT_MAJOR, 10),    // 24h escalate
     critical: parseInt(config.DECISION_TIMEOUT_CRITICAL, 10), // 48h escalate
+  },
+};
+
+// Workspace git settings
+export const workspaceConfig = {
+  repoUrl: config.WORKSPACE_REPO_URL,
+  branch: config.WORKSPACE_BRANCH,
+  autoCommit: config.WORKSPACE_AUTO_COMMIT === 'true',
+  autoPush: config.WORKSPACE_AUTO_PUSH === 'true',
+  // Build authenticated URL if token available
+  getAuthenticatedUrl: () => {
+    if (!config.GITHUB_TOKEN) return config.WORKSPACE_REPO_URL;
+    const url = new URL(config.WORKSPACE_REPO_URL);
+    return `https://${config.GITHUB_TOKEN}@${url.host}${url.pathname}`;
   },
 };
 

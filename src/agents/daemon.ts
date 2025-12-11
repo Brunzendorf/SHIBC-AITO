@@ -16,6 +16,7 @@ import {
 } from '../lib/redis.js';
 import { agentRepo, historyRepo, eventRepo, decisionRepo } from '../lib/db.js';
 import { rag } from '../lib/rag.js';
+import { workspace } from './workspace.js';
 import { loadProfile, generateSystemPrompt, type AgentProfile } from './profile.js';
 import { createStateManager, StateKeys, type StateManager } from './state.js';
 import {
@@ -79,6 +80,10 @@ export class AgentDaemon {
       // 2. Initialize state manager
       this.state = createStateManager(this.config.agentId, this.config.agentType);
       logger.info('State manager initialized');
+
+      // 2.5. Initialize workspace (git clone)
+      const workspaceInitialized = await workspace.initialize(this.config.agentType);
+      logger.info({ success: workspaceInitialized }, 'Workspace initialized');
 
       // 3. Check Claude availability
       this.claudeAvailable = await isClaudeAvailable();
@@ -408,6 +413,37 @@ export class AgentDaemon {
 
           // Log to history
           await this.logHistory('decision', parsed.summary || 'Loop completed', parsed);
+
+          // Commit workspace changes to git
+          if (await workspace.hasUncommittedChanges()) {
+            const commitResult = await workspace.commitAndPush(
+              this.config.agentType,
+              parsed.summary || `Loop ${loopCount + 1} completed`
+            );
+            if (commitResult.success && commitResult.filesChanged) {
+              logger.info({
+                filesChanged: commitResult.filesChanged,
+                commitHash: commitResult.commitHash
+              }, 'Workspace changes committed');
+
+              // Notify orchestrator to index new files (RAG)
+              const changedFiles = await workspace.getChangedFiles();
+              if (changedFiles.length > 0) {
+                await publisher.publish(channels.orchestrator, JSON.stringify({
+                  id: crypto.randomUUID(),
+                  type: 'workspace_update',
+                  from: this.config.agentId,
+                  to: 'orchestrator',
+                  payload: {
+                    agentType: this.config.agentType,
+                    commitHash: commitResult.commitHash,
+                    filesChanged: changedFiles,
+                    summary: parsed.summary,
+                  },
+                }));
+              }
+            }
+          }
         }
 
         // Update success count

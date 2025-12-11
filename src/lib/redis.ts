@@ -34,6 +34,7 @@ export const channels = {
   broadcast: 'channel:broadcast',
   head: 'channel:head',
   clevel: 'channel:clevel',
+  orchestrator: 'channel:orchestrator', // For workspace updates, RAG indexing
   agent: (id: string) => `channel:agent:${id}`,
   tasks: (id: string) => `queue:tasks:${id}`,
   urgent: 'queue:urgent',

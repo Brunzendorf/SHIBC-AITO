@@ -274,6 +274,30 @@ registerHandler('alert', async (message) => {
   }
 });
 
+// Handle workspace updates from agents - trigger RAG indexing
+registerHandler('workspace_update', async (message) => {
+  const payload = message.payload as any;
+
+  logger.info({
+    agentType: payload.agentType,
+    commitHash: payload.commitHash,
+    filesChanged: payload.filesChanged?.length || 0,
+  }, 'Workspace update received, indexing for RAG');
+
+  // Index agent output for RAG
+  try {
+    const { indexAgentOutput } = await import('../lib/rag.js');
+    await indexAgentOutput(
+      message.from as string,
+      payload.agentType,
+      payload.summary || 'Agent workspace update'
+    );
+    logger.info({ agentType: payload.agentType }, 'RAG indexing completed');
+  } catch (error) {
+    logger.error({ error }, 'Failed to index workspace update for RAG');
+  }
+});
+
 // === Decision Timeout Scheduling ===
 
 function scheduleDecisionTimeout(decisionId: string, tier: DecisionType, timeoutMs: number): void {
