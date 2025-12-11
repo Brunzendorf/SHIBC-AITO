@@ -182,7 +182,7 @@ services:
     volumes:
       - ./profiles:/app/profiles:ro
       - ceo_memory:/app/memory
-      - ceo_claude_config:/app/.claude
+      - shared_claude_config:/app/.claude
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -209,7 +209,7 @@ services:
     volumes:
       - ./profiles:/app/profiles:ro
       - dao_memory:/app/memory
-      - dao_claude_config:/app/.claude
+      - shared_claude_config:/app/.claude
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -242,7 +242,7 @@ services:
     volumes:
       - ./profiles:/app/profiles:ro
       - cmo_memory:/app/memory
-      - cmo_claude_config:/app/.claude
+      - shared_claude_config:/app/.claude
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -271,7 +271,7 @@ services:
     volumes:
       - ./profiles:/app/profiles:ro
       - cto_memory:/app/memory
-      - cto_claude_config:/app/.claude
+      - shared_claude_config:/app/.claude
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -301,7 +301,7 @@ services:
     volumes:
       - ./profiles:/app/profiles:ro
       - cfo_memory:/app/memory
-      - cfo_claude_config:/app/.claude
+      - shared_claude_config:/app/.claude
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -329,7 +329,7 @@ services:
     volumes:
       - ./profiles:/app/profiles:ro
       - coo_memory:/app/memory
-      - coo_claude_config:/app/.claude
+      - shared_claude_config:/app/.claude
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -355,7 +355,7 @@ services:
     volumes:
       - ./profiles:/app/profiles:ro
       - cco_memory:/app/memory
-      - cco_claude_config:/app/.claude
+      - shared_claude_config:/app/.claude
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -420,11 +420,5 @@ volumes:
   coo_memory:
   cco_memory:
 
-  # Claude CLI Auth (Persistent!)
-  ceo_claude_config:
-  dao_claude_config:
-  cmo_claude_config:
-  cto_claude_config:
-  cfo_claude_config:
-  coo_claude_config:
-  cco_claude_config:
+  # Claude CLI Auth (Shared across all agents!)
+  shared_claude_config:
