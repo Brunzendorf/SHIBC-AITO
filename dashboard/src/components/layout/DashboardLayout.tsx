@@ -17,6 +17,14 @@ import {
   Chip,
   useTheme,
   useMediaQuery,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  Table,
+  TableBody,
+  TableCell,
+  TableRow,
+  Divider,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -25,7 +33,11 @@ import {
   HowToVote as DecisionIcon,
   Warning as EscalationIcon,
   History as EventIcon,
+  Memory as WorkerIcon,
   Circle as StatusIcon,
+  CheckCircle as HealthyIcon,
+  Cancel as UnhealthyIcon,
+  Close as CloseIcon,
 } from '@mui/icons-material';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -45,6 +57,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [healthDialogOpen, setHealthDialogOpen] = useState(false);
   const pathname = usePathname();
 
   // Fetch counts for badges
@@ -55,9 +68,21 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const pendingDecisionCount = decisions?.length || 0;
   const pendingEscalationCount = escalations?.length || 0;
 
+  // Count healthy/unhealthy components (excluding agents which has different structure)
+  const infraComponents = health?.components ?
+    Object.entries(health.components).filter(([key]) => key !== 'agents') : [];
+  const unhealthyInfra = infraComponents.filter(([, c]) =>
+    typeof c === 'object' && 'status' in c && c.status !== 'healthy'
+  );
+  const agentsHealth = health?.components?.agents;
+  const unhealthyAgentCount = agentsHealth?.unhealthy || 0;
+  const allHealthy = health?.status === 'healthy' && unhealthyInfra.length === 0 && unhealthyAgentCount === 0;
+  const totalIssues = unhealthyInfra.length + unhealthyAgentCount;
+
   const navItems: NavItem[] = [
     { label: 'Overview', href: '/', icon: <DashboardIcon /> },
     { label: 'Agents', href: '/agents', icon: <AgentIcon /> },
+    { label: 'Workers', href: '/workers', icon: <WorkerIcon /> },
     {
       label: 'Decisions',
       href: '/decisions',
@@ -133,23 +158,41 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         })}
       </List>
 
-      {/* System Status */}
-      <Box sx={{ position: 'absolute', bottom: 0, left: 0, right: 0, p: 2, borderTop: '1px solid rgba(255,255,255,0.1)' }}>
+      {/* System Status - Clickable */}
+      <Box
+        sx={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          p: 2,
+          borderTop: '1px solid rgba(255,255,255,0.1)',
+          cursor: 'pointer',
+          '&:hover': {
+            backgroundColor: 'rgba(255,255,255,0.05)',
+          },
+          transition: 'background-color 0.2s',
+        }}
+        onClick={() => setHealthDialogOpen(true)}
+      >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
           <StatusIcon
             sx={{
               fontSize: 12,
-              color: health?.status === 'ok' ? 'success.main' : 'error.main',
+              color: allHealthy ? 'success.main' : 'error.main',
             }}
           />
           <Typography variant="caption" color="text.secondary">
             System Status
           </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ ml: 'auto' }}>
+            Click for details
+          </Typography>
         </Box>
         <Chip
-          label={health?.status === 'ok' ? 'All Systems Operational' : 'Issues Detected'}
+          label={allHealthy ? 'All Systems Operational' : `${totalIssues} Issue${totalIssues !== 1 ? 's' : ''} Detected`}
           size="small"
-          color={health?.status === 'ok' ? 'success' : 'error'}
+          color={allHealthy ? 'success' : 'error'}
           sx={{ width: '100%' }}
         />
       </Box>
@@ -248,6 +291,119 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       >
         {children}
       </Box>
+
+      {/* Health Details Dialog */}
+      <Dialog
+        open={healthDialogOpen}
+        onClose={() => setHealthDialogOpen(false)}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {allHealthy ? (
+              <HealthyIcon color="success" />
+            ) : (
+              <UnhealthyIcon color="error" />
+            )}
+            System Health Details
+          </Box>
+          <IconButton onClick={() => setHealthDialogOpen(false)} size="small">
+            <CloseIcon />
+          </IconButton>
+        </DialogTitle>
+        <DialogContent>
+          {/* Infrastructure Components */}
+          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+            Infrastructure Components
+          </Typography>
+          <Table size="small" sx={{ mb: 3 }}>
+            <TableBody>
+              {infraComponents.map(([name, component]) => {
+                const comp = component as { status: string; latencyMs?: number; message?: string };
+                return (
+                  <TableRow key={name}>
+                    <TableCell sx={{ width: 40 }}>
+                      {comp.status === 'healthy' ? (
+                        <HealthyIcon color="success" fontSize="small" />
+                      ) : (
+                        <UnhealthyIcon color="error" fontSize="small" />
+                      )}
+                    </TableCell>
+                    <TableCell sx={{ fontWeight: 500, textTransform: 'capitalize' }}>
+                      {name}
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        label={comp.status}
+                        size="small"
+                        color={comp.status === 'healthy' ? 'success' : 'error'}
+                        variant="outlined"
+                      />
+                    </TableCell>
+                    <TableCell sx={{ color: 'text.secondary' }}>
+                      {comp.latencyMs !== undefined && `${comp.latencyMs}ms`}
+                      {comp.message && comp.message}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+
+          <Divider sx={{ my: 2 }} />
+
+          {/* Agent Status */}
+          <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 600 }}>
+            Agent Status ({agentsHealth?.healthy || 0}/{agentsHealth?.total || 0} healthy)
+          </Typography>
+          {agentsHealth?.details && Object.keys(agentsHealth.details).length > 0 ? (
+            <Table size="small">
+              <TableBody>
+                {Object.entries(agentsHealth.details).map(([agentType, agent]) => (
+                  <TableRow key={agent.agentId}>
+                    <TableCell sx={{ width: 40 }}>
+                      {agent.status === 'healthy' ? (
+                        <HealthyIcon color="success" fontSize="small" />
+                      ) : agent.status === 'unhealthy' ? (
+                        <UnhealthyIcon color="error" fontSize="small" />
+                      ) : (
+                        <StatusIcon sx={{ fontSize: 20, color: 'warning.main' }} />
+                      )}
+                    </TableCell>
+                    <TableCell sx={{ fontWeight: 500, textTransform: 'uppercase' }}>
+                      {agentType}
+                    </TableCell>
+                    <TableCell>
+                      <Chip
+                        label={agent.containerStatus || agent.status}
+                        size="small"
+                        color={
+                          agent.status === 'healthy' ? 'success' :
+                          agent.status === 'unhealthy' ? 'error' : 'warning'
+                        }
+                        variant="outlined"
+                      />
+                    </TableCell>
+                    <TableCell sx={{ color: 'text.secondary' }}>
+                      {agent.memoryUsage !== undefined && `${(agent.memoryUsage / 1024 / 1024).toFixed(1)} MB`}
+                    </TableCell>
+                    <TableCell sx={{ color: 'text.secondary' }}>
+                      {agent.lastCheck && (
+                        <>Last: {new Date(agent.lastCheck).toLocaleTimeString()}</>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              No agent data available
+            </Typography>
+          )}
+        </DialogContent>
+      </Dialog>
     </Box>
   );
 }

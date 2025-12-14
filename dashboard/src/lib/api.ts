@@ -104,6 +104,21 @@ export async function respondToEscalation(id: string, response: string) {
   });
 }
 
+// Workers
+export async function getWorkerExecutions(limit = 100, agent?: string, includeDryRun = true) {
+  const params = new URLSearchParams({ limit: String(limit), includeDryRun: String(includeDryRun) });
+  if (agent) params.append('agent', agent);
+  return fetchApi<WorkerExecution[]>(`/workers?${params}`);
+}
+
+export async function getWorkerExecution(taskId: string) {
+  return fetchApi<WorkerExecution>(`/workers/${taskId}`);
+}
+
+export async function getWorkerStats() {
+  return fetchApi<WorkerStats>(`/workers/stats/summary`);
+}
+
 // Metrics
 export async function getMetrics() {
   return fetchApi<string>('/metrics');
@@ -116,23 +131,33 @@ export interface HealthFull {
     database: ComponentHealth;
     redis: ComponentHealth;
     docker: ComponentHealth;
+    agents: AgentsHealth;
   };
-  agents: AgentHealth[];
+  uptime: number;
 }
 
 export interface ComponentHealth {
   status: 'healthy' | 'unhealthy';
   message?: string;
-  latency?: number;
+  latencyMs?: number;
 }
 
-export interface AgentHealth {
-  id: string;
-  type: string;
+export interface AgentsHealth {
+  total: number;
+  healthy: number;
+  unhealthy: number;
+  inactive: number;
+  details: Record<string, AgentHealthDetail>;
+}
+
+export interface AgentHealthDetail {
+  agentId: string;
   status: string;
-  lastLoop?: string;
-  loopCount?: number;
-  errorCount?: number;
+  lastCheck: string;
+  containerId?: string;
+  containerStatus?: string;
+  memoryUsage?: number;
+  cpuUsage?: number;
 }
 
 export interface ContainerStatus {
@@ -185,6 +210,7 @@ export interface Decision {
   title: string;
   description?: string;
   proposedBy: string;
+  decisionType: string;
   status: string;
   vetoRound: number;
   ceoVote?: string;
@@ -203,4 +229,28 @@ export interface Escalation {
   status: string;
   createdAt: string;
   resolvedAt?: string;
+}
+
+export interface WorkerExecution {
+  timestamp: string;
+  taskId: string;
+  parentAgent: string;
+  servers: string[];
+  task?: string;
+  toolsUsed?: string[];
+  success: boolean;
+  duration: number;
+  error?: string;
+  mode?: string;
+  dryRun?: boolean;
+}
+
+export interface WorkerStats {
+  total: number;
+  success: number;
+  failure: number;
+  dryRunCount: number;
+  avgDurationMs: number;
+  byAgent: Record<string, number>;
+  byServer: Record<string, number>;
 }

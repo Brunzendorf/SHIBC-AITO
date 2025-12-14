@@ -2,7 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import { createLogger } from '../lib/logger.js';
 import { numericConfig } from '../lib/config.js';
 import { agentRepo, eventRepo, taskRepo, decisionRepo, escalationRepo, historyRepo } from '../lib/db.js';
-import { publisher, channels } from '../lib/redis.js';
+import { publisher, channels, redis } from '../lib/redis.js';
 import { startAgent, stopAgent, restartAgent, getAgentContainerStatus, listManagedContainers } from './container.js';
 import { getScheduledJobs, pauseJob, resumeJob } from './scheduler.js';
 import { getSystemHealth, isAlive, isReady, getAgentHealth } from './health.js';
@@ -240,6 +240,130 @@ app.patch('/tasks/:id/status', asyncHandler(async (req, res) => {
 
   await taskRepo.updateStatus(taskId, status, result);
   sendResponse(res, { taskId, status });
+}));
+
+// === Worker Execution Endpoints ===
+
+// Worker execution log entry interface
+interface WorkerLogEntry {
+  timestamp: string;
+  taskId: string;
+  parentAgent: string;
+  servers: string[];
+  task?: string;
+  toolsUsed?: string[];
+  success: boolean;
+  duration: number;
+  error?: string;
+  mode?: string;
+  dryRun?: boolean;
+}
+
+// Get all worker executions (combined real + dry-run)
+app.get('/workers', asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit as string) || 100;
+  const agentFilter = req.query.agent as string | undefined;
+  const includeDryRun = req.query.includeDryRun !== 'false';
+
+  // Fetch from Redis
+  const realLogs = await redis.lrange('worker:logs:history', 0, limit - 1);
+  const dryRunLogs = includeDryRun ? await redis.lrange('worker:dryrun:history', 0, limit - 1) : [];
+
+  // Parse and combine
+  let executions: WorkerLogEntry[] = [];
+
+  for (const log of realLogs) {
+    try {
+      const entry = JSON.parse(log) as WorkerLogEntry;
+      entry.dryRun = false;
+      executions.push(entry);
+    } catch {}
+  }
+
+  for (const log of dryRunLogs) {
+    try {
+      const entry = JSON.parse(log) as WorkerLogEntry;
+      entry.dryRun = true;
+      executions.push(entry);
+    } catch {}
+  }
+
+  // Sort by timestamp (newest first)
+  executions.sort((a, b) =>
+    new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+  );
+
+  // Filter by agent if specified
+  if (agentFilter) {
+    executions = executions.filter(e => e.parentAgent === agentFilter);
+  }
+
+  // Limit results
+  executions = executions.slice(0, limit);
+
+  sendResponse(res, executions);
+}));
+
+// Get worker execution by taskId
+app.get('/workers/:taskId', asyncHandler(async (req, res) => {
+  const taskId = req.params.taskId;
+
+  // Search in both logs
+  const realLogs = await redis.lrange('worker:logs:history', 0, 999);
+  const dryRunLogs = await redis.lrange('worker:dryrun:history', 0, 999);
+
+  for (const log of [...realLogs, ...dryRunLogs]) {
+    try {
+      const entry = JSON.parse(log) as WorkerLogEntry;
+      if (entry.taskId === taskId) {
+        entry.dryRun = dryRunLogs.includes(log);
+        return sendResponse(res, entry);
+      }
+    } catch {}
+  }
+
+  sendError(res, 'Worker execution not found', 404);
+}));
+
+// Get worker stats
+app.get('/workers/stats/summary', asyncHandler(async (_req, res) => {
+  const realLogs = await redis.lrange('worker:logs:history', 0, 999);
+  const dryRunLogs = await redis.lrange('worker:dryrun:history', 0, 999);
+
+  let totalExecutions = 0;
+  let successCount = 0;
+  let failureCount = 0;
+  let totalDuration = 0;
+  const byAgent: Record<string, number> = {};
+  const byServer: Record<string, number> = {};
+
+  for (const log of [...realLogs, ...dryRunLogs]) {
+    try {
+      const entry = JSON.parse(log) as WorkerLogEntry;
+      totalExecutions++;
+
+      if (entry.success) successCount++;
+      else failureCount++;
+
+      totalDuration += entry.duration || 0;
+
+      byAgent[entry.parentAgent] = (byAgent[entry.parentAgent] || 0) + 1;
+
+      for (const server of entry.servers || []) {
+        byServer[server] = (byServer[server] || 0) + 1;
+      }
+    } catch {}
+  }
+
+  sendResponse(res, {
+    total: totalExecutions,
+    success: successCount,
+    failure: failureCount,
+    dryRunCount: dryRunLogs.length,
+    avgDurationMs: totalExecutions > 0 ? Math.round(totalDuration / totalExecutions) : 0,
+    byAgent,
+    byServer,
+  });
 }));
 
 // === Decision Endpoints ===
