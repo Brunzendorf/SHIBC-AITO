@@ -22,13 +22,21 @@ const COLLECTION_NAME = 'aito_knowledge';
 const CHUNK_SIZE = 500; // tokens (roughly 4 chars per token)
 const CHUNK_OVERLAP = 50;
 
+// Content types for RAG indexing
+export type RAGContentType =
+  | 'project_doc'
+  | 'decision'
+  | 'agent_output'
+  | 'directus_content'
+  | 'api_usage';  // NEW: Self-learning API patterns
+
 interface QdrantPoint {
   id: string;
   vector: number[];
   payload: {
     text: string;
     source: string;
-    type: 'project_doc' | 'decision' | 'agent_output' | 'directus_content';
+    type: RAGContentType;
     agentId?: string;
     createdAt: string;
     metadata?: Record<string, unknown>;
@@ -167,7 +175,7 @@ function generateChunkId(): string {
 export async function indexDocument(
   text: string,
   source: string,
-  type: QdrantPoint['payload']['type'],
+  type: RAGContentType,
   metadata?: Record<string, unknown>
 ): Promise<number> {
   await initialize();
@@ -500,6 +508,79 @@ export async function indexAgentOutput(
 }
 
 /**
+ * Index API usage pattern for self-learning
+ * Records successful (and failed) API calls so future workers can learn from them
+ *
+ * SECURITY: Does NOT index actual API keys - only env var names and usage patterns
+ */
+export async function indexAPIUsage(
+  apiName: string,
+  endpoint: string,
+  method: string,
+  params: Record<string, string>,
+  responsePreview: string,
+  success: boolean,
+  usedBy: string,
+  errorMessage?: string
+): Promise<void> {
+  // Build human-readable pattern description
+  const paramStr = Object.entries(params)
+    .filter(([k]) => !k.toLowerCase().includes('key') && !k.toLowerCase().includes('token'))
+    .map(([k, v]) => `${k}=${v}`)
+    .join('&');
+
+  const text = success
+    ? `API Call: ${apiName}\n${method} ${endpoint}${paramStr ? '?' + paramStr : ''}\nResponse: ${responsePreview.slice(0, 200)}`
+    : `API Call FAILED: ${apiName}\n${method} ${endpoint}${paramStr ? '?' + paramStr : ''}\nError: ${errorMessage || 'Unknown error'}`;
+
+  const source = `api/${apiName}/${endpoint.replace(/\//g, '-').replace(/^-/, '')}`;
+
+  await indexDocument(
+    text,
+    source,
+    'api_usage',
+    {
+      apiName,
+      endpoint,
+      method,
+      success,
+      usedBy,
+      timestamp: new Date().toISOString(),
+      ...(errorMessage && { errorMessage }),
+    }
+  );
+
+  logger.info({
+    apiName,
+    endpoint,
+    success,
+    usedBy,
+  }, 'Indexed API usage pattern');
+}
+
+/**
+ * Search for API usage patterns
+ * Helps workers learn from previous successful API calls
+ */
+export async function searchAPIPatterns(
+  query: string,
+  agentType?: string,
+  limit = 3
+): Promise<SearchResult[]> {
+  // Search only api_usage type
+  const results = await search(query, limit * 2, { type: 'api_usage' });
+
+  // Prioritize successful patterns
+  return results
+    .sort((a, b) => {
+      const aSuccess = a.metadata?.success === true ? 1 : 0;
+      const bSuccess = b.metadata?.success === true ? 1 : 0;
+      return bSuccess - aSuccess;
+    })
+    .slice(0, limit);
+}
+
+/**
  * Review PR content against RAG knowledge base for quality assurance
  * Returns approval status, score, issues, and feedback
  */
@@ -643,7 +724,7 @@ export async function reviewPRContent(
 function generateFeedback(
   agentType: string,
   issues: string[],
-  score: number,
+  _score: number,
   profileResults: any[]
 ): string {
   if (issues.length === 0) {
@@ -689,5 +770,7 @@ export const rag = {
   checkAndReindex,
   indexDecision,
   indexAgentOutput,
+  indexAPIUsage,
+  searchAPIPatterns,
   reviewPRContent,
 };
