@@ -73,7 +73,7 @@ function getContainerConfig(agentType: AgentType, agentId: string): ContainerCon
       // Named volumes with compose project prefix for stack consistency
       COMPOSE_PROJECT + '_' + agentType + '_memory:/app/memory',
       COMPOSE_PROJECT + '_shared_claude_config:/app/.claude',
-      './workspace:/app/workspace',  // Bind mount for shared workspace
+      COMPOSE_PROJECT + '_' + agentType + '_workspace:/app/workspace',  // Named volume for git workspace
       './profiles:/app/profiles:ro',  // Bind mount for profiles
     ],
     memory: '512m',
@@ -375,8 +375,9 @@ export async function initialize(): Promise<void> {
     logger.info({ version: status.Version }, 'Portainer connection established');
     await ensureNetwork();
   } catch (err) {
-    logger.error({ err }, 'Failed to connect to Portainer');
-    throw err;
+    // Don't throw - orchestrator should continue even if Portainer fails
+    logger.warn({ err }, 'Portainer unavailable - container management disabled (orchestrator continues)');
+    logger.info('To enable container management: reconfigure Portainer API key or check env vars');
   }
 }
 

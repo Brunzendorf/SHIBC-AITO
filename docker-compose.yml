@@ -216,12 +216,12 @@ services:
       OLLAMA_URL: http://ollama:11434
       QDRANT_URL: http://qdrant:6333
       GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
+      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
     volumes:
       - ./profiles:/app/profiles:ro
       - ceo_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - ./workspace:/app/workspace
+      - ceo_workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -248,12 +248,12 @@ services:
       SNAPSHOT_SPACE: ${SNAPSHOT_SPACE:-shibaclassic.eth}
       GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
       GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
+      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
     volumes:
       - ./profiles:/app/profiles:ro
       - dao_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - ./workspace:/app/workspace
+      - dao_workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -289,12 +289,12 @@ services:
       DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
       DEEPL_API_KEY: ${DEEPL_API_KEY}
       GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
+      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
     volumes:
       - ./profiles:/app/profiles:ro
       - cmo_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - ./workspace:/app/workspace
+      - cmo_workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -322,11 +322,12 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       DIRECTUS_URL: ${DIRECTUS_URL}
       DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
+      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
     volumes:
       - ./profiles:/app/profiles:ro
       - cto_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - ./workspace:/app/workspace
+      - cto_workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -356,12 +357,12 @@ services:
       QUICKNODE_HTTP_URL: ${QUICKNODE_HTTP_URL}
       GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
       GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
+      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
     volumes:
       - ./profiles:/app/profiles:ro
       - cfo_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - ./workspace:/app/workspace
+      - cfo_workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -390,12 +391,12 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       # DISCORD_BOT_TOKEN removed - Discord does not exist
       GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
+      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
     volumes:
       - ./profiles:/app/profiles:ro
       - coo_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - ./workspace:/app/workspace
+      - coo_workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -421,12 +422,12 @@ services:
       OLLAMA_URL: http://ollama:11434
       QDRANT_URL: http://qdrant:6333
       GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
+      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
     volumes:
       - ./profiles:/app/profiles:ro
       - cco_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - ./workspace:/app/workspace
+      - cco_workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -513,6 +514,15 @@ volumes:
   cfo_memory:
   coo_memory:
   cco_memory:
+
+  # Agent Workspaces (Git cloned inside container)
+  ceo_workspace:
+  dao_workspace:
+  cmo_workspace:
+  cto_workspace:
+  cfo_workspace:
+  coo_workspace:
+  cco_workspace:
 
   # Claude CLI Auth (Shared across all agents!)
   shared_claude_config:
