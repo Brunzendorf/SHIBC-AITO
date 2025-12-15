@@ -11,7 +11,7 @@
 
 import { createLogger } from '../lib/logger.js';
 import { redis } from '../lib/redis.js';
-import { executeClaudeCode } from '../agents/claude.js';
+import { executeOllamaFallback } from '../agents/claude.js';
 import {
   indexDocument,
   search,
@@ -195,11 +195,12 @@ Respond in JSON only:
 }`;
 
   try {
-    const result = await executeClaudeCode({
-      prompt,
-      systemPrompt: 'You are a knowledge curator. Respond only with valid JSON. Be selective - only INDEX truly valuable information.',
-      timeout: 30000,
-    });
+    // Use Ollama for archive evaluation (orchestrator doesn't have Claude CLI)
+    const fullPrompt = `You are a knowledge curator. Respond only with valid JSON. Be selective - only INDEX truly valuable information.
+
+${prompt}`;
+
+    const result = await executeOllamaFallback(fullPrompt, 'llama3.2:3b');
 
     if (!result.success || !result.output) {
       logger.warn({ error: result.error }, 'Archive evaluation failed, defaulting to DISCARD');
