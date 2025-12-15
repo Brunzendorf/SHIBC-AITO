@@ -337,7 +337,7 @@ export class AgentDaemon {
    */
   private shouldTriggerAI(message: AgentMessage): boolean {
     // Always trigger AI for these types
-    const aiRequired: AgentMessage['type'][] = ['task', 'decision', 'alert', 'vote', 'worker_result'];
+    const aiRequired: AgentMessage['type'][] = ['task', 'decision', 'alert', 'vote', 'worker_result', 'pr_approved_by_rag'];
     if (aiRequired.includes(message.type)) {
       return true;
     }
