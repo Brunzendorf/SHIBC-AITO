@@ -38,7 +38,7 @@ export async function initializeWorkspace(agentType: string): Promise<boolean> {
     await execAsync(`rm -rf ${WORKSPACE_PATH}/*`).catch(() => {});
 
     // Clone into workspace directory
-    const { stdout, stderr } = await execAsync(
+    const { stderr } = await execAsync(
       `git clone --branch ${workspaceConfig.branch} --single-branch ${repoUrl} ${WORKSPACE_PATH}`,
       { timeout: 60000 }
     );
@@ -116,13 +116,54 @@ export async function createBranch(agentType: string, loopNumber: number): Promi
   const branchName = `feature/${agentType}-${timestamp}-loop${loopNumber}`;
 
   try {
+    // Stash any uncommitted changes from other agents before checkout
+    // Use --include-untracked to also stash untracked files
+    let hadStash = false;
+    try {
+      const { stdout: stashResult } = await execAsync(
+        `cd ${WORKSPACE_PATH} && git stash push --include-untracked -m "auto-stash-${agentType}"`
+      );
+      hadStash = !stashResult.includes('No local changes to save');
+      if (hadStash) {
+        logger.info({ agentType }, 'Stashed uncommitted changes');
+      }
+    } catch (stashErr) {
+      // Stash failed, try without untracked files
+      logger.warn({ error: stashErr }, 'Stash with untracked failed, trying without');
+      try {
+        const { stdout: stashResult } = await execAsync(
+          `cd ${WORKSPACE_PATH} && git stash push -m "auto-stash-${agentType}"`
+        );
+        hadStash = !stashResult.includes('No local changes to save');
+      } catch {
+        // Stash completely failed, continue anyway
+      }
+    }
+
     // Ensure we're on main and up to date
-    await execAsync(`cd ${WORKSPACE_PATH} && git checkout ${workspaceConfig.branch}`);
+    try {
+      await execAsync(`cd ${WORKSPACE_PATH} && git checkout ${workspaceConfig.branch}`);
+    } catch {
+      // May already be on main or have conflicts - continue
+      logger.warn('Could not checkout main, continuing on current branch');
+    }
+
     await pullWorkspace();
 
     // Create and checkout new branch
     await execAsync(`cd ${WORKSPACE_PATH} && git checkout -b ${branchName}`);
     logger.info({ branchName }, 'Created feature branch');
+
+    // Restore stashed changes if any
+    if (hadStash) {
+      try {
+        await execAsync(`cd ${WORKSPACE_PATH} && git stash pop`);
+        logger.info('Restored stashed changes');
+      } catch {
+        // Stash pop may fail on conflicts, leave in stash
+        logger.warn('Could not restore stashed changes, left in stash');
+      }
+    }
 
     return branchName;
   } catch (error) {
@@ -165,9 +206,11 @@ export async function commitAndCreatePR(
     const filesChanged = status.trim().split('\n').length;
     const changedFiles = await getChangedFiles();
 
-    // Create branch if PR workflow enabled
+    // Create branch if PR workflow enabled AND we have GitHub auth
+    // Without GITHUB_TOKEN, push won't work so skip branch creation
     let branchName = workspaceConfig.branch;
-    if (workspaceConfig.usePR) {
+    const canUsePR = workspaceConfig.usePR && config.GITHUB_TOKEN;
+    if (canUsePR) {
       branchName = await createBranch(agentType, loopNumber);
     }
 
@@ -184,26 +227,40 @@ export async function commitAndCreatePR(
     const { stdout: hash } = await execAsync(`cd ${WORKSPACE_PATH} && git rev-parse --short HEAD`);
     const commitHash = hash.trim();
 
-    // Push branch
-    await execAsync(`cd ${WORKSPACE_PATH} && git push -u origin ${branchName}`, { timeout: 30000 });
+    // Try to push branch (may fail if no GitHub auth)
+    let pushSucceeded = false;
+    try {
+      await execAsync(`cd ${WORKSPACE_PATH} && git push -u origin ${branchName}`, { timeout: 30000 });
+      pushSucceeded = true;
+    } catch (pushError) {
+      const pushErrMsg = pushError instanceof Error ? pushError.message : String(pushError);
+      logger.warn({ error: pushErrMsg, branchName }, 'Failed to push branch (no remote auth?), commit saved locally');
+    }
 
-    // Create PR if enabled
+    // Create PR if push succeeded and PR workflow enabled
     let prNumber: number | undefined;
     let prUrl: string | undefined;
 
-    if (workspaceConfig.usePR && config.GITHUB_TOKEN) {
+    if (pushSucceeded && workspaceConfig.usePR && config.GITHUB_TOKEN) {
       const prResult = await createPullRequest(agentType, message, changedFiles, branchName);
       prNumber = prResult.prNumber;
       prUrl = prResult.prUrl;
     }
 
-    logger.info({ commitHash, filesChanged, branchName, prNumber }, 'Workspace changes committed');
+    logger.info({ commitHash, filesChanged, branchName, prNumber, pushSucceeded }, 'Workspace changes committed');
 
-    // Switch back to main
-    if (workspaceConfig.usePR) {
-      await execAsync(`cd ${WORKSPACE_PATH} && git checkout ${workspaceConfig.branch}`);
+    // Switch back to main only if we created a feature branch
+    if (canUsePR && branchName !== workspaceConfig.branch) {
+      try {
+        await execAsync(`cd ${WORKSPACE_PATH} && git checkout ${workspaceConfig.branch}`);
+      } catch (checkoutError) {
+        // May fail if there are uncommitted changes from other agents
+        logger.warn({ error: checkoutError }, 'Failed to switch back to main branch');
+      }
     }
 
+    // Return success even if push failed - local commit succeeded
+    // RAG indexing will happen via workspace_update event (no prNumber = no PR workflow)
     return { success: true, branchName, commitHash, prNumber, prUrl, filesChanged };
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);

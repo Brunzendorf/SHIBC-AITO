@@ -31,11 +31,12 @@ const mockEventRepo = {
 };
 
 const mockDecisionRepo = {
-  create: vi.fn((data: any) => Promise.resolve({ id: 'decision-1', ...data, vetoRound: 0 })),
-  findById: vi.fn(() => Promise.resolve(null)),
-  updateVote: vi.fn(() => Promise.resolve()),
-  updateStatus: vi.fn(() => Promise.resolve()),
-  incrementVetoRound: vi.fn(() => Promise.resolve()),
+  create: vi.fn<any, any>((data: any) => Promise.resolve({ id: 'decision-1', ...data, vetoRound: 0 })),
+  findById: vi.fn<any, any>(() => Promise.resolve(null)),
+  findPending: vi.fn<any, any>(() => Promise.resolve([])),
+  updateVote: vi.fn<any, any>(() => Promise.resolve()),
+  updateStatus: vi.fn<any, any>(() => Promise.resolve()),
+  incrementVetoRound: vi.fn<any, any>(() => Promise.resolve()),
 };
 
 const mockEscalationRepo = {
@@ -43,7 +44,7 @@ const mockEscalationRepo = {
 };
 
 const mockAgentRepo = {
-  findById: vi.fn(() => Promise.resolve(null)),
+  findById: vi.fn<any, any>(() => Promise.resolve(null)),
 };
 
 vi.mock('../lib/db.js', () => ({
@@ -54,19 +55,19 @@ vi.mock('../lib/db.js', () => ({
 }));
 
 // Mock redis with handler capture
-const mockSubscribe = vi.fn((channel: string, handler: (msg: any) => Promise<void>) => {
+const mockSubscribe = vi.fn<any, any>((_channel: string, handler: (msg: any) => Promise<void>) => {
   messageHandler = handler;
   return Promise.resolve();
 });
-const mockPublish = vi.fn(() => Promise.resolve());
-const mockPushTask = vi.fn(() => Promise.resolve());
-const mockPushUrgent = vi.fn(() => Promise.resolve());
+const mockPublish = vi.fn<any, any>(() => Promise.resolve());
+const mockPushTask = vi.fn<any, any>(() => Promise.resolve());
+const mockPushUrgent = vi.fn<any, any>(() => Promise.resolve());
 
 vi.mock('../lib/redis.js', () => ({
   subscribe: (channel: string, handler: (msg: any) => Promise<void>) => mockSubscribe(channel, handler),
-  publish: (...args: unknown[]) => mockPublish(...args),
-  pushTask: (...args: unknown[]) => mockPushTask(...args),
-  pushUrgent: (...args: unknown[]) => mockPushUrgent(...args),
+  publish: vi.fn<any, any>((...args: any[]) => mockPublish(...args)),
+  pushTask: vi.fn<any, any>((...args: any[]) => mockPushTask(...args)),
+  pushUrgent: vi.fn<any, any>((...args: any[]) => mockPushUrgent(...args)),
   channels: {
     broadcast: 'channel:broadcast',
     head: 'channel:head',
@@ -252,7 +253,12 @@ describe('Events', () => {
         mockAgentRepo.findById.mockResolvedValue({
           id: 'agent-1',
           type: 'ceo',
+          name: 'CEO Agent',
+          profilePath: '/profiles/ceo.md',
+          loopInterval: 60,
           status: 'active',
+          createdAt: new Date(),
+          updatedAt: new Date(),
         });
 
         if (messageHandler) {
@@ -284,7 +290,12 @@ describe('Events', () => {
         mockAgentRepo.findById.mockResolvedValue({
           id: 'agent-1',
           type: 'ceo',
+          name: 'CEO Agent',
+          profilePath: '/profiles/ceo.md',
+          loopInterval: 60,
           status: 'active',
+          createdAt: new Date(),
+          updatedAt: new Date(),
         });
 
         if (messageHandler) {
@@ -468,8 +479,11 @@ describe('Events', () => {
         mockDecisionRepo.findById.mockResolvedValue({
           id: 'decision-1',
           title: 'Test',
+          proposedBy: 'cfo',
+          decisionType: 'major',
           status: 'pending',
           vetoRound: 0,
+          createdAt: new Date(),
         });
 
         const { initialize } = await import('./events.js');
@@ -530,16 +544,22 @@ describe('Events', () => {
           .mockResolvedValueOnce({
             id: 'decision-1',
             title: 'Test',
+            proposedBy: 'cfo',
+            decisionType: 'major',
             status: 'pending',
             vetoRound: 0,
+            createdAt: new Date(),
           })
           .mockResolvedValueOnce({
             id: 'decision-1',
             title: 'Test',
+            proposedBy: 'cfo',
+            decisionType: 'major',
             status: 'pending',
             ceoVote: 'approve',
             daoVote: 'approve',
             vetoRound: 0,
+            createdAt: new Date(),
           });
 
         const { initialize } = await import('./events.js');
@@ -582,16 +602,22 @@ describe('Events', () => {
           .mockResolvedValueOnce({
             id: 'decision-1',
             title: 'Test',
+            proposedBy: 'cfo',
+            decisionType: 'major',
             status: 'pending',
             vetoRound: 0,
+            createdAt: new Date(),
           })
           .mockResolvedValueOnce({
             id: 'decision-1',
             title: 'Test',
+            proposedBy: 'cfo',
+            decisionType: 'major',
             status: 'pending',
             ceoVote: 'veto',
             daoVote: 'veto',
             vetoRound: 0,
+            createdAt: new Date(),
           });
 
         const { initialize } = await import('./events.js');
@@ -627,17 +653,23 @@ describe('Events', () => {
             id: 'decision-1',
             title: 'Test',
             description: 'Test desc',
+            proposedBy: 'cfo',
+            decisionType: 'major',
             status: 'pending',
             vetoRound: 0,
+            createdAt: new Date(),
           })
           .mockResolvedValueOnce({
             id: 'decision-1',
             title: 'Test',
             description: 'Test desc',
+            proposedBy: 'cfo',
+            decisionType: 'major',
             status: 'pending',
             ceoVote: 'approve',
             daoVote: 'veto',
             vetoRound: 0,
+            createdAt: new Date(),
           });
 
         const { initialize } = await import('./events.js');
@@ -677,16 +709,22 @@ describe('Events', () => {
           .mockResolvedValueOnce({
             id: 'decision-1',
             title: 'Test',
+            proposedBy: 'cfo',
+            decisionType: 'major',
             status: 'pending',
             vetoRound: 3,
+            createdAt: new Date(),
           })
           .mockResolvedValueOnce({
             id: 'decision-1',
             title: 'Test',
+            proposedBy: 'cfo',
+            decisionType: 'major',
             status: 'pending',
             ceoVote: 'approve',
             daoVote: 'veto',
             vetoRound: 3,
+            createdAt: new Date(),
           });
 
         const { initialize } = await import('./events.js');
@@ -721,16 +759,22 @@ describe('Events', () => {
           .mockResolvedValueOnce({
             id: 'decision-1',
             title: 'Test',
+            proposedBy: 'cfo',
+            decisionType: 'major',
             status: 'pending',
             vetoRound: 0,
+            createdAt: new Date(),
           })
           .mockResolvedValueOnce({
             id: 'decision-1',
             title: 'Test',
+            proposedBy: 'cfo',
+            decisionType: 'major',
             status: 'pending',
             ceoVote: 'approve',
             // daoVote is undefined
             vetoRound: 0,
+            createdAt: new Date(),
           });
 
         const { initialize } = await import('./events.js');
@@ -836,31 +880,33 @@ describe('Events', () => {
     });
 
     describe('processMessage with string target', () => {
-      it('should handle targetAgent as string', async () => {
+      it('should handle targetAgent as UUID string', async () => {
         const { initialize } = await import('./events.js');
         await initialize();
 
+        const validUUID = '12345678-1234-1234-1234-123456789012';
         if (messageHandler) {
           await messageHandler({
             id: 'msg-1',
             type: 'status_request',
             from: 'orchestrator',
-            to: 'agent-1',
+            to: validUUID,
             payload: {},
             priority: 'normal',
             timestamp: new Date(),
             requiresResponse: false,
           });
 
+          // Only valid UUIDs are logged as targetAgent
           expect(mockEventRepo.log).toHaveBeenCalledWith(
             expect.objectContaining({
-              targetAgent: 'agent-1',
+              targetAgent: validUUID,
             })
           );
         }
       });
 
-      it('should handle broadcast target', async () => {
+      it('should handle non-UUID target as undefined', async () => {
         const { initialize } = await import('./events.js');
         await initialize();
 
@@ -876,10 +922,10 @@ describe('Events', () => {
             requiresResponse: false,
           });
 
-          // 'all' is a string so it will be logged as targetAgent
+          // Non-UUID targets (like 'all') result in targetAgent: undefined
           expect(mockEventRepo.log).toHaveBeenCalledWith(
             expect.objectContaining({
-              targetAgent: 'all',
+              targetAgent: undefined,
             })
           );
         }

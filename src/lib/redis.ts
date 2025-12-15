@@ -35,6 +35,7 @@ export const channels = {
   head: 'channel:head',
   clevel: 'channel:clevel',
   orchestrator: 'channel:orchestrator', // For workspace updates, RAG indexing
+  workerLogs: 'channel:worker:logs', // For MCP worker tool call logging (dashboard)
   agent: (id: string) => `channel:agent:${id}`,
   tasks: (id: string) => `queue:tasks:${id}`,
   urgent: 'queue:urgent',
@@ -128,6 +129,18 @@ subscriber.on('message', async (channel, data) => {
 // Task Queue
 export async function pushTask(agentId: string, task: unknown): Promise<void> {
   await redis.lpush(channels.tasks(agentId), JSON.stringify(task));
+
+  // Wake up agent immediately - send notification via pub/sub
+  await publisher.publish(channels.agent(agentId), JSON.stringify({
+    id: crypto.randomUUID(),
+    type: 'task_queued',
+    from: 'orchestrator',
+    to: agentId,
+    payload: { message: 'New task in queue' },
+    priority: 'normal',
+    timestamp: new Date(),
+    requiresResponse: false,
+  }));
 }
 
 export async function popTask(agentId: string): Promise<unknown | null> {

@@ -29,11 +29,12 @@ vi.mock('../lib/redis.js', () => ({
 
 const mockGetAgentContainerStatus = vi.fn();
 const mockCheckContainerHealth = vi.fn();
-const mockDocker = { ping: vi.fn() };
+const mockPortainerFetch = vi.fn();
 vi.mock('./container.js', () => ({
   getAgentContainerStatus: (...args: unknown[]) => mockGetAgentContainerStatus(...args),
   checkContainerHealth: (...args: unknown[]) => mockCheckContainerHealth(...args),
-  docker: mockDocker,
+  isPortainerConfigured: true,
+  portainerFetch: (...args: unknown[]) => mockPortainerFetch(...args),
 }));
 
 describe('Health', () => {
@@ -41,7 +42,7 @@ describe('Health', () => {
     vi.clearAllMocks();
     mockCheckDbConnection.mockResolvedValue(true);
     mockCheckRedisConnection.mockResolvedValue(true);
-    mockDocker.ping.mockResolvedValue({});
+    mockPortainerFetch.mockResolvedValue({ Version: '2.0' });
     mockGetAllAgentStatuses.mockResolvedValue({});
   });
 
@@ -98,7 +99,7 @@ describe('Health', () => {
     it('should return healthy status when all components are healthy', async () => {
       mockCheckDbConnection.mockResolvedValue(true);
       mockCheckRedisConnection.mockResolvedValue(true);
-      mockDocker.ping.mockResolvedValue({});
+      mockPortainerFetch.mockResolvedValue({ Version: '2.0' });
 
       const { agentRepo } = await import('../lib/db.js');
       (agentRepo.findAll as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -115,7 +116,7 @@ describe('Health', () => {
     it('should return unhealthy when database is down', async () => {
       mockCheckDbConnection.mockResolvedValue(false);
       mockCheckRedisConnection.mockResolvedValue(true);
-      mockDocker.ping.mockResolvedValue({});
+      mockPortainerFetch.mockResolvedValue({ Version: '2.0' });
 
       const { agentRepo } = await import('../lib/db.js');
       (agentRepo.findAll as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -130,7 +131,7 @@ describe('Health', () => {
     it('should return unhealthy when redis is down', async () => {
       mockCheckDbConnection.mockResolvedValue(true);
       mockCheckRedisConnection.mockResolvedValue(false);
-      mockDocker.ping.mockResolvedValue({});
+      mockPortainerFetch.mockResolvedValue({ Version: '2.0' });
 
       const { agentRepo } = await import('../lib/db.js');
       (agentRepo.findAll as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -145,7 +146,7 @@ describe('Health', () => {
     it('should return degraded when docker is down', async () => {
       mockCheckDbConnection.mockResolvedValue(true);
       mockCheckRedisConnection.mockResolvedValue(true);
-      mockDocker.ping.mockRejectedValue(new Error('Docker down'));
+      mockPortainerFetch.mockRejectedValue(new Error('Portainer down'));
 
       const { agentRepo } = await import('../lib/db.js');
       (agentRepo.findAll as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -160,7 +161,7 @@ describe('Health', () => {
     it('should return degraded when some agents are unhealthy', async () => {
       mockCheckDbConnection.mockResolvedValue(true);
       mockCheckRedisConnection.mockResolvedValue(true);
-      mockDocker.ping.mockResolvedValue({});
+      mockPortainerFetch.mockResolvedValue({ Version: '2.0' });
 
       const { agentRepo } = await import('../lib/db.js');
       (agentRepo.findAll as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -182,7 +183,7 @@ describe('Health', () => {
     it('should handle inactive agents', async () => {
       mockCheckDbConnection.mockResolvedValue(true);
       mockCheckRedisConnection.mockResolvedValue(true);
-      mockDocker.ping.mockResolvedValue({});
+      mockPortainerFetch.mockResolvedValue({ Version: '2.0' });
 
       const { agentRepo } = await import('../lib/db.js');
       (agentRepo.findAll as ReturnType<typeof vi.fn>).mockResolvedValue([
@@ -199,7 +200,7 @@ describe('Health', () => {
     it('should include uptime', async () => {
       mockCheckDbConnection.mockResolvedValue(true);
       mockCheckRedisConnection.mockResolvedValue(true);
-      mockDocker.ping.mockResolvedValue({});
+      mockPortainerFetch.mockResolvedValue({ Version: '2.0' });
 
       const { agentRepo } = await import('../lib/db.js');
       (agentRepo.findAll as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -213,7 +214,7 @@ describe('Health', () => {
     it('should include timestamp', async () => {
       mockCheckDbConnection.mockResolvedValue(true);
       mockCheckRedisConnection.mockResolvedValue(true);
-      mockDocker.ping.mockResolvedValue({});
+      mockPortainerFetch.mockResolvedValue({ Version: '2.0' });
 
       const { agentRepo } = await import('../lib/db.js');
       (agentRepo.findAll as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -227,7 +228,7 @@ describe('Health', () => {
     it('should handle database check error', async () => {
       mockCheckDbConnection.mockRejectedValue(new Error('DB Error'));
       mockCheckRedisConnection.mockResolvedValue(true);
-      mockDocker.ping.mockResolvedValue({});
+      mockPortainerFetch.mockResolvedValue({ Version: '2.0' });
 
       const { agentRepo } = await import('../lib/db.js');
       (agentRepo.findAll as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -242,7 +243,7 @@ describe('Health', () => {
     it('should handle redis check error', async () => {
       mockCheckDbConnection.mockResolvedValue(true);
       mockCheckRedisConnection.mockRejectedValue(new Error('Redis Error'));
-      mockDocker.ping.mockResolvedValue({});
+      mockPortainerFetch.mockResolvedValue({ Version: '2.0' });
 
       const { agentRepo } = await import('../lib/db.js');
       (agentRepo.findAll as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -285,7 +286,7 @@ describe('Health', () => {
     it('should run health check and update statuses', async () => {
       mockCheckDbConnection.mockResolvedValue(true);
       mockCheckRedisConnection.mockResolvedValue(true);
-      mockDocker.ping.mockResolvedValue({});
+      mockPortainerFetch.mockResolvedValue({ Version: '2.0' });
 
       const { agentRepo } = await import('../lib/db.js');
       (agentRepo.findAll as ReturnType<typeof vi.fn>).mockResolvedValue([

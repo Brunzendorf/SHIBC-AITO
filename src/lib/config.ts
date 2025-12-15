@@ -5,6 +5,9 @@ const configSchema = z.object({
   PORT: z.string().default('8080'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
 
+  // Dry-Run Mode - logs all external actions but doesn't execute them
+  DRY_RUN: z.string().default('false'),
+
   // Database
   POSTGRES_URL: z.string(),
   REDIS_URL: z.string().default('redis://localhost:6379'),
@@ -13,6 +16,9 @@ const configSchema = z.object({
   PORTAINER_URL: z.string().optional(),
   PORTAINER_API_KEY: z.string().optional(),
   PORTAINER_ENV_ID: z.string().optional(),
+
+  // Docker Compose project name (for stack integration)
+  COMPOSE_PROJECT: z.string().default('shibc-aito'),
 
   // Docker (deprecated)
   DOCKER_SOCKET: z.string().default('/var/run/docker.sock'),
@@ -90,6 +96,9 @@ export const numericConfig = {
     critical: parseInt(config.DECISION_TIMEOUT_CRITICAL, 10), // 48h escalate
   },
 };
+
+// Dry-Run mode - when true, external actions are logged but not executed
+export const isDryRun = config.DRY_RUN === 'true';
 
 // Workspace git settings
 export const workspaceConfig = {

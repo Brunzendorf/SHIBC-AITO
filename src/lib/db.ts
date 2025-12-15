@@ -3,7 +3,6 @@ import { config } from './config.js';
 import { logger } from './logger.js';
 import type {
   Agent,
-  AgentState,
   AgentHistory,
   Decision,
   Task,
@@ -13,7 +12,6 @@ import type {
   AgentStatus,
   DecisionStatus,
   TaskStatus,
-  EscalationStatus,
 } from './types.js';
 
 // Connection pool
@@ -129,6 +127,48 @@ export const agentRepo = {
   },
 };
 
+// State keys that contain external/volatile data and need TTL enforcement
+// These should expire and force agents to fetch fresh data via spawn_worker
+const VOLATILE_STATE_KEYS = [
+  // Treasury/Balance data
+  'treasury_status',
+  'treasury_total_usd',
+  'treasury_balance',
+  'balance_data',
+  'eth_balance',
+  'eth_balance_usd',
+  'eth_balance_confirmed',
+  'solana_balance',
+  'solana_balance_usd',
+  'solana_balance_confirmed',
+  'solana_balance_worker_pending',
+  'bnb_balance',
+  // Market data - CRITICAL: agents hallucinate these!
+  'market_prices',
+  'market_data',
+  'market_sentiment',
+  'market_data_current',
+  'market_data_fetched',
+  'market_data_source',
+  'price_data',
+  'token_metrics',
+  'holder_count',
+  'liquidity_data',
+  'volume_data',
+  'fear_greed_index',
+  // Reference prices - agents use these to avoid spawning workers!
+  'reference_prices',
+  'reference_prices_used',
+  'shibc_metrics',
+  'shibc_price',
+  // Verification flags (must be re-verified each loop)
+  'balance_monitoring',
+  'data_verified',
+];
+
+// Default TTL for volatile data: 1 hour
+const STATE_TTL_HOURS = 1;
+
 // Agent State Repository
 export const stateRepo = {
   async get(agentId: string, key: string): Promise<unknown | null> {
@@ -148,12 +188,65 @@ export const stateRepo = {
     );
   },
 
+  /**
+   * Get all state values with TTL enforcement for volatile keys.
+   * Volatile keys (market data, balances, etc.) older than TTL are excluded.
+   * This forces agents to fetch fresh data via spawn_worker.
+   */
   async getAll(agentId: string): Promise<Record<string, unknown>> {
-    const rows = await query<{ stateKey: string; stateValue: unknown }>(
-      `SELECT state_key as "stateKey", state_value as "stateValue" FROM agent_state WHERE agent_id = $1`,
+    // Get all state with updated_at timestamp
+    const rows = await query<{ stateKey: string; stateValue: unknown; updatedAt: Date }>(
+      `SELECT state_key as "stateKey", state_value as "stateValue", updated_at as "updatedAt"
+       FROM agent_state WHERE agent_id = $1`,
       [agentId]
     );
-    return Object.fromEntries(rows.map((r) => [r.stateKey, r.stateValue]));
+
+    const now = new Date();
+    const ttlMs = STATE_TTL_HOURS * 60 * 60 * 1000;
+    const result: Record<string, unknown> = {};
+
+    for (const row of rows) {
+      const isVolatile = VOLATILE_STATE_KEYS.some(vk =>
+        row.stateKey === vk || row.stateKey.startsWith(vk + '_') || row.stateKey.endsWith('_' + vk)
+      );
+
+      if (isVolatile) {
+        // Check TTL for volatile keys
+        const age = now.getTime() - new Date(row.updatedAt).getTime();
+        if (age > ttlMs) {
+          logger.info({ agentId, key: row.stateKey, ageHours: (age / 3600000).toFixed(1) },
+            'Skipping stale volatile state (TTL expired)');
+          continue; // Skip stale volatile data
+        }
+      }
+
+      // Include fresh volatile data and all persistent data
+      result[row.stateKey] = row.stateValue;
+    }
+
+    return result;
+  },
+
+  /**
+   * Delete all stale volatile state for an agent
+   */
+  async deleteStale(agentId: string): Promise<number> {
+    const volatilePattern = VOLATILE_STATE_KEYS.map(k => `'${k}'`).join(',');
+    const result = await query<{ count: string }>(
+      `WITH deleted AS (
+        DELETE FROM agent_state
+        WHERE agent_id = $1
+          AND state_key = ANY($2::text[])
+          AND updated_at < NOW() - INTERVAL '${STATE_TTL_HOURS} hours'
+        RETURNING 1
+      ) SELECT COUNT(*)::text as count FROM deleted`,
+      [agentId, VOLATILE_STATE_KEYS]
+    );
+    const count = parseInt(result[0]?.count || '0', 10);
+    if (count > 0) {
+      logger.info({ agentId, deletedCount: count }, 'Deleted stale volatile state');
+    }
+    return count;
   },
 
   async delete(agentId: string, key: string): Promise<void> {
@@ -409,6 +502,85 @@ export const escalationRepo = {
 
   async timeout(id: string): Promise<void> {
     await query(`UPDATE escalations SET status = 'timeout' WHERE id = $1`, [id]);
+  },
+};
+
+// Domain Whitelist Repository
+export interface DomainWhitelist {
+  id: string;
+  domain: string;
+  category: string;
+  description: string | null;
+  isActive: boolean;
+  addedBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export const domainWhitelistRepo = {
+  async getAll(): Promise<DomainWhitelist[]> {
+    return query<DomainWhitelist>(
+      `SELECT id, domain, category, description, is_active as "isActive",
+              added_by as "addedBy", created_at as "createdAt", updated_at as "updatedAt"
+       FROM domain_whitelist WHERE is_active = true
+       ORDER BY category, domain`
+    );
+  },
+
+  async getAllDomains(): Promise<string[]> {
+    const rows = await query<{ domain: string }>(
+      `SELECT domain FROM domain_whitelist WHERE is_active = true`
+    );
+    return rows.map(r => r.domain);
+  },
+
+  async getByCategory(category: string): Promise<DomainWhitelist[]> {
+    return query<DomainWhitelist>(
+      `SELECT id, domain, category, description, is_active as "isActive",
+              added_by as "addedBy", created_at as "createdAt", updated_at as "updatedAt"
+       FROM domain_whitelist WHERE category = $1 AND is_active = true
+       ORDER BY domain`,
+      [category]
+    );
+  },
+
+  async isDomainWhitelisted(domain: string): Promise<boolean> {
+    const normalizedDomain = domain.toLowerCase();
+    const result = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS(
+        SELECT 1 FROM domain_whitelist
+        WHERE is_active = true
+          AND (domain = $1 OR $1 LIKE '%.' || domain)
+      ) as exists`,
+      [normalizedDomain]
+    );
+    return result?.exists || false;
+  },
+
+  async add(domain: string, category: string, description?: string, addedBy = 'human'): Promise<DomainWhitelist> {
+    const [result] = await query<DomainWhitelist>(
+      `INSERT INTO domain_whitelist (domain, category, description, added_by)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (domain) DO UPDATE SET is_active = true, updated_at = NOW()
+       RETURNING id, domain, category, description, is_active as "isActive",
+                 added_by as "addedBy", created_at as "createdAt", updated_at as "updatedAt"`,
+      [domain.toLowerCase(), category, description, addedBy]
+    );
+    return result;
+  },
+
+  async remove(domain: string): Promise<void> {
+    await query(
+      `UPDATE domain_whitelist SET is_active = false WHERE domain = $1`,
+      [domain.toLowerCase()]
+    );
+  },
+
+  async getCategories(): Promise<string[]> {
+    const rows = await query<{ category: string }>(
+      `SELECT DISTINCT category FROM domain_whitelist WHERE is_active = true ORDER BY category`
+    );
+    return rows.map(r => r.category);
   },
 };
 

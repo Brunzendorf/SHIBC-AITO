@@ -5,14 +5,12 @@
 
 import cron from 'node-cron';
 import { createLogger } from '../lib/logger.js';
-import { config } from '../lib/config.js';
 import {
-  redis,
   subscriber,
   publisher,
   channels,
-  keys,
   setAgentStatus,
+  redis,
 } from '../lib/redis.js';
 import { agentRepo, historyRepo, eventRepo, decisionRepo } from '../lib/db.js';
 import { rag } from '../lib/rag.js';
@@ -20,7 +18,7 @@ import { workspace } from './workspace.js';
 import { loadProfile, generateSystemPrompt, type AgentProfile } from './profile.js';
 import { createStateManager, StateKeys, type StateManager } from './state.js';
 import {
-  executeClaudeCode,
+  executeClaudeCodeWithRetry,
   executeOllamaFallback,
   isClaudeAvailable,
   buildLoopPrompt,
@@ -28,6 +26,8 @@ import {
   type PendingDecision,
 } from './claude.js';
 import type { AgentType, AgentMessage, EventType } from '../lib/types.js';
+import { spawnWorkerAsync } from '../workers/spawner.js';
+import { queueForArchive } from '../workers/archive-worker.js';
 
 const logger = createLogger('daemon');
 
@@ -47,6 +47,7 @@ export class AgentDaemon {
   private cronJob: cron.ScheduledTask | null = null;
   private isRunning = false;
   private claudeAvailable = false;
+  private loopInProgress = false; // Prevents concurrent loops
 
   constructor(daemonConfig: DaemonConfig) {
     this.config = daemonConfig;
@@ -112,6 +113,14 @@ export class AgentDaemon {
       if (this.profile.startupPrompt && this.claudeAvailable) {
         logger.info('Running startup sequence');
         await this.runLoop('startup');
+      }
+
+      // 9. Check for pending tasks on startup - process immediately if any
+      const pendingTaskCount = await redis.llen(`queue:tasks:${this.config.agentType}`);
+      if (pendingTaskCount > 0) {
+        logger.info({ pendingTaskCount }, 'Found pending tasks on startup, processing immediately');
+        // Small delay to let startup complete, then process queue
+        setTimeout(() => this.runLoop('startup_queue'), 3000);
       }
 
     } catch (error) {
@@ -208,7 +217,7 @@ export class AgentDaemon {
    */
   private shouldTriggerAI(message: AgentMessage): boolean {
     // Always trigger AI for these types
-    const aiRequired: AgentMessage['type'][] = ['task', 'decision', 'alert', 'vote'];
+    const aiRequired: AgentMessage['type'][] = ['task', 'decision', 'alert', 'vote', 'worker_result'];
     if (aiRequired.includes(message.type)) {
       return true;
     }
@@ -239,6 +248,13 @@ export class AgentDaemon {
       case 'broadcast':
         // Log broadcast, no response needed
         logger.info({ from: message.from, payload: message.payload }, 'Broadcast received');
+        break;
+
+      case 'task_queued':
+        // New task in queue - wake up and process immediately
+        logger.info({ agentType: this.config.agentType }, 'Task queued notification received, processing queue');
+        // Use setTimeout to avoid blocking the message handler
+        setTimeout(() => this.runLoop('task_notification'), 100);
         break;
 
       default:
@@ -319,6 +335,13 @@ export class AgentDaemon {
       return;
     }
 
+    // Prevent concurrent loops
+    if (this.loopInProgress) {
+      logger.debug({ trigger }, 'Loop already in progress, skipping');
+      return;
+    }
+    this.loopInProgress = true;
+
     const loopStart = Date.now();
     logger.info({ trigger }, 'Running agent loop');
 
@@ -347,6 +370,32 @@ export class AgentDaemon {
         }
       }
 
+      // Fetch pending tasks from queue (NEW: Actually read the task queue!)
+      let pendingTasks: Array<{ title: string; description: string; priority: string; from: string }> = [];
+      try {
+        const taskQueueKey = `queue:tasks:${this.config.agentType}`;
+        const rawTasks = await redis.lrange(taskQueueKey, 0, 9); // Get up to 10 pending tasks
+        if (rawTasks.length > 0) {
+          pendingTasks = rawTasks.map(t => {
+            try {
+              const parsed = JSON.parse(t);
+              return {
+                title: parsed.title || 'Untitled Task',
+                description: parsed.description || '',
+                priority: parsed.priority || 'normal',
+                from: parsed.from || 'unknown',
+              };
+            } catch {
+              return null;
+            }
+          }).filter((t): t is NonNullable<typeof t> => t !== null);
+          logger.info({ count: pendingTasks.length, agentType: this.config.agentType }, 'Found pending tasks in queue');
+        }
+      } catch (taskError) {
+        const errMsg = taskError instanceof Error ? taskError.message : String(taskError);
+        logger.warn({ error: errMsg }, 'Failed to fetch pending tasks');
+      }
+
       // RAG: Build query from agent type + trigger + data
       let ragContext = '';
       try {
@@ -367,18 +416,21 @@ export class AgentDaemon {
 
       // Build prompt
       const systemPrompt = generateSystemPrompt(this.profile);
-      const loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data }, pendingDecisions, ragContext);
+      const loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data }, pendingDecisions, ragContext, pendingTasks);
       logger.info({ systemPromptLength: systemPrompt.length, loopPromptLength: loopPrompt.length }, 'Prompt lengths');
-      logger.debug({ systemPrompt }, 'System prompt');
-      logger.debug({ loopPrompt }, 'Loop prompt');
 
-      // Execute AI
+      // FULL PROMPT LOGGING - to debug why agents don't use spawn_worker
+      logger.info({ fullSystemPrompt: systemPrompt }, '=== FULL SYSTEM PROMPT ===');
+      logger.info({ fullLoopPrompt: loopPrompt }, '=== FULL LOOP PROMPT ===');
+
+      // Execute AI with retry on transient errors (overload, rate limit)
       let result;
       if (this.claudeAvailable) {
-        result = await executeClaudeCode({
+        result = await executeClaudeCodeWithRetry({
           prompt: loopPrompt,
           systemPrompt,
           timeout: 300000, // 5 minutes
+          maxRetries: 3,
         });
       } else {
         logger.warn('Claude unavailable, using Ollama fallback');
@@ -386,8 +438,21 @@ export class AgentDaemon {
       }
 
       if (result.success) {
+        // FULL OUTPUT LOGGING - to debug what Claude returns
+        logger.info('=== FULL CLAUDE OUTPUT START ===');
+        console.log(result.output);
+        logger.info('=== FULL CLAUDE OUTPUT END ===');
+
         // Parse and process result
         const parsed = parseClaudeOutput(result.output);
+
+        // Debug: Log parsed result
+        logger.info({
+          hasParsed: !!parsed,
+          hasActions: parsed?.actions?.length || 0,
+          actionTypes: parsed?.actions?.map(a => a.type) || [],
+          summary: parsed?.summary?.slice(0, 100)
+        }, 'Parsed Claude output');
 
         if (parsed) {
           // Apply state updates
@@ -413,6 +478,23 @@ export class AgentDaemon {
 
           // Log to history
           await this.logHistory('decision', parsed.summary || 'Loop completed', parsed);
+
+          // Queue summary for intelligent archiving (Archive Worker will decide what to keep)
+          if (parsed.summary && parsed.summary.length >= 50) {
+            try {
+              await queueForArchive({
+                id: crypto.randomUUID(),
+                agentType: this.config.agentType,
+                agentId: this.config.agentId,
+                summary: parsed.summary,
+                timestamp: new Date().toISOString(),
+                loopCount: loopCount + 1,
+                actions: parsed.actions?.map(a => a.type),
+              });
+            } catch (archiveError) {
+              logger.warn({ error: archiveError }, 'Failed to queue for archive');
+            }
+          }
 
           // Commit workspace changes to git (with PR if enabled)
           if (await workspace.hasUncommittedChanges()) {
@@ -473,6 +555,22 @@ export class AgentDaemon {
         const successCount = (await this.state.get<number>(StateKeys.SUCCESS_COUNT)) || 0;
         await this.state.set(StateKeys.SUCCESS_COUNT, successCount + 1);
 
+        // ACKNOWLEDGE PROCESSED TASKS: Remove them from queue so they don't repeat
+        if (pendingTasks.length > 0) {
+          try {
+            const taskQueueKey = `queue:tasks:${this.config.agentType}`;
+            // Remove the tasks we just processed (first N items)
+            await redis.ltrim(taskQueueKey, pendingTasks.length, -1);
+            logger.info({
+              removed: pendingTasks.length,
+              agentType: this.config.agentType
+            }, 'Acknowledged and removed processed tasks from queue');
+          } catch (ackError) {
+            const errMsg = ackError instanceof Error ? ackError.message : String(ackError);
+            logger.warn({ error: errMsg }, 'Failed to acknowledge tasks');
+          }
+        }
+
       } else {
         logger.error({ error: result.error }, 'Loop execution failed');
 
@@ -487,12 +585,27 @@ export class AgentDaemon {
       const duration = Date.now() - loopStart;
       logger.info({ trigger, duration, success: result.success }, 'Loop completed');
 
+      // EVENT-DRIVEN: Check if more tasks in queue → continue immediately
+      if (result.success) {
+        const remainingTasks = await redis.llen(`queue:tasks:${this.config.agentType}`);
+        if (remainingTasks > 0) {
+          logger.info({ remainingTasks, agentType: this.config.agentType }, 'More tasks in queue, continuing immediately');
+          // Small delay to prevent tight loop, then continue
+          setTimeout(() => this.runLoop('queue_continuation'), 2000);
+        } else {
+          logger.info({ agentType: this.config.agentType }, 'Task queue empty, waiting for new tasks');
+        }
+      }
+
     } catch (error) {
       logger.error({ error, trigger }, 'Loop execution error');
 
       // Update error count
       const errorCount = (await this.state?.get<number>(StateKeys.ERROR_COUNT)) || 0;
       await this.state?.set(StateKeys.ERROR_COUNT, errorCount + 1);
+    } finally {
+      // Always release the lock
+      this.loopInProgress = false;
     }
   }
 
@@ -642,6 +755,33 @@ export class AgentDaemon {
         logger.info({ alertType: actionData?.alertType, severity: actionData?.severity }, 'Alert sent');
         break;
       }
+
+      case 'spawn_worker': {
+        // Spawn MCP worker for external tool access
+        // Support both formats: action.data.task OR action.task (profile format)
+        const actionAny = action as Record<string, unknown>;
+        const task = (actionData?.task as string) || (actionAny.task as string) || '';
+        const servers = (actionData?.servers as string[]) || (actionAny.servers as string[]) || [];
+        const context = (actionData?.context || actionAny.context) as Record<string, unknown> | undefined;
+        const timeout = (actionData?.timeout || actionAny.timeout) as number | undefined;
+
+        if (!task || servers.length === 0) {
+          logger.warn({ actionData, actionAny }, 'Invalid spawn_worker action: missing task or servers');
+          break;
+        }
+
+        await spawnWorkerAsync(
+          this.config.agentId,
+          this.config.agentType,
+          task,
+          servers,
+          context,
+          timeout
+        );
+        logger.info({ task: task.slice(0, 50), servers }, 'Worker spawned');
+        break;
+      }
+
 
       default:
         logger.debug({ actionType: action.type }, 'Unknown action type');

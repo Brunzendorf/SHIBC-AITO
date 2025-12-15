@@ -124,6 +124,21 @@ export async function getMetrics() {
   return fetchApi<string>('/metrics');
 }
 
+// Human-to-Agent Messaging
+export async function sendMessageToAgent(agentType: string, message: string, priority: 'low' | 'normal' | 'high' | 'critical' = 'normal') {
+  return fetchApi<{ status: string; messageId: string; agentType: string; agentId: string }>(`/agents/${agentType}/message`, {
+    method: 'POST',
+    body: JSON.stringify({ message, priority }),
+  });
+}
+
+export async function broadcastMessage(message: string, priority: 'low' | 'normal' | 'high' | 'critical' = 'normal') {
+  return fetchApi<{ status: string; messageId: string }>('/broadcast', {
+    method: 'POST',
+    body: JSON.stringify({ message, priority }),
+  });
+}
+
 // Types
 export interface HealthFull {
   status: string;

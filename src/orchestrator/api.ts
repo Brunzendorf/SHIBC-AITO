@@ -7,7 +7,8 @@ import { startAgent, stopAgent, restartAgent, getAgentContainerStatus, listManag
 import { getScheduledJobs, pauseJob, resumeJob } from './scheduler.js';
 import { getSystemHealth, isAlive, isReady, getAgentHealth } from './health.js';
 import { triggerEscalation } from './events.js';
-import type { AgentType, ApiResponse, DecisionStatus } from '../lib/types.js';
+import type { AgentType, AgentMessage, ApiResponse, DecisionStatus } from '../lib/types.js';
+import crypto from 'crypto';
 
 const logger = createLogger('api');
 
@@ -465,6 +466,86 @@ app.post('/escalations/:id/respond', asyncHandler(async (req, res) => {
 
   await escalationRepo.respond(escalationId, response);
   sendResponse(res, { escalationId, status: 'responded' });
+}));
+
+// === Human-to-Agent Messaging ===
+
+// Send message to specific agent (Human Oversight → Agent)
+app.post('/agents/:type/message', asyncHandler(async (req, res) => {
+  const { type } = req.params;
+  const { message, priority = 'normal' } = req.body;
+
+  if (!message || typeof message !== 'string') {
+    return sendError(res, 'Message is required', 400);
+  }
+
+  // Find agent by type
+  const agent = await agentRepo.findByType(type as AgentType);
+  if (!agent) {
+    return sendError(res, `Agent ${type} not found`, 404);
+  }
+
+  // Create message payload
+  const messagePayload: AgentMessage = {
+    id: crypto.randomUUID(),
+    type: 'task',
+    from: 'human_oversight',
+    to: agent.id,
+    payload: {
+      title: 'Message from Human Oversight',
+      content: message,
+      priority,
+      timestamp: new Date().toISOString(),
+    },
+    priority: priority as 'low' | 'normal' | 'high' | 'critical',
+    timestamp: new Date(),
+    requiresResponse: true,
+  };
+
+  // Publish to agent's channel
+  await publisher.publish(channels.agent(agent.id), JSON.stringify(messagePayload));
+
+  // Log event
+  await eventRepo.log({
+    eventType: 'human_message',
+    sourceAgent: undefined,
+    targetAgent: agent.id,
+    payload: { message, priority },
+  });
+
+  logger.info({ agentType: type, agentId: agent.id, messageLength: message.length }, 'Human message sent to agent');
+  sendResponse(res, {
+    status: 'sent',
+    messageId: messagePayload.id,
+    agentType: type,
+    agentId: agent.id
+  }, 201);
+}));
+
+// Broadcast message to all agents
+app.post('/broadcast', asyncHandler(async (req, res) => {
+  const { message, priority = 'normal' } = req.body;
+
+  if (!message || typeof message !== 'string') {
+    return sendError(res, 'Message is required', 400);
+  }
+
+  const messagePayload = {
+    id: crypto.randomUUID(),
+    type: 'broadcast',
+    from: 'human_oversight',
+    payload: {
+      title: 'Broadcast from Human Oversight',
+      content: message,
+      priority,
+      timestamp: new Date().toISOString(),
+    },
+  };
+
+  await publisher.publish(channels.broadcast, JSON.stringify(messagePayload));
+
+  logger.info({ messageLength: message.length }, 'Human broadcast sent to all agents');
+  sendResponse(res, { status: 'broadcast_sent', messageId: messagePayload.id }, 201);
 }));
 
 // === Scheduler Endpoints ===

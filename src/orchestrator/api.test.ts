@@ -18,6 +18,24 @@ vi.mock('../lib/config.js', () => ({
   },
 }));
 
+// Mock Redis
+const mockPublisher = {
+  publish: vi.fn(() => Promise.resolve()),
+};
+
+const mockChannels = {
+  broadcast: 'channel:broadcast',
+  agent: (uuid: string) => `channel:agent:${uuid}`,
+};
+
+vi.mock('../lib/redis.js', () => ({
+  publisher: mockPublisher,
+  channels: mockChannels,
+  checkConnection: vi.fn(() => Promise.resolve(true)),
+  setAgentStatus: vi.fn(() => Promise.resolve()),
+  getAllAgentStatuses: vi.fn(() => Promise.resolve({})),
+}));
+
 // Mock db
 const mockAgentRepo = {
   findAll: vi.fn(() => Promise.resolve([])),
@@ -36,13 +54,21 @@ const mockTaskRepo = {
 };
 
 const mockDecisionRepo = {
+  findAll: vi.fn(() => Promise.resolve([])),
   findPending: vi.fn(() => Promise.resolve([])),
+  findEscalated: vi.fn(() => Promise.resolve([])),
   findById: vi.fn(() => Promise.resolve(null)),
+  updateStatus: vi.fn(() => Promise.resolve()),
+  setHumanDecision: vi.fn(() => Promise.resolve()),
 };
 
 const mockEscalationRepo = {
   findPending: vi.fn(() => Promise.resolve([])),
   respond: vi.fn(() => Promise.resolve()),
+};
+
+const mockHistoryRepo = {
+  getRecent: vi.fn(() => Promise.resolve([])),
 };
 
 vi.mock('../lib/db.js', () => ({
@@ -51,62 +77,63 @@ vi.mock('../lib/db.js', () => ({
   taskRepo: mockTaskRepo,
   decisionRepo: mockDecisionRepo,
   escalationRepo: mockEscalationRepo,
+  historyRepo: mockHistoryRepo,
 }));
 
 // Mock container
-const mockStartAgent = vi.fn(() => Promise.resolve('container-123'));
-const mockStopAgent = vi.fn(() => Promise.resolve());
-const mockRestartAgent = vi.fn(() => Promise.resolve('container-456'));
-const mockGetAgentContainerStatus = vi.fn(() => Promise.resolve(null));
+const mockStartAgent = vi.fn((_agentType: string) => Promise.resolve('container-123'));
+const mockStopAgent = vi.fn((_agentType: string) => Promise.resolve());
+const mockRestartAgent = vi.fn((_agentType: string) => Promise.resolve('container-456'));
+const mockGetAgentContainerStatus = vi.fn((_agentType: string) => Promise.resolve(null));
 const mockListManagedContainers = vi.fn(() => Promise.resolve([]));
 
 vi.mock('./container.js', () => ({
-  startAgent: (...args: unknown[]) => mockStartAgent(...args),
-  stopAgent: (...args: unknown[]) => mockStopAgent(...args),
-  restartAgent: (...args: unknown[]) => mockRestartAgent(...args),
-  getAgentContainerStatus: (...args: unknown[]) => mockGetAgentContainerStatus(...args),
+  startAgent: (agentType: string) => mockStartAgent(agentType),
+  stopAgent: (agentType: string) => mockStopAgent(agentType),
+  restartAgent: (agentType: string) => mockRestartAgent(agentType),
+  getAgentContainerStatus: (agentType: string) => mockGetAgentContainerStatus(agentType),
   listManagedContainers: () => mockListManagedContainers(),
 }));
 
 // Mock scheduler
 const mockGetScheduledJobs = vi.fn(() => []);
-const mockPauseJob = vi.fn(() => true);
-const mockResumeJob = vi.fn(() => true);
+const mockPauseJob = vi.fn((_jobId: string) => true);
+const mockResumeJob = vi.fn((_jobId: string) => true);
 
 vi.mock('./scheduler.js', () => ({
   getScheduledJobs: () => mockGetScheduledJobs(),
-  pauseJob: (...args: unknown[]) => mockPauseJob(...args),
-  resumeJob: (...args: unknown[]) => mockResumeJob(...args),
+  pauseJob: (jobId: string) => mockPauseJob(jobId),
+  resumeJob: (jobId: string) => mockResumeJob(jobId),
 }));
 
 // Mock health
 const mockIsAlive = vi.fn(() => Promise.resolve(true));
 const mockIsReady = vi.fn(() => Promise.resolve(true));
 const mockGetSystemHealth = vi.fn(() => Promise.resolve({
-  status: 'healthy',
+  status: 'healthy' as 'healthy' | 'degraded' | 'unhealthy',
   uptime: 1000,
   components: {
-    database: { status: 'healthy' },
-    redis: { status: 'healthy' },
-    docker: { status: 'healthy' },
+    database: { status: 'healthy' as 'healthy' | 'unhealthy' },
+    redis: { status: 'healthy' as 'healthy' | 'unhealthy' },
+    docker: { status: 'healthy' as 'healthy' | 'unhealthy' },
     agents: { total: 0, healthy: 0, unhealthy: 0, inactive: 0, details: {} },
   },
   timestamp: new Date(),
 }));
-const mockGetAgentHealth = vi.fn(() => Promise.resolve(null));
+const mockGetAgentHealth = vi.fn((_agentType: string) => Promise.resolve(null));
 
 vi.mock('./health.js', () => ({
   isAlive: () => mockIsAlive(),
   isReady: () => mockIsReady(),
   getSystemHealth: () => mockGetSystemHealth(),
-  getAgentHealth: (...args: unknown[]) => mockGetAgentHealth(...args),
+  getAgentHealth: (agentType: string) => mockGetAgentHealth(agentType),
 }));
 
 // Mock events
-const mockTriggerEscalation = vi.fn(() => Promise.resolve('escalation-1'));
+const mockTriggerEscalation = vi.fn((_params: any) => Promise.resolve('escalation-1'));
 
 vi.mock('./events.js', () => ({
-  triggerEscalation: (...args: unknown[]) => mockTriggerEscalation(...args),
+  triggerEscalation: (params: any) => mockTriggerEscalation(params),
 }));
 
 describe('API', () => {
@@ -171,9 +198,14 @@ describe('API', () => {
 
       it('should return 200 for degraded status', async () => {
         mockGetSystemHealth.mockResolvedValue({
-          status: 'degraded',
+          status: 'degraded' as 'healthy' | 'degraded' | 'unhealthy',
           uptime: 1000,
-          components: {},
+          components: {
+            database: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            redis: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            docker: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            agents: { total: 0, healthy: 0, unhealthy: 0, inactive: 0, details: {} },
+          },
           timestamp: new Date(),
         });
 
@@ -184,9 +216,14 @@ describe('API', () => {
 
       it('should return 503 for unhealthy status', async () => {
         mockGetSystemHealth.mockResolvedValue({
-          status: 'unhealthy',
+          status: 'unhealthy' as 'healthy' | 'degraded' | 'unhealthy',
           uptime: 1000,
-          components: {},
+          components: {
+            database: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            redis: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            docker: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            agents: { total: 0, healthy: 0, unhealthy: 0, inactive: 0, details: {} },
+          },
           timestamp: new Date(),
         });
 
@@ -200,7 +237,7 @@ describe('API', () => {
   describe('Agent Endpoints', () => {
     describe('GET /agents', () => {
       it('should return list of agents', async () => {
-        mockAgentRepo.findAll.mockResolvedValue([
+        (mockAgentRepo.findAll as any).mockResolvedValue([
           { id: 'agent-1', type: 'ceo', status: 'active' },
         ]);
 
@@ -214,7 +251,7 @@ describe('API', () => {
 
     describe('GET /agents/:type', () => {
       it('should return agent by type', async () => {
-        mockAgentRepo.findByType.mockResolvedValue({
+        (mockAgentRepo.findByType as any).mockResolvedValue({
           id: 'agent-1',
           type: 'ceo',
           status: 'active',
@@ -297,7 +334,7 @@ describe('API', () => {
 
     describe('GET /agents/:type/health', () => {
       it('should return agent health', async () => {
-        mockGetAgentHealth.mockResolvedValue({
+        (mockGetAgentHealth as any).mockResolvedValue({
           agentId: 'agent-1',
           status: 'healthy',
           lastCheck: new Date(),
@@ -322,7 +359,7 @@ describe('API', () => {
   describe('Container Endpoints', () => {
     describe('GET /containers', () => {
       it('should return managed containers', async () => {
-        mockListManagedContainers.mockResolvedValue([
+        (mockListManagedContainers as any).mockResolvedValue([
           { Id: 'c1', Name: '/aito-ceo' },
         ]);
 
@@ -337,7 +374,7 @@ describe('API', () => {
   describe('Event Endpoints', () => {
     describe('GET /events', () => {
       it('should return recent events', async () => {
-        mockEventRepo.getRecent.mockResolvedValue([
+        (mockEventRepo.getRecent as any).mockResolvedValue([
           { id: 'event-1', eventType: 'agent_started' },
         ]);
 
@@ -348,7 +385,7 @@ describe('API', () => {
       });
 
       it('should respect limit parameter', async () => {
-        const res = await request(app).get('/events?limit=50');
+        await request(app).get('/events?limit=50');
 
         expect(mockEventRepo.getRecent).toHaveBeenCalledWith(50);
       });
@@ -369,7 +406,7 @@ describe('API', () => {
   describe('Task Endpoints', () => {
     describe('GET /tasks/agent/:id', () => {
       it('should return tasks for agent', async () => {
-        mockTaskRepo.findByAgent.mockResolvedValue([
+        (mockTaskRepo.findByAgent as any).mockResolvedValue([
           { id: 'task-1', title: 'Test task' },
         ]);
 
@@ -436,7 +473,7 @@ describe('API', () => {
   describe('Decision Endpoints', () => {
     describe('GET /decisions/pending', () => {
       it('should return pending decisions', async () => {
-        mockDecisionRepo.findPending.mockResolvedValue([
+        (mockDecisionRepo.findPending as any).mockResolvedValue([
           { id: 'dec-1', title: 'Decision 1' },
         ]);
 
@@ -449,7 +486,7 @@ describe('API', () => {
 
     describe('GET /decisions/:id', () => {
       it('should return decision by id', async () => {
-        mockDecisionRepo.findById.mockResolvedValue({
+        (mockDecisionRepo.findById as any).mockResolvedValue({
           id: 'dec-1',
           title: 'Decision 1',
         });
@@ -525,7 +562,7 @@ describe('API', () => {
   describe('Scheduler Endpoints', () => {
     describe('GET /scheduler/jobs', () => {
       it('should return scheduled jobs', async () => {
-        mockGetScheduledJobs.mockReturnValue([
+        (mockGetScheduledJobs as any).mockReturnValue([
           { id: 'job-1', type: 'health-check' },
         ]);
 
@@ -578,20 +615,23 @@ describe('API', () => {
   describe('Metrics Endpoint', () => {
     describe('GET /metrics', () => {
       it('should return prometheus metrics', async () => {
-        mockAgentRepo.findAll.mockResolvedValue([
-          { id: 'agent-1', type: 'ceo' },
+        (mockAgentRepo.findAll as any).mockResolvedValue([
+          { id: 'agent-1', type: 'ceo', name: 'CEO', profilePath: '/profiles/ceo.md', loopInterval: 60, status: 'active', createdAt: new Date(), updatedAt: new Date() },
         ]);
         mockGetSystemHealth.mockResolvedValue({
-          status: 'healthy',
+          status: 'healthy' as 'healthy' | 'degraded' | 'unhealthy',
           uptime: 60000,
           components: {
+            database: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            redis: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            docker: { status: 'healthy' as 'healthy' | 'unhealthy' },
             agents: {
               total: 1,
               healthy: 1,
               unhealthy: 0,
               inactive: 0,
               details: {
-                ceo: { status: 'healthy' },
+                ceo: { agentId: 'agent-1', status: 'healthy' as 'healthy' | 'unhealthy' | 'unknown', lastCheck: new Date() },
               },
             },
           },
@@ -610,9 +650,14 @@ describe('API', () => {
 
       it('should return 0.5 for degraded status', async () => {
         mockGetSystemHealth.mockResolvedValue({
-          status: 'degraded',
+          status: 'degraded' as 'healthy' | 'degraded' | 'unhealthy',
           uptime: 1000,
-          components: { agents: { total: 0, healthy: 0, unhealthy: 0, inactive: 0, details: {} } },
+          components: {
+            database: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            redis: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            docker: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            agents: { total: 0, healthy: 0, unhealthy: 0, inactive: 0, details: {} }
+          },
           timestamp: new Date(),
         });
         mockAgentRepo.findAll.mockResolvedValue([]);
@@ -624,9 +669,14 @@ describe('API', () => {
 
       it('should return 0 for unhealthy status', async () => {
         mockGetSystemHealth.mockResolvedValue({
-          status: 'unhealthy',
+          status: 'unhealthy' as 'healthy' | 'degraded' | 'unhealthy',
           uptime: 1000,
-          components: { agents: { total: 0, healthy: 0, unhealthy: 0, inactive: 0, details: {} } },
+          components: {
+            database: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            redis: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            docker: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            agents: { total: 0, healthy: 0, unhealthy: 0, inactive: 0, details: {} }
+          },
           timestamp: new Date(),
         });
         mockAgentRepo.findAll.mockResolvedValue([]);
@@ -637,13 +687,18 @@ describe('API', () => {
       });
 
       it('should handle agents without status', async () => {
-        mockAgentRepo.findAll.mockResolvedValue([
-          { id: 'agent-1', type: 'cto' },
+        (mockAgentRepo.findAll as any).mockResolvedValue([
+          { id: 'agent-1', type: 'cto', name: 'CTO', profilePath: '/profiles/cto.md', loopInterval: 60, status: 'active', createdAt: new Date(), updatedAt: new Date() },
         ]);
         mockGetSystemHealth.mockResolvedValue({
-          status: 'healthy',
+          status: 'healthy' as 'healthy' | 'degraded' | 'unhealthy',
           uptime: 1000,
-          components: { agents: { total: 1, healthy: 0, unhealthy: 1, inactive: 0, details: {} } },
+          components: {
+            database: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            redis: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            docker: { status: 'healthy' as 'healthy' | 'unhealthy' },
+            agents: { total: 1, healthy: 0, unhealthy: 1, inactive: 0, details: {} }
+          },
           timestamp: new Date(),
         });
 

@@ -34,8 +34,8 @@ vi.mock('../lib/logger.js', () => ({
 
 // Mock db
 const mockAgentRepo = {
-  findAll: vi.fn(() => Promise.resolve([])),
-  findByType: vi.fn(() => Promise.resolve(null)),
+  findAll: vi.fn<any, any>(() => Promise.resolve([])),
+  findByType: vi.fn<any, any>(() => Promise.resolve(null)),
 };
 const mockEventRepo = {
   log: vi.fn(() => Promise.resolve({ id: 'event-1' })),
@@ -46,9 +46,9 @@ vi.mock('../lib/db.js', () => ({
 }));
 
 // Mock redis
-const mockPublish = vi.fn(() => Promise.resolve());
+const mockPublish = vi.fn<any, any>(() => Promise.resolve());
 vi.mock('../lib/redis.js', () => ({
-  publish: (...args: unknown[]) => mockPublish(...args),
+  publish: vi.fn<any, any>((...args: any[]) => mockPublish(...args)),
   channels: {
     agent: (id: string) => `channel:agent:${id}`,
     broadcast: 'channel:broadcast',
@@ -200,7 +200,15 @@ describe('Scheduler', () => {
       mockAgentRepo.findByType.mockResolvedValue({
         id: 'ceo-agent',
         type: 'ceo',
+        name: 'CEO Agent',
+        profilePath: '/profiles/ceo.md',
+        loopInterval: 3600,
+        tier: 'head',
         status: 'active',
+        health: 'healthy',
+        lastHeartbeat: new Date(),
+        createdAt: new Date(),
+        updatedAt: new Date(),
       });
 
       const { scheduleDailyDigest } = await import('./scheduler.js');
@@ -310,8 +318,32 @@ describe('Scheduler', () => {
   describe('initializeAgentSchedules', () => {
     it('should schedule loops for active agents', async () => {
       mockAgentRepo.findAll.mockResolvedValue([
-        { id: '1', type: 'ceo', status: 'active' },
-        { id: '2', type: 'dao', status: 'active' },
+        {
+          id: '1',
+          type: 'ceo',
+          name: 'CEO Agent',
+          profilePath: '/profiles/ceo.md',
+          loopInterval: 3600,
+          tier: 'head',
+          status: 'active',
+          health: 'healthy',
+          lastHeartbeat: new Date(),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        {
+          id: '2',
+          type: 'dao',
+          name: 'DAO Agent',
+          profilePath: '/profiles/dao.md',
+          loopInterval: 21600,
+          tier: 'head',
+          status: 'active',
+          health: 'healthy',
+          lastHeartbeat: new Date(),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
       ]);
 
       const cron = await import('node-cron');
@@ -325,7 +357,19 @@ describe('Scheduler', () => {
 
     it('should not schedule inactive agents', async () => {
       mockAgentRepo.findAll.mockResolvedValue([
-        { id: '1', type: 'ceo', status: 'inactive' },
+        {
+          id: '1',
+          type: 'ceo',
+          name: 'CEO Agent',
+          profilePath: '/profiles/ceo.md',
+          loopInterval: 3600,
+          tier: 'head',
+          status: 'inactive',
+          health: 'healthy',
+          lastHeartbeat: new Date(),
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
       ]);
 
       const cron = await import('node-cron');

@@ -104,7 +104,7 @@ services:
       - "6333:6333"
       - "6334:6334"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/"]
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 && echo OK'"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -132,7 +132,7 @@ services:
     ports:
       - "5678:5678"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5678/healthz"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:5678/healthz"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -154,14 +154,17 @@ services:
     environment:
       NODE_ENV: production
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      DRY_RUN: ${DRY_RUN:-false}
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
       PORTAINER_URL: http://portainer:9000
       PORTAINER_API_KEY: ${PORTAINER_API_KEY}
       PORTAINER_ENV_ID: ${PORTAINER_ENV_ID:-4}
+      COMPOSE_PROJECT: ${COMPOSE_PROJECT:-shibc-aito}
       OLLAMA_URL: http://ollama:11434
       QDRANT_URL: http://qdrant:6333
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID}
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
@@ -180,7 +183,7 @@ services:
       qdrant:
         condition: service_started
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -201,9 +204,11 @@ services:
       AGENT_TYPE: ceo
       AGENT_PROFILE: /app/profiles/ceo.md
       LOOP_INTERVAL: 3600
+      DRY_RUN: ${DRY_RUN:-false}
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
+      QDRANT_URL: http://qdrant:6333
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
     volumes:
@@ -229,9 +234,11 @@ services:
       AGENT_TYPE: dao
       AGENT_PROFILE: /app/profiles/dao.md
       LOOP_INTERVAL: 21600
+      DRY_RUN: ${DRY_RUN:-false}
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
+      QDRANT_URL: http://qdrant:6333
       SNAPSHOT_SPACE: ${SNAPSHOT_SPACE:-shibaclassic.eth}
       GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
     volumes:
@@ -261,12 +268,17 @@ services:
       AGENT_TYPE: cmo
       AGENT_PROFILE: /app/profiles/cmo.md
       LOOP_INTERVAL: 14400
+      DRY_RUN: ${DRY_RUN:-false}
       GIT_FILTER: content/*
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
+      QDRANT_URL: http://qdrant:6333
       TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      DIRECTUS_URL: ${DIRECTUS_URL}
+      DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
       DEEPL_API_KEY: ${DEEPL_API_KEY}
     volumes:
       - ./profiles:/app/profiles:ro
@@ -291,10 +303,12 @@ services:
       AGENT_TYPE: cto
       AGENT_PROFILE: /app/profiles/cto.md
       LOOP_INTERVAL: 3600
+      DRY_RUN: ${DRY_RUN:-false}
       GIT_FILTER: website/*
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
+      QDRANT_URL: http://qdrant:6333
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       DIRECTUS_URL: ${DIRECTUS_URL}
       DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
@@ -321,10 +335,12 @@ services:
       AGENT_TYPE: cfo
       AGENT_PROFILE: /app/profiles/cfo.md
       LOOP_INTERVAL: 21600
+      DRY_RUN: ${DRY_RUN:-false}
       GIT_FILTER: treasury/*
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
+      QDRANT_URL: http://qdrant:6333
       ETHERSCAN_API_KEY: ${ETHERSCAN_API_KEY}
       COINGECKO_API_KEY: ${COINGECKO_API_KEY}
       QUICKNODE_HTTP_URL: ${QUICKNODE_HTTP_URL}
@@ -352,12 +368,15 @@ services:
       AGENT_TYPE: coo
       AGENT_PROFILE: /app/profiles/coo.md
       LOOP_INTERVAL: 7200
+      DRY_RUN: ${DRY_RUN:-false}
       GIT_FILTER: community/*
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
+      QDRANT_URL: http://qdrant:6333
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
+      # DISCORD_BOT_TOKEN removed - Discord does not exist
     volumes:
       - ./profiles:/app/profiles:ro
       - coo_memory:/app/memory
@@ -381,10 +400,12 @@ services:
       AGENT_TYPE: cco
       AGENT_PROFILE: /app/profiles/cco.md
       LOOP_INTERVAL: 86400
+      DRY_RUN: ${DRY_RUN:-false}
       GIT_FILTER: legal/*
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
+      QDRANT_URL: http://qdrant:6333
     volumes:
       - ./profiles:/app/profiles:ro
       - cco_memory:/app/memory
@@ -414,11 +435,8 @@ services:
     ports:
       - "9000:9000"
       - "9443:9443"
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9000/api/status"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+    # Note: Portainer uses a distroless image without wget/curl
+    # Health check disabled - external monitoring recommended
     networks:
       - aito-network
 
@@ -443,7 +461,7 @@ services:
     networks:
       - aito-network
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000"]
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000"]
       interval: 30s
       timeout: 10s
       retries: 3

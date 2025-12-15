@@ -179,31 +179,41 @@ export async function loadProfile(profilePath: string, agentType: AgentType): Pr
   return profile;
 }
 
+
+/**
+ * Extract MCP Workers section from raw profile content (test)
+ */
+function extractMCPWorkersSection(content: string): string {
+  const match = content.match(/## MCP Workers[\s\S]*?(?=\n## [^M]|\n---\s*$|$)/i);
+  return match ? match[0].trim() : '';
+}
+
+/**
+ * Extract DATA FIRST section from profile - CRITICAL for preventing hallucinations
+ */
+function extractDataFirstSection(content: string): string {
+  // Handle both Windows (\r\n) and Unix (\n) line endings
+  const match = content.match(/## 🚨 DATA FIRST[\s\S]*?(?=\r?\n## |---\s*$|$)/i);
+  return match ? match[0].trim() : '';
+}
+
+/**
+ * Extract HOUSEKEEPING section from profile - CRITICAL for fresh state each loop
+ */
+function extractHousekeepingSection(content: string): string {
+  // Handle both Windows (\r\n) and Unix (\n) line endings
+  const match = content.match(/## 🧹 HOUSEKEEPING[\s\S]*?(?=\r?\n## |---\s*$|$)/i);
+  return match ? match[0].trim() : '';
+}
+
 /**
  * Generate system prompt from profile for Claude
+ *
+ * SIMPLIFIED: Just use the raw profile content directly!
+ * This ensures nothing is lost (DATA FIRST, HOUSEKEEPING, etc.)
  */
 export function generateSystemPrompt(profile: AgentProfile): string {
-  const parts = [
-    '# ' + profile.name,
-    '',
-    '## Identity',
-    'Codename: ' + profile.codename,
-    'Department: ' + profile.department,
-    'Reports To: ' + profile.reportsTo,
-    profile.manages ? 'Manages: ' + profile.manages : '',
-    '',
-    '## Mission',
-    profile.mission,
-    '',
-    '## Core Responsibilities',
-    ...profile.responsibilities.map(r => '- ' + r),
-    '',
-    '## Guiding Principles',
-    ...profile.guidingPrinciples.map(p => '- ' + p),
-    '',
-    '## Startup',
-    profile.startupPrompt,
-  ];
-
-  return parts.filter(Boolean).join('\n');
+  // Use the complete raw profile - no selective extraction that might lose critical sections
+  // The profile markdown is already well-structured for Claude to understand
+  return profile.rawContent;
 }

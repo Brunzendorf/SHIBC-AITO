@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock pg
 const mockClient = {
@@ -413,7 +413,7 @@ describe('Database', () => {
         });
 
         const { taskRepo } = await import('./db.js');
-        const result = await taskRepo.findByAgent('agent-1', 'pending');
+        await taskRepo.findByAgent('agent-1', 'pending');
 
         expect(mockClient.query).toHaveBeenCalledWith(
           expect.stringContaining('status = $2'),
@@ -475,7 +475,7 @@ describe('Database', () => {
         });
 
         const { eventRepo } = await import('./db.js');
-        const result = await eventRepo.getByAgent('agent-1', 10);
+        await eventRepo.getByAgent('agent-1', 10);
 
         expect(mockClient.query).toHaveBeenCalledWith(
           expect.stringContaining('source_agent = $1 OR target_agent = $1'),

@@ -1,7 +1,7 @@
 import { createLogger } from '../lib/logger.js';
 import { checkConnection as checkDbConnection } from '../lib/db.js';
 import { checkConnection as checkRedisConnection, setAgentStatus, getAllAgentStatuses } from '../lib/redis.js';
-import { getAgentContainerStatus, checkContainerHealth } from './container.js';
+import { getAgentContainerStatus } from './container.js';
 import { agentRepo } from '../lib/db.js';
 import type { HealthStatus, AgentType } from '../lib/types.js';
 
@@ -219,7 +219,7 @@ export async function runHealthCheck(): Promise<void> {
   }
 
   // Update Redis with latest statuses
-  for (const [agentType, status] of Object.entries(health.components.agents.details)) {
+  for (const [_agentType, status] of Object.entries(health.components.agents.details)) {
     await setAgentStatus(status.agentId, status);
   }
 }

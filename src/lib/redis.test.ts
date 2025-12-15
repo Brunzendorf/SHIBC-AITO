@@ -2,15 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock ioredis
 const mockRedis = {
-  set: vi.fn(() => Promise.resolve('OK')),
-  get: vi.fn(() => Promise.resolve(null)),
+  set: vi.fn(() => Promise.resolve<'OK' | null>('OK')),
+  get: vi.fn(() => Promise.resolve<string | null>(null)),
   del: vi.fn(() => Promise.resolve(1)),
-  keys: vi.fn(() => Promise.resolve([])),
-  mget: vi.fn(() => Promise.resolve([])),
+  keys: vi.fn(() => Promise.resolve<string[]>([])),
+  mget: vi.fn(() => Promise.resolve<(string | null)[]>([])),
   incr: vi.fn(() => Promise.resolve(1)),
   expire: vi.fn(() => Promise.resolve(1)),
   lpush: vi.fn(() => Promise.resolve(1)),
-  rpop: vi.fn(() => Promise.resolve(null)),
+  rpop: vi.fn(() => Promise.resolve<string | null>(null)),
   llen: vi.fn(() => Promise.resolve(0)),
   ping: vi.fn(() => Promise.resolve('PONG')),
   quit: vi.fn(() => Promise.resolve('OK')),

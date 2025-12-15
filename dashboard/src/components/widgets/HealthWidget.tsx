@@ -62,13 +62,13 @@ export default function HealthWidget() {
           <Typography variant="h6">System Health</Typography>
           {!isLoading && (
             <Chip
-              label={health?.status === 'ok' ? 'Healthy' : 'Issues'}
+              label={health?.status === 'healthy' ? 'Healthy' : 'Issues'}
               size="small"
               sx={{
-                backgroundColor: health?.status === 'ok'
+                backgroundColor: health?.status === 'healthy'
                   ? `${statusColors.healthy}20`
                   : `${statusColors.unhealthy}20`,
-                color: health?.status === 'ok' ? statusColors.healthy : statusColors.unhealthy,
+                color: health?.status === 'healthy' ? statusColors.healthy : statusColors.unhealthy,
                 fontWeight: 600,
               }}
             />
@@ -88,19 +88,19 @@ export default function HealthWidget() {
                 name="Database"
                 icon={<DbIcon />}
                 status={health?.components?.database?.status}
-                latency={health?.components?.database?.latency}
+                latency={health?.components?.database?.latencyMs}
               />
               <ComponentStatus
                 name="Redis"
                 icon={<RedisIcon />}
                 status={health?.components?.redis?.status}
-                latency={health?.components?.redis?.latency}
+                latency={health?.components?.redis?.latencyMs}
               />
               <ComponentStatus
                 name="Docker (Portainer)"
                 icon={<DockerIcon />}
                 status={health?.components?.docker?.status}
-                latency={health?.components?.docker?.latency}
+                latency={health?.components?.docker?.latencyMs}
               />
             </>
           )}

@@ -2,7 +2,7 @@
  * Container Manager - Portainer API Implementation
  * Uses Portainer REST API instead of Docker socket.
  */
-import { config, agentConfigs } from '../lib/config.js';
+import { config, agentConfigs, isDryRun } from '../lib/config.js';
 import { createLogger } from '../lib/logger.js';
 import { agentRepo, eventRepo } from '../lib/db.js';
 import { setAgentStatus, acquireLock, releaseLock, keys } from '../lib/redis.js';
@@ -15,6 +15,9 @@ const portainerUrl = config.PORTAINER_URL;
 const portainerApiKey = config.PORTAINER_API_KEY;
 const portainerEnvId = config.PORTAINER_ENV_ID;
 const isPortainerConfigured = !!(portainerUrl && portainerApiKey && portainerEnvId);
+
+// Docker Compose project name (must match docker-compose.yml deployment)
+const COMPOSE_PROJECT = config.COMPOSE_PROJECT || 'shibc-aito';
 
 // Portainer API client
 async function portainerFetch<T = unknown>(path: string, options: RequestInit = {}): Promise<T> {
@@ -57,18 +60,21 @@ function getContainerConfig(agentType: AgentType, agentId: string): ContainerCon
       AGENT_TYPE: agentType,
       AGENT_PROFILE: '/profiles/' + agentType + '.md',
       LOOP_INTERVAL: String(agentConfig.loopInterval),
+      DRY_RUN: String(isDryRun), // Propagate dry-run mode to agents
       POSTGRES_URL: config.POSTGRES_URL,
       REDIS_URL: config.REDIS_URL,
       OLLAMA_URL: config.OLLAMA_URL,
+      QDRANT_URL: config.QDRANT_URL,
       GITHUB_TOKEN: config.GITHUB_TOKEN || '',
       GITHUB_ORG: config.GITHUB_ORG,
       ...('gitFilter' in agentConfig && agentConfig.gitFilter && { GIT_FILTER: agentConfig.gitFilter }),
     },
     volumes: [
-      // Named volumes for consistency with docker-compose
-      agentType + '_memory:/app/memory',
-      'shared_claude_config:/app/.claude',
-      'shared_workspace:/app/workspace',  // Shared workspace for all agents
+      // Named volumes with compose project prefix for stack consistency
+      COMPOSE_PROJECT + '_' + agentType + '_memory:/app/memory',
+      COMPOSE_PROJECT + '_shared_claude_config:/app/.claude',
+      './workspace:/app/workspace',  // Bind mount for shared workspace
+      './profiles:/app/profiles:ro',  // Bind mount for profiles
     ],
     memory: '512m',
     cpus: '1',
@@ -78,6 +84,9 @@ function getContainerConfig(agentType: AgentType, agentId: string): ContainerCon
 
 function toDockerCreateBody(containerConfig: ContainerConfig): Record<string, unknown> {
   const env = Object.entries(containerConfig.environment).map(([k, v]) => k + '=' + v);
+  const agentType = containerConfig.name.replace(CONTAINER_PREFIX, '');
+  const serviceName = agentType + '-agent';
+
   return {
     Image: containerConfig.image,
     Env: env,
@@ -88,7 +97,18 @@ function toDockerCreateBody(containerConfig: ContainerConfig): Record<string, un
       RestartPolicy: containerConfig.restart ? { Name: containerConfig.restart } : undefined,
       NetworkMode: 'aito-network',
     },
-    Labels: { 'aito.managed': 'true', 'aito.type': containerConfig.name.replace(CONTAINER_PREFIX, '') },
+    Labels: {
+      // Custom labels
+      'aito.managed': 'true',
+      'aito.type': agentType,
+      // Docker Compose labels for stack integration
+      'com.docker.compose.project': COMPOSE_PROJECT,
+      'com.docker.compose.service': serviceName,
+      'com.docker.compose.container-number': '1',
+      'com.docker.compose.oneoff': 'False',
+      'com.docker.compose.project.working_dir': '/app',
+      'com.docker.compose.version': '2.24.0',
+    },
   };
 }
 

@@ -134,7 +134,8 @@ export type EventType =
   | 'escalation_resolved'
   | 'status_request'
   | 'status_response'
-  | 'broadcast';
+  | 'broadcast'
+  | 'human_message';
 
 export interface Event {
   id: string;
@@ -149,6 +150,7 @@ export interface Event {
 // Messages (Inter-Agent Communication)
 export type MessageType =
   | 'task'
+  | 'task_queued'          // Notification that a task was added to queue (wake-up signal)
   | 'status_request'
   | 'status_response'
   | 'decision'
@@ -156,11 +158,12 @@ export type MessageType =
   | 'alert'
   | 'broadcast'
   | 'direct'
+  | 'worker_result'        // Result from MCP worker execution
   | 'pr_approved_by_rag'   // PR passed RAG quality check, needs CEO approval
   | 'pr_rejected'          // PR failed RAG quality check
   | 'pr_review_requested'; // Agent requests RAG to review PR
 
-export type MessagePriority = 'low' | 'normal' | 'high' | 'urgent';
+export type MessagePriority = 'low' | 'normal' | 'high' | 'urgent' | 'critical';
 
 export interface AgentMessage {
   id: string;
@@ -238,4 +241,25 @@ export interface Metric {
   value: number;
   labels: Record<string, string>;
   timestamp: Date;
+}
+
+// MCP Worker Types
+export interface WorkerTask {
+  id: string;
+  parentAgent: AgentType;
+  parentAgentId: string;
+  task: string;               // Natural language task description
+  servers: string[];          // Required MCP servers (e.g., ['telegram', 'directus'])
+  timeout?: number;           // Max execution time in ms (default: 60000)
+  context?: Record<string, unknown>; // Optional context from parent agent
+}
+
+export interface WorkerResult {
+  taskId: string;
+  success: boolean;
+  result?: string;            // Task output description
+  data?: unknown;             // Structured data if any
+  toolsUsed?: string[];       // Which MCP tools were called
+  error?: string;             // Error message if failed
+  duration: number;           // Execution time in ms
 }

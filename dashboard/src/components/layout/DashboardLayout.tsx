@@ -38,6 +38,7 @@ import {
   CheckCircle as HealthyIcon,
   Cancel as UnhealthyIcon,
   Close as CloseIcon,
+  Chat as ChatIcon,
 } from '@mui/icons-material';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -82,6 +83,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const navItems: NavItem[] = [
     { label: 'Overview', href: '/', icon: <DashboardIcon /> },
     { label: 'Agents', href: '/agents', icon: <AgentIcon /> },
+    { label: 'Messages', href: '/messages', icon: <ChatIcon /> },
     { label: 'Workers', href: '/workers', icon: <WorkerIcon /> },
     {
       label: 'Decisions',

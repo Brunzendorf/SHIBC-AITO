@@ -185,6 +185,29 @@ CREATE INDEX idx_workflow_status ON workflow_executions(status);
 CREATE INDEX idx_workflow_started ON workflow_executions(started_at DESC);
 
 -- ============================================
+-- DOMAIN WHITELIST (Security)
+-- ============================================
+-- Dynamic whitelist for trusted domains that workers can access
+
+CREATE TABLE domain_whitelist (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    domain VARCHAR(255) NOT NULL UNIQUE,
+    category VARCHAR(50) NOT NULL,
+    description TEXT,
+    is_active BOOLEAN DEFAULT true,
+    added_by VARCHAR(50) DEFAULT 'system',
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_domain_active ON domain_whitelist(is_active);
+CREATE INDEX idx_domain_category ON domain_whitelist(category);
+
+CREATE TRIGGER update_domain_whitelist_updated_at
+    BEFORE UPDATE ON domain_whitelist
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================
 -- SEED DATA: Default Agents
 -- ============================================
 
@@ -196,6 +219,56 @@ INSERT INTO agents (type, name, profile_path, loop_interval, status) VALUES
     ('cfo', 'CFO Agent', '/profiles/cfo.md', 21600, 'inactive'),
     ('coo', 'COO Agent', '/profiles/coo.md', 7200, 'inactive'),
     ('cco', 'CCO Agent', '/profiles/cco.md', 86400, 'inactive');
+
+-- ============================================
+-- SEED DATA: Domain Whitelist
+-- ============================================
+
+INSERT INTO domain_whitelist (domain, category, description) VALUES
+    -- Crypto Data Providers (API)
+    ('api.coingecko.com', 'crypto_data', 'CoinGecko API - Cryptocurrency prices and market data'),
+    ('pro-api.coinmarketcap.com', 'crypto_data', 'CoinMarketCap Pro API'),
+    ('api.etherscan.io', 'blockchain', 'Etherscan API - Ethereum blockchain data'),
+    ('api-etc.etcmainnet.ethereumclassic.org', 'blockchain', 'ETC Mainnet API'),
+
+    -- Official Info Sources
+    ('coingecko.com', 'crypto_data', 'CoinGecko website'),
+    ('coinmarketcap.com', 'crypto_data', 'CoinMarketCap website'),
+    ('etherscan.io', 'blockchain', 'Etherscan block explorer'),
+    ('blockscout.com', 'blockchain', 'Blockscout explorer'),
+    ('dexscreener.com', 'crypto_data', 'DEX Screener - DEX analytics'),
+
+    -- News & Content (Trusted)
+    ('cointelegraph.com', 'news', 'Cointelegraph - Crypto news'),
+    ('coindesk.com', 'news', 'CoinDesk - Crypto news'),
+    ('theblock.co', 'news', 'The Block - Crypto news'),
+    ('decrypt.co', 'news', 'Decrypt - Crypto news'),
+    ('cryptonews.com', 'news', 'Crypto News'),
+
+    -- Social (Read-Only)
+    ('twitter.com', 'social', 'Twitter/X'),
+    ('x.com', 'social', 'X (Twitter)'),
+    ('reddit.com', 'social', 'Reddit'),
+    ('telegram.org', 'social', 'Telegram'),
+    ('t.me', 'social', 'Telegram short links'),
+
+    -- GitHub (Official)
+    ('github.com', 'development', 'GitHub repositories'),
+    ('raw.githubusercontent.com', 'development', 'GitHub raw content'),
+
+    -- Our Own Infrastructure
+    ('shibaclassic.io', 'internal', 'Shiba Classic official website'),
+    ('directus.shibaclassic.io', 'internal', 'Directus CMS'),
+    ('api.shibaclassic.io', 'internal', 'Shiba Classic API'),
+
+    -- Ethereum Classic
+    ('ethereumclassic.org', 'blockchain', 'Ethereum Classic official'),
+
+    -- Audit Providers (Trusted)
+    ('certik.com', 'audit', 'CertiK - Security audits'),
+    ('hacken.io', 'audit', 'Hacken - Security audits'),
+    ('solidproof.io', 'audit', 'SolidProof - Security audits'),
+    ('cyberscope.io', 'audit', 'Cyberscope - Security audits');
 
 -- ============================================
 -- FUNCTIONS

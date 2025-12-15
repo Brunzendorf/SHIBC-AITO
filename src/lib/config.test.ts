@@ -26,7 +26,7 @@ describe('Config', () => {
     it('should use default values', async () => {
       process.env.POSTGRES_URL = 'postgresql://test:test@localhost:5432/test';
 
-      const { config, numericConfig } = await import('./config.js');
+      const { config } = await import('./config.js');
 
       expect(config.PORT).toBe('8080');
       expect(config.NODE_ENV).toBe('test'); // Set in setup.ts

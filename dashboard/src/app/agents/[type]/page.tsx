@@ -328,7 +328,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ type: st
                                   <Box key={idx} sx={{ display: 'flex', gap: 1, alignItems: 'flex-start' }}>
                                     <Chip label={action.type} size="small" variant="outlined" sx={{ fontSize: '0.65rem' }} />
                                     <Typography variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace' }}>
-                                      {JSON.stringify(action.data, null, 0).slice(0, 200)}...
+                                      {(JSON.stringify(action.data ?? action, null, 0) || '{}').slice(0, 200)}...
                                     </Typography>
                                   </Box>
                                 ))}

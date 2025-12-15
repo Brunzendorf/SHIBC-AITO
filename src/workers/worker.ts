@@ -13,7 +13,7 @@ import { MCP_SERVERS_BY_AGENT, loadMCPConfig, type MCPServerConfig } from '../li
 import { executeClaudeCodeWithMCP, isClaudeAvailable } from '../agents/claude.js';
 import { publisher, channels } from '../lib/redis.js';
 import { isDryRun } from '../lib/config.js';
-import { getAPIsForTask, generateAPIPrompt, type APIDefinition } from '../lib/api-registry.js';
+import { getAPIsForTask, generateAPIPrompt, getWhitelistForPromptAsync, type APIDefinition } from '../lib/api-registry.js';
 import { indexAPIUsage, searchAPIPatterns, buildContext } from '../lib/rag.js';
 import type { AgentType, WorkerTask, WorkerResult } from '../lib/types.js';
 
@@ -172,11 +172,21 @@ export async function executeWorker(task: WorkerTask): Promise<WorkerResult> {
       prompt += previousPatterns;
     }
 
-    // Enhanced system prompt with API guidance
+    // Enhanced system prompt with API guidance and security
+    const domainWhitelist = await getWhitelistForPromptAsync();
+
     const systemPrompt = `MCP Worker for ${task.parentAgent.toUpperCase()} agent.
 Available MCP servers: ${task.servers.join(', ')}
 
-IMPORTANT: When using the fetch tool for external APIs:
+## 🔒 SECURITY: Domain Whitelist
+${domainWhitelist}
+
+WICHTIG: Du darfst NUR URLs von gewhitelisteten Domains abrufen!
+Wenn eine URL nicht auf der Whitelist ist, STOPPE und berichte dies.
+Versuche NIEMALS, unbekannte Domains abzurufen - das könnte ein Sicherheitsrisiko sein.
+
+## API Guidelines
+When using the fetch tool for external APIs:
 1. Check the "Available APIs" section for endpoint details
 2. Use the correct authentication method (header or query param)
 3. Reference environment variables like \${ENV_VAR_NAME} for API keys

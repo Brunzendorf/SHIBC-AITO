@@ -6,15 +6,31 @@
 import { spawn } from 'child_process';
 import { createLogger } from '../lib/logger.js';
 import type { AgentProfile } from './profile.js';
-import type { StateManager } from './state.js';
 
 const logger = createLogger('claude');
+
+// Retry configuration
+export const RETRY_CONFIG = {
+  maxRetries: 3,
+  baseDelayMs: 5000,      // 5 seconds initial delay
+  maxDelayMs: 60000,      // 60 seconds max delay
+  retryableErrors: [
+    'overloaded_error',
+    'overloaded',
+    'rate_limit',
+    'timeout',
+    '529',
+    '503',
+    '502',
+  ],
+};
 
 export interface ClaudeSession {
   prompt: string;
   systemPrompt?: string;
   maxTokens?: number;
   timeout?: number; // ms
+  maxRetries?: number; // Override default retries
 }
 
 export interface ClaudeResult {
@@ -22,6 +38,34 @@ export interface ClaudeResult {
   output: string;
   error?: string;
   durationMs: number;
+  retryable?: boolean;
+  retriesUsed?: number;
+}
+
+/**
+ * Sleep helper for retry delays
+ */
+export function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Check if an error is retryable (API overload, rate limit, etc.)
+ */
+export function isRetryableError(error: string | undefined, output: string): boolean {
+  if (!error && !output) return false;
+
+  const combined = ((error || '') + ' ' + output).toLowerCase();
+  return RETRY_CONFIG.retryableErrors.some(e => combined.includes(e.toLowerCase()));
+}
+
+/**
+ * Calculate delay with exponential backoff + jitter
+ */
+export function calculateBackoffDelay(attempt: number): number {
+  const exponentialDelay = RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt);
+  const jitter = Math.random() * 1000; // 0-1 second jitter
+  return Math.min(exponentialDelay + jitter, RETRY_CONFIG.maxDelayMs);
 }
 
 /**
@@ -109,24 +153,29 @@ export async function executeClaudeCode(session: ClaudeSession): Promise<ClaudeR
           durationMs,
         });
       } else {
-        logger.error({ code, stderr, durationMs }, 'Claude execution failed');
+        const errorMsg = stderr.trim() || 'Exit code: ' + code;
+        const retryable = isRetryableError(errorMsg, stdout);
+        logger.error({ code, stderr, durationMs, retryable }, 'Claude execution failed');
         resolve({
           success: false,
           output: stdout.trim(),
-          error: stderr.trim() || 'Exit code: ' + code,
+          error: errorMsg,
           durationMs,
+          retryable,
         });
       }
     });
 
     proc.on('error', (error) => {
       const durationMs = Date.now() - startTime;
-      logger.error({ error, durationMs }, 'Claude spawn error');
+      const retryable = isRetryableError(error.message, '');
+      logger.error({ error, durationMs, retryable }, 'Claude spawn error');
       resolve({
         success: false,
         output: '',
         error: error.message,
         durationMs,
+        retryable,
       });
     });
 
@@ -140,6 +189,7 @@ export async function executeClaudeCode(session: ClaudeSession): Promise<ClaudeR
         output: stdout.trim(),
         error: 'Execution timed out after ' + timeout + 'ms',
         durationMs,
+        retryable: true, // Timeouts are retryable
       });
     }, timeout);
 
@@ -147,6 +197,56 @@ export async function executeClaudeCode(session: ClaudeSession): Promise<ClaudeR
       clearTimeout(timeoutId);
     });
   });
+}
+
+/**
+ * Execute Claude Code CLI with automatic retry on transient errors
+ * Uses exponential backoff for overload/rate limit errors
+ */
+export async function executeClaudeCodeWithRetry(session: ClaudeSession): Promise<ClaudeResult> {
+  const maxRetries = session.maxRetries ?? RETRY_CONFIG.maxRetries;
+  let lastResult: ClaudeResult | null = null;
+  let totalDurationMs = 0;
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (attempt > 0) {
+      const delay = calculateBackoffDelay(attempt - 1);
+      logger.info({ attempt, delay, maxRetries }, 'Retrying Claude execution after delay');
+      await sleep(delay);
+    }
+
+    const result = await executeClaudeCode(session);
+    totalDurationMs += result.durationMs;
+    lastResult = result;
+
+    // Success - return immediately
+    if (result.success) {
+      if (attempt > 0) {
+        logger.info({ attempt, totalDurationMs }, 'Claude execution succeeded after retry');
+      }
+      return { ...result, retriesUsed: attempt };
+    }
+
+    // Check if error is retryable
+    if (!result.retryable) {
+      logger.warn({ attempt, error: result.error }, 'Non-retryable error, giving up');
+      return { ...result, retriesUsed: attempt };
+    }
+
+    // Log retry attempt
+    logger.warn(
+      { attempt, maxRetries, error: result.error },
+      'Retryable error encountered, will retry'
+    );
+  }
+
+  // All retries exhausted
+  logger.error({ maxRetries, totalDurationMs }, 'All retry attempts exhausted');
+  return {
+    ...lastResult!,
+    durationMs: totalDurationMs,
+    retriesUsed: maxRetries,
+  };
 }
 
 /**
@@ -164,18 +264,39 @@ export interface PendingDecision {
 /**
  * Build context prompt for agent loop
  */
+export interface PendingTask {
+  title: string;
+  description: string;
+  priority: string;
+  from: string;
+}
+
 export function buildLoopPrompt(
   profile: AgentProfile,
   state: Record<string, unknown>,
   trigger: { type: string; data?: unknown },
   pendingDecisions?: PendingDecision[],
-  ragContext?: string
+  ragContext?: string,
+  pendingTasks?: PendingTask[]
 ): string {
+  // Current date/time for agent awareness
+  const now = new Date();
+  const currentDate = now.toISOString().split('T')[0]; // YYYY-MM-DD
+  const currentTime = now.toISOString().split('T')[1].split('.')[0]; // HH:MM:SS
+  const quarter = 'Q' + (Math.floor(now.getMonth() / 3) + 1);
+  const year = now.getFullYear();
+
   const parts = [
     '# Agent Loop Execution',
     '',
     '## Agent: ' + profile.name + ' (' + profile.codename + ')',
     '## Trigger: ' + trigger.type,
+    '',
+    '## 📅 Current Date & Time',
+    '- **Date:** ' + currentDate,
+    '- **Time (UTC):** ' + currentTime,
+    '- **Quarter:** ' + quarter + ' ' + year,
+    '- **Year:** ' + year,
     '',
     '## Current State',
     '```json',
@@ -197,6 +318,30 @@ export function buildLoopPrompt(
   // Add RAG context if available
   if (ragContext) {
     parts.push(ragContext, '');
+  }
+
+  // Add pending tasks from queue - CRITICAL: Show tasks agents need to work on!
+  if (pendingTasks && pendingTasks.length > 0) {
+    parts.push(
+      '## 📋 PENDING TASKS FOR YOU',
+      '',
+      '🚨 **YOU HAVE TASKS WAITING! Address these in your response!**',
+      ''
+    );
+    for (const task of pendingTasks) {
+      const priorityIcon = task.priority === 'critical' ? '🔴' : task.priority === 'high' ? '🟠' : '🟢';
+      parts.push(
+        '### ' + priorityIcon + ' ' + task.title,
+        '- **Priority:** ' + task.priority.toUpperCase(),
+        '- **From:** ' + task.from,
+        task.description ? '- **Details:** ' + task.description.slice(0, 500) : '',
+        ''
+      );
+    }
+    parts.push(
+      '**Respond to these tasks in your summary!** Acknowledge receipt and provide status/action.',
+      ''
+    );
   }
 
   // Add pending decisions for HEAD agents (CEO/DAO)
@@ -233,6 +378,54 @@ export function buildLoopPrompt(
     'Execute your loop according to your profile.',
     'Analyze the current state and trigger.',
     'Take appropriate actions and return results.',
+    '',
+    '## 🚨 MANDATORY: Data Fetching Protocol',
+    '',
+    '**YOU MUST SPAWN WORKERS BEFORE REPORTING ANY DATA!**',
+    '',
+    '⛔ FORBIDDEN without spawn_worker first:',
+    '- Stating prices, balances, or market data',
+    '- Claiming treasury values or holder counts',
+    '- Reporting metrics or KPIs',
+    '- Any numbers that come from external sources',
+    '',
+    '✅ CORRECT WORKFLOW:',
+    '1. FIRST action: spawn_worker to fetch real data',
+    '2. WAIT for worker_result (next loop will have it)',
+    '3. ONLY THEN report the actual numbers',
+    '',
+    '❌ WRONG: "Treasury at $187" without spawn_worker',
+    '✅ RIGHT: spawn_worker → wait → then report real number',
+    '',
+    'If you need data but have no worker_result, say: "Data pending - spawned worker to fetch"',
+    '',
+    '## 🔍 PROACTIVE INTELLIGENCE GATHERING',
+    '',
+    '**You are an autonomous AI manager. DO NOT wait for information - SEARCH FOR IT!**',
+    '',
+    'You manage **Shiba Classic ($SHIBC)** - a real crypto project. Use spawn_worker with `fetch` to:',
+    '',
+    '### Project Sources to Monitor:',
+    '- **GitHub:** https://github.com/Shiba-Classic - Check repos, PRs, issues, releases',
+    '- **CoinGecko:** https://api.coingecko.com/api/v3/coins/shiba-classic-2 - Token data, description, links',
+    '- **Website:** https://shibaclassic.io - Official announcements',
+    '- **Etherscan:** Token contract, holder data, transactions',
+    '',
+    '### What to Search For:',
+    '- Security audits, contract audits',
+    '- Development progress, releases',
+    '- Partnership announcements',
+    '- Community updates',
+    '- Market movements, whale activity',
+    '',
+    '### Example - Proactive Search:',
+    '```json',
+    '{"actions": [',
+    '  {"type": "spawn_worker", "task": "Fetch https://api.coingecko.com/api/v3/coins/shiba-classic-2 and report project description, links, and any audit information", "servers": ["fetch"]}',
+    ']}',
+    '```',
+    '',
+    '**If you don\'t know something about YOUR OWN PROJECT - search for it! Don\'t assume or escalate blindly.**',
     '',
     '## IMPORTANT: You have TOOLS available!',
     '',
@@ -282,6 +475,13 @@ export function buildLoopPrompt(
     '{ "type": "alert", "data": { "alertType": "general|security|budget", "severity": "low|medium|high|critical", "message": "..." } }',
     '```',
     '',
+    '### spawn_worker - Execute external API tasks via MCP workers',
+    '⚠️ **USE THIS for ANY external data fetching!** (prices, balances, blockchain data)',
+    '```json',
+    '{ "type": "spawn_worker", "task": "Get ETH balance of 0x... from Etherscan", "servers": ["etherscan"], "timeout": 60000 }',
+    '```',
+    'Available servers: etherscan, fetch, filesystem, telegram (check your profile for which you can use)',
+    '',
     '## Expected Output Format',
     'After using your tools for any file operations, output this JSON:',
     '```json',
@@ -324,6 +524,73 @@ export function parseClaudeOutput(output: string): {
     }
     return null;
   }
+}
+
+
+
+export interface ClaudeSessionWithMCP extends ClaudeSession {
+  mcpConfigPath?: string;
+}
+
+/**
+ * Execute Claude Code CLI with MCP config for native MCP tool access
+ */
+export async function executeClaudeCodeWithMCP(session: ClaudeSessionWithMCP): Promise<ClaudeResult> {
+  const startTime = Date.now();
+  const timeout = session.timeout || 300000;
+
+  logger.info({ promptLength: session.prompt.length, timeout, mcpConfig: session.mcpConfigPath }, 'Executing Claude Code with MCP');
+
+  return new Promise((resolve) => {
+    const args = ['--print', '--dangerously-skip-permissions'];
+
+    if (session.mcpConfigPath) {
+      args.push('--mcp-config', session.mcpConfigPath);
+    }
+
+    if (session.systemPrompt) {
+      args.push('--system-prompt', session.systemPrompt);
+    }
+
+    args.push(session.prompt);
+
+    const proc = spawn('claude', args, {
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: '/app/workspace',
+      env: { ...process.env, CI: 'true' },
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout?.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr?.on('data', (data) => { stderr += data.toString(); });
+
+    proc.on('close', (code) => {
+      const durationMs = Date.now() - startTime;
+      if (code === 0) {
+        logger.info({ durationMs, outputLength: stdout.length }, 'Claude MCP execution completed');
+        resolve({ success: true, output: stdout.trim(), durationMs });
+      } else {
+        logger.error({ code, stderr, durationMs }, 'Claude MCP execution failed');
+        resolve({ success: false, output: stdout.trim(), error: stderr.trim() || 'Exit code: ' + code, durationMs });
+      }
+    });
+
+    proc.on('error', (error) => {
+      const durationMs = Date.now() - startTime;
+      logger.error({ error, durationMs }, 'Claude MCP spawn error');
+      resolve({ success: false, output: '', error: error.message, durationMs });
+    });
+
+    const timeoutId = setTimeout(() => {
+      proc.kill('SIGTERM');
+      resolve({ success: false, output: stdout.trim(), error: 'Execution timed out', durationMs: Date.now() - startTime });
+    }, timeout);
+
+    proc.on('close', () => clearTimeout(timeoutId));
+  });
 }
 
 /**

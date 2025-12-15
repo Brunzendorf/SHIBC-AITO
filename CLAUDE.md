@@ -1,167 +1,153 @@
-# SHIBC-AITO - Claude Code Context
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-**AITO (AI Autonomous Operations)** - Autonomous AI CEO System for Shiba Classic ($SHIBC)
+**AITO 3.0 (AI Autonomous Operations)** - Autonomous AI Agent System for Shiba Classic ($SHIBC)
 
-## Repository Structure
+A multi-agent system where AI agents (CEO, CMO, CTO, CFO, COO, CCO, DAO) collaborate autonomously to manage the Shiba Classic project.
 
-This project spans **two repositories**:
-
-### 1. SHIBC-AITO (THIS REPO)
-- **URL:** https://github.com/Brunzendorf/SHIBC-AITO
-- **Purpose:** AITO autonomous agent system code
-- **Contains:** Orchestrator, Agent containers, MCP servers, workflows
-
-### 2. shiba-classic-website (ISSUES REPO)
-- **URL:** https://github.com/og-shibaclassic/shiba-classic-website
-- **Purpose:** Main website + Issue tracking for ALL SHIBC projects
-- **Contains:** Website code, GitHub Issues for AITO (#21-#37)
-
-## GitHub Issues Reference
-
-All AITO issues are tracked in `og-shibaclassic/shiba-classic-website`:
-
-| # | Issue | Priority |
-|---|-------|----------|
-| #25 | Orchestrator Container | CRITICAL |
-| #26 | Base Agent Container | CRITICAL |
-| #36 | Database Schema | CRITICAL |
-| #27 | CEO Agent | HIGH |
-| #28 | DAO Agent | HIGH |
-| #31-#35 | C-Level Agents | HIGH/MEDIUM |
-| #29 | N8N Workflows | HIGH |
-| #30 | Ollama Integration | HIGH |
-| #37 | Human Escalation | HIGH |
-
-## Architecture
-
-```
-Orchestrator (Always Running, NO AI)
-├── Container Lifecycle (Docker-in-Docker)
-├── Event Bus (Redis Pub/Sub)
-├── Scheduler (Cron for Agent Loops)
-├── Health Checks
-└── Human Escalation Interface
-
-HEAD Layer (CEO + DAO)
-├── Veto System (3 rounds → Human)
-└── Major Decision Approval
-
-C-Level Layer (CMO, CTO, CFO, COO, CCO)
-├── Department-specific loops
-├── Own Git domains
-└── Worker spawning
-
-Workers (On-Demand)
-└── Spawned by C-Level, auto-terminate
-```
-
-## Tech Stack
-
-- **Runtime:** Node.js 20+ / TypeScript 5.3+
-- **AI:** Claude Code CLI (Max Plan $200/mo) + Ollama (local)
-- **Database:** PostgreSQL 15 (pgvector) + Redis 7
-- **Workflows:** N8N (self-hosted)
-- **Translation:** DeepL API (500k chars/mo free)
-- **Container:** Docker with Docker-in-Docker
-
-## Key Design Decisions
-
-| Decision | Choice | Reason |
-|----------|--------|--------|
-| AI Engine | Claude Code CLI | $200/mo flat vs $12k API |
-| AI Trigger | Event-based | No 24/7 AI cost |
-| State | PostgreSQL | ACID, JSONB, pgvector |
-| Cache/Pub-Sub | Redis | Fast, reliable |
-| Git | Mono-repo | Managers see big picture |
-| Human Interface | Multi-channel | Telegram + Dashboard + Email |
-
-## Development Commands
+## Quick Start
 
 ```bash
-# Start infrastructure
-docker-compose up -d postgres redis ollama qdrant
+# Start all services
+docker compose up -d
 
-# Start orchestrator (dev mode)
-npm run dev
+# View logs
+docker logs -f aito-cmo
 
-# Build orchestrator
-npm run build
-
-# Run tests
-npm test
-
-# Type check
-npm run typecheck
+# Send test message to agent
+docker exec aito-redis redis-cli PUBLISH "channel:agent:<AGENT_UUID>" '{"type":"task","from":"human","payload":{"title":"Test"}}'
 ```
 
-## Agent Execution Model
+## Architecture Overview
 
 ```
-Lightweight Daemon (Node.js, 24/7, NO AI cost)
-├── Redis Subscribe (events)
-├── Cron (scheduled intervals)
-├── Webhooks (external triggers)
-│
-└── ONLY on trigger:
-    Claude Code Session
-    ├── Load context (profile + state + RAG)
-    ├── Execute task
-    ├── Persist result
-    └── Terminate
+Dashboard (Next.js) --> Redis Pub/Sub --> Agents (CEO, CMO, CTO, CFO, COO, CCO, DAO)
+                                              |
+                                         MCP Workers
+                                              |
+                            [Telegram] [Filesystem] [Fetch]
 ```
+
+## MCP Worker System
+
+Agents use **MCP Workers** for external tool access. Workers are short-lived Claude Code sessions with native MCP tool access.
+
+### Spawn Worker Format (CRITICAL)
+
+```json
+{
+  "actions": [{
+    "type": "spawn_worker",
+    "task": "Send message to Telegram channel -1002876952840: Hello!",
+    "servers": ["telegram"],
+    "timeout": 60000
+  }]
+}
+```
+
+### Available MCP Servers
+
+- `telegram` - Telegram Bot API
+- `fetch` - HTTP requests  
+- `filesystem` - File access
+
+## Agent Communication
+
+Redis channels:
+- `channel:agent:<uuid>` - Direct messages
+- `channel:broadcast` - All-agent broadcasts
+- `channel:worker:logs` - Worker logs for dashboard
+
+Message types that trigger AI: `task`, `decision`, `alert`, `vote`, `worker_result`
 
 ## File Structure
 
 ```
 src/
-├── orchestrator/          # Central coordinator
-│   ├── index.ts           # Entry point
-│   ├── container.ts       # Docker management
-│   ├── scheduler.ts       # Cron jobs
-│   ├── events.ts          # Redis Pub/Sub
-│   ├── health.ts          # Health checks
-│   └── api.ts             # REST API
-├── agents/                # Agent base classes
-│   ├── base.ts            # BaseAgent class
-│   ├── daemon.ts          # Lightweight daemon
-│   └── claude.ts          # Claude Code integration
-├── lib/                   # Shared libraries
-│   ├── db.ts              # PostgreSQL client
-│   ├── redis.ts           # Redis client
-│   ├── ollama.ts          # Ollama client
-│   └── types.ts           # TypeScript types
-└── mcp/                   # Custom MCP servers
-    ├── state/             # Agent state MCP
-    ├── events/            # Event bus MCP
-    └── tasks/             # Task management MCP
+├── agents/           # Agent daemon, Claude, profile, state
+├── workers/          # MCP Worker implementation
+├── lib/              # DB, Redis, logger, types
+└── orchestrator/     # Main entry
+
+profiles/             # Agent markdown profiles
+dashboard/            # Next.js web UI
+docker/               # Dockerfiles
+.claude/mcp_servers.json
 ```
 
-## Environment Variables
+## Key Files
 
-See `.env.example` for full list. Key ones:
+| File | Purpose |
+|------|---------|
+| `src/workers/worker.ts` | MCP Worker with dynamic config |
+| `src/workers/spawner.ts` | Async worker spawning, publishes to Redis |
+| `src/agents/daemon.ts` | Agent loop, handles spawn_worker |
+| `src/agents/claude.ts` | Claude Code CLI execution, output parsing |
+| `src/agents/profile.ts` | Profile loading, MCP section extraction |
+| `src/lib/rag.ts` | RAG system with Qdrant + Ollama embeddings |
+| `profiles/*.md` | Agent profiles with MCP docs |
+
+## Development
 
 ```bash
-# Database
-POSTGRES_URL=postgres://aito:password@localhost:5432/aito
-REDIS_URL=redis://localhost:6379
+# Install dependencies
+npm install
 
-# Docker
-DOCKER_SOCKET=/var/run/docker.sock
+# Development mode (hot reload)
+npm run dev
 
-# AI
-ANTHROPIC_API_KEY=sk-...  # Fallback only
-OLLAMA_URL=http://localhost:11434
+# Build TypeScript
+npm run build
 
-# Communication
-TELEGRAM_BOT_TOKEN=...
-TELEGRAM_ADMIN_CHAT_ID=...
+# Type check without emit
+npm run typecheck
+
+# Run tests
+npm test                  # Single run
+npm run test:watch        # Watch mode
+npm run test:coverage     # With coverage
+
+# Lint
+npm run lint
+
+# Database migrations
+npm run db:migrate
+npm run db:seed
 ```
 
-## Notes
+### Dashboard Development
 
-- Orchestrator runs 24/7 but uses NO AI (pure Node.js)
-- AI (Claude Code) only invoked on specific triggers
-- Each agent has own profile in `/profiles/{agent}.md`
-- Veto deadlock after 3 rounds → Human decides
+```bash
+cd dashboard
+npm install
+npm run dev              # http://localhost:3000
+```
+
+### Docker (Production)
+
+```bash
+# Start all infrastructure
+docker compose up -d
+
+# Start with agents
+docker compose --profile agents up -d
+
+# Rebuild specific service
+docker compose up -d --build cmo-agent
+```
+
+### Environment Setup
+
+```bash
+cp .env.example .env
+# Edit .env with required credentials (POSTGRES_PASSWORD, N8N_ENCRYPTION_KEY, etc.)
+```
+
+## Troubleshooting
+
+- **Wrong spawn_worker format**: Check profile has MCP Workers section
+- **Invalid action error**: Need `type`, `task`, `servers` fields
+- **Claude unavailable**: Check auth in container

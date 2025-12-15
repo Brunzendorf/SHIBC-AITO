@@ -5,6 +5,7 @@ import { agentRepo, eventRepo } from '../lib/db.js';
 import { publish, channels } from '../lib/redis.js';
 import { agentConfigs, numericConfig } from '../lib/config.js';
 import { autoRestartUnhealthy } from './container.js';
+import { runArchiveWorker, getArchiveStats } from '../workers/archive-worker.js';
 import type { AgentType, ScheduledJob, AgentMessage } from '../lib/types.js';
 
 const logger = createLogger('scheduler');
@@ -113,8 +114,7 @@ async function triggerAgentLoop(agentId: string, agentType: AgentType): Promise<
 }
 
 // Get next run time from cron expression
-function getNextRun(cronExpression: string): Date {
-  const interval = cron.schedule(cronExpression, () => {});
+function getNextRun(_cronExpression: string): Date {
   // Note: node-cron doesn't have a native "next run" method
   // This is a simplified estimation
   const now = new Date();
@@ -159,6 +159,38 @@ export function scheduleEscalationChecks(): string {
   const task = cron.schedule(cronExpression, async () => {
     logger.debug('Checking escalation timeouts');
     // Implementation in escalation module
+  });
+
+  jobs.set(jobId, task);
+  jobMetadata.set(jobId, {
+    id: jobId,
+    agentId: 'system',
+    cronExpression,
+    enabled: true,
+  });
+
+  return jobId;
+}
+
+// Schedule Archive Worker - intelligent RAG knowledge curation
+export function scheduleArchiveWorker(): string {
+  const jobId = 'archive-worker';
+  const cronExpression = '*/15 * * * *'; // Every 15 minutes
+
+  logger.info({ cronExpression }, 'Scheduling Archive Worker');
+
+  const task = cron.schedule(cronExpression, async () => {
+    try {
+      const stats = await getArchiveStats();
+      if (stats.queueLength > 0) {
+        logger.info({ queueLength: stats.queueLength }, 'Running Archive Worker');
+        await runArchiveWorker();
+      } else {
+        logger.debug('Archive queue empty, skipping');
+      }
+    } catch (err) {
+      logger.error({ err }, 'Archive Worker failed');
+    }
   });
 
   jobs.set(jobId, task);
@@ -291,6 +323,7 @@ export async function initialize(): Promise<void> {
   scheduleHealthChecks();
   scheduleEscalationChecks();
   scheduleDailyDigest();
+  scheduleArchiveWorker();
 
   // Schedule agent loops
   await initializeAgentSchedules();

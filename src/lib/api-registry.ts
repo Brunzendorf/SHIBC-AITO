@@ -53,6 +53,126 @@ export interface APIDefinition {
 export type APIDomain = 'finance' | 'blockchain' | 'content' | 'social' | 'general';
 
 // ============================================
+// DOMAIN WHITELIST - Dynamic from PostgreSQL
+// ============================================
+// Loaded dynamically from database for easy management
+// Use the /whitelist API or dashboard to add/remove domains
+
+import { domainWhitelistRepo, type DomainWhitelist } from './db.js';
+
+// Cache for whitelist (refreshed periodically)
+let cachedWhitelist: string[] = [];
+let cacheTimestamp = 0;
+const CACHE_TTL_MS = 60000; // 1 minute cache
+
+/**
+ * Load whitelist from database with caching
+ */
+async function loadWhitelist(): Promise<string[]> {
+  const now = Date.now();
+  if (cachedWhitelist.length > 0 && now - cacheTimestamp < CACHE_TTL_MS) {
+    return cachedWhitelist;
+  }
+
+  try {
+    cachedWhitelist = await domainWhitelistRepo.getAllDomains();
+    cacheTimestamp = now;
+    logger.info({ count: cachedWhitelist.length }, 'Domain whitelist loaded from DB');
+    return cachedWhitelist;
+  } catch (error) {
+    logger.warn({ error }, 'Failed to load whitelist from DB, using cached');
+    return cachedWhitelist;
+  }
+}
+
+/**
+ * Check if a URL's domain is in the whitelist (async - uses DB)
+ */
+export async function isDomainWhitelistedAsync(url: string): Promise<boolean> {
+  try {
+    const urlObj = new URL(url);
+    const domain = urlObj.hostname.toLowerCase();
+    return domainWhitelistRepo.isDomainWhitelisted(domain);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if a URL's domain is in the whitelist (sync - uses cache)
+ */
+export function isDomainWhitelisted(url: string): boolean {
+  try {
+    const urlObj = new URL(url);
+    const domain = urlObj.hostname.toLowerCase();
+
+    return cachedWhitelist.some(trusted => {
+      return domain === trusted || domain.endsWith('.' + trusted);
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get whitelist as formatted string for prompts (async - loads from DB)
+ */
+export async function getWhitelistForPromptAsync(): Promise<string> {
+  try {
+    const whitelist = await domainWhitelistRepo.getAll();
+    const byCategory: Record<string, string[]> = {};
+
+    for (const entry of whitelist) {
+      if (!byCategory[entry.category]) {
+        byCategory[entry.category] = [];
+      }
+      byCategory[entry.category].push(entry.domain);
+    }
+
+    let result = '**Trusted Domains for Web Search (from Database):**\n';
+    for (const [category, domains] of Object.entries(byCategory)) {
+      result += `- ${category}: ${domains.join(', ')}\n`;
+    }
+    result += '\n⚠️ WICHTIG: Nur diese Domains sind erlaubt! Unbekannte Domains → Eskalation an Human Oversight.';
+    result += '\n💡 Neue Domains können über das Dashboard hinzugefügt werden.';
+    return result;
+  } catch (error) {
+    logger.warn({ error }, 'Failed to load whitelist for prompt');
+    return '**Domain Whitelist:** Konnte nicht geladen werden - bitte auf bekannte Domains beschränken.';
+  }
+}
+
+/**
+ * Get whitelist as formatted string (sync - uses cache)
+ */
+export function getWhitelistForPrompt(): string {
+  if (cachedWhitelist.length === 0) {
+    // Fallback if cache empty
+    return '**Domain Whitelist:** Wird geladen... Bitte auf bekannte sichere Domains beschränken.';
+  }
+
+  let result = '**Trusted Domains:**\n';
+  result += cachedWhitelist.join(', ');
+  result += '\n\n⚠️ WICHTIG: Nur diese Domains sind erlaubt! Unbekannte Domains → Eskalation an Human Oversight.';
+  return result;
+}
+
+/**
+ * Initialize whitelist cache on startup
+ */
+export async function initializeWhitelistCache(): Promise<void> {
+  await loadWhitelist();
+}
+
+/**
+ * Force refresh of whitelist cache
+ */
+export async function refreshWhitelistCache(): Promise<string[]> {
+  cacheTimestamp = 0;
+  return loadWhitelist();
+}
+
+// ============================================
 // API DEFINITIONS (NO KEYS!)
 // ============================================
 

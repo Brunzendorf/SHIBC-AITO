@@ -6,6 +6,7 @@ FROM node:20-slim AS base
 
 # Install required tools
 RUN apt-get update && apt-get install -y \
+    procps \
     curl \
     bash \
     git \
@@ -70,6 +71,7 @@ FROM node:20-slim AS production
 
 # Install runtime tools
 RUN apt-get update && apt-get install -y \
+    procps \
     curl \
     bash \
     git \
@@ -116,6 +118,13 @@ ENV CLAUDE_CONFIG_DIR=/app/.claude
 
 # Switch to non-root user
 USER agent
+
+# Configure git safe.directory for workspace (fixes "dubious ownership" with volume mounts)
+# Must run AFTER USER switch so config is written to agent's home
+RUN git config --global --add safe.directory /app/workspace && \
+    git config --global --add safe.directory '*' && \
+    git config --global user.email "agent@shibaclassic.io" && \
+    git config --global user.name "AITO Agent"
 
 # Expose agent port (for health checks)
 EXPOSE 3001

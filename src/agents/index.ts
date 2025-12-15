@@ -44,7 +44,7 @@ async function main(): Promise<void> {
   const healthPort = parseInt(process.env.HEALTH_PORT || '3001', 10);
   const app = express();
 
-  app.get('/health', async (req, res) => {
+  app.get('/health', async (_req, res) => {
     try {
       const status = await daemon.getHealthStatus();
       res.json(status);
@@ -53,7 +53,7 @@ async function main(): Promise<void> {
     }
   });
 
-  app.get('/ready', async (req, res) => {
+  app.get('/ready', async (_req, res) => {
     try {
       const status = await daemon.getHealthStatus();
       if (status.healthy) {

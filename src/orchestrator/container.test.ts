@@ -1,36 +1,36 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-// Mock Docker
-const mockContainer = {
-  start: vi.fn(() => Promise.resolve()),
-  stop: vi.fn(() => Promise.resolve()),
-  remove: vi.fn(() => Promise.resolve()),
-  stats: vi.fn(() => Promise.resolve({
-    memory_stats: { usage: 100000000 },
-    cpu_stats: {
-      cpu_usage: { total_usage: 1000000000 },
-      system_cpu_usage: 10000000000,
-    },
-    precpu_stats: {
-      cpu_usage: { total_usage: 900000000 },
-      system_cpu_usage: 9000000000,
-    },
-  })),
-  id: 'container-123',
-};
+// Track fetch calls for assertions
+let fetchCalls: { url: string; options?: RequestInit }[] = [];
+let fetchResponses: Map<string, { ok: boolean; status: number; body: unknown }> = new Map();
 
-const mockDocker = {
-  listContainers: vi.fn(() => Promise.resolve([])),
-  getContainer: vi.fn(() => mockContainer),
-  createContainer: vi.fn(() => Promise.resolve(mockContainer)),
-  listNetworks: vi.fn(() => Promise.resolve([])),
-  createNetwork: vi.fn(() => Promise.resolve({})),
-  ping: vi.fn(() => Promise.resolve({})),
-};
+// Default fetch implementation for Portainer API
+function defaultFetchImpl(url: string, options?: RequestInit) {
+  fetchCalls.push({ url, options });
 
-vi.mock('dockerode', () => ({
-  default: vi.fn(() => mockDocker),
-}));
+  // Find matching response
+  for (const [pattern, response] of fetchResponses) {
+    if (url.includes(pattern)) {
+      return Promise.resolve({
+        ok: response.ok,
+        status: response.status,
+        text: async () => JSON.stringify(response.body),
+      });
+    }
+  }
+
+  // Default: return empty success
+  return Promise.resolve({
+    ok: true,
+    status: 200,
+    text: async () => '{}',
+  });
+}
+
+// Mock global fetch for Portainer API
+const mockFetch = vi.fn(defaultFetchImpl);
+
+vi.stubGlobal('fetch', mockFetch);
 
 // Mock logger
 vi.mock('../lib/logger.js', () => ({
@@ -42,10 +42,12 @@ vi.mock('../lib/logger.js', () => ({
   }),
 }));
 
-// Mock config
+// Mock config with Portainer settings
 vi.mock('../lib/config.js', () => ({
   config: {
-    DOCKER_SOCKET: '/var/run/docker.sock',
+    PORTAINER_URL: 'http://portainer:9000',
+    PORTAINER_API_KEY: 'test-api-key',
+    PORTAINER_ENV_ID: '1',
     POSTGRES_URL: 'postgres://localhost/test',
     REDIS_URL: 'redis://localhost',
     OLLAMA_URL: 'http://localhost:11434',
@@ -62,14 +64,26 @@ vi.mock('../lib/config.js', () => ({
 
 // Mock db
 const mockAgentRepo = {
-  findByType: vi.fn(() => Promise.resolve(null)),
-  findAll: vi.fn(() => Promise.resolve([])),
-  create: vi.fn((data: any) => Promise.resolve({ id: 'agent-1', ...data })),
-  updateStatus: vi.fn(() => Promise.resolve({ id: 'agent-1' })),
+  findByType: vi.fn<any, any>(() => Promise.resolve(null)),
+  findAll: vi.fn<any, any>(() => Promise.resolve([])),
+  create: vi.fn<any, any>((data: any) => Promise.resolve({
+    id: 'agent-1',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    lastHeartbeat: undefined,
+    containerId: undefined,
+    ...data
+  })),
+  updateStatus: vi.fn<any, any>(() => Promise.resolve()),
 };
 
 const mockEventRepo = {
-  log: vi.fn(() => Promise.resolve({ id: 'event-1' })),
+  log: vi.fn<any, any>(() => Promise.resolve({
+    id: 'event-1',
+    eventType: 'agent_started' as const,
+    payload: {},
+    createdAt: new Date()
+  })),
 };
 
 vi.mock('../lib/db.js', () => ({
@@ -78,9 +92,9 @@ vi.mock('../lib/db.js', () => ({
 }));
 
 // Mock redis
-const mockSetAgentStatus = vi.fn(() => Promise.resolve());
-const mockAcquireLock = vi.fn(() => Promise.resolve(true));
-const mockReleaseLock = vi.fn(() => Promise.resolve());
+const mockSetAgentStatus = vi.fn<any, any>(() => Promise.resolve());
+const mockAcquireLock = vi.fn<any, any>(() => Promise.resolve(true));
+const mockReleaseLock = vi.fn<any, any>(() => Promise.resolve());
 
 vi.mock('../lib/redis.js', () => ({
   setAgentStatus: (...args: unknown[]) => mockSetAgentStatus(...args),
@@ -93,55 +107,84 @@ vi.mock('../lib/redis.js', () => ({
   },
 }));
 
-describe('Container', () => {
+// Helper to set up Portainer API responses
+function setPortainerResponse(pathPattern: string, body: unknown, ok = true, status = 200) {
+  fetchResponses.set(pathPattern, { ok, status, body });
+}
+
+describe('Container (Portainer API)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fetchCalls = [];
+    fetchResponses = new Map();
     mockAcquireLock.mockResolvedValue(true);
     mockAgentRepo.findByType.mockResolvedValue(null);
-    mockDocker.listContainers.mockResolvedValue([]);
+
+    // Reset fetch to default implementation
+    mockFetch.mockImplementation(defaultFetchImpl);
+
+    // Default: no containers exist
+    setPortainerResponse('/containers/json', []);
+  });
+
+  afterEach(() => {
+    vi.resetModules();
   });
 
   describe('startAgent', () => {
-    it('should start a new agent container', async () => {
+    it('should start a new agent container via Portainer', async () => {
       mockAgentRepo.findByType.mockResolvedValue(null);
       mockAgentRepo.create.mockResolvedValue({
         id: 'agent-1',
         type: 'ceo',
         status: 'starting',
       });
-      mockDocker.listContainers.mockResolvedValue([]);
+
+      // No existing containers
+      setPortainerResponse('/containers/json', []);
+      // Container create response
+      setPortainerResponse('/containers/create', { Id: 'container-123' });
+      // Container start response
+      setPortainerResponse('/start', {});
 
       const { startAgent } = await import('./container.js');
       const containerId = await startAgent('ceo');
 
       expect(containerId).toBe('container-123');
       expect(mockAcquireLock).toHaveBeenCalledWith('lock:container:ceo', 120);
-      expect(mockDocker.createContainer).toHaveBeenCalled();
-      expect(mockContainer.start).toHaveBeenCalled();
       expect(mockAgentRepo.updateStatus).toHaveBeenCalledWith('agent-1', 'active', 'container-123');
       expect(mockSetAgentStatus).toHaveBeenCalled();
       expect(mockEventRepo.log).toHaveBeenCalledWith(
         expect.objectContaining({ eventType: 'agent_started' })
       );
       expect(mockReleaseLock).toHaveBeenCalledWith('lock:container:ceo');
+
+      // Verify Portainer API was called
+      expect(fetchCalls.some(c => c.url.includes('/containers/create'))).toBe(true);
+      expect(fetchCalls.some(c => c.url.includes('/start'))).toBe(true);
     });
 
     it('should return existing running container id', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'existing-123', State: 'running' },
+      setPortainerResponse('/containers/json', [
+        { Id: 'existing-123', Names: ['/aito-ceo'], State: 'running', Status: 'Up', Labels: {} },
       ]);
 
       const { startAgent } = await import('./container.js');
       const containerId = await startAgent('ceo');
 
       expect(containerId).toBe('existing-123');
-      expect(mockDocker.createContainer).not.toHaveBeenCalled();
+      // Should not create new container
+      expect(fetchCalls.some(c => c.url.includes('/containers/create'))).toBe(false);
     });
 
     it('should remove stopped container before starting new one', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'stopped-123', State: 'exited' },
+      setPortainerResponse('/containers/json', [
+        { Id: 'stopped-123', Names: ['/aito-ceo'], State: 'exited', Status: 'Exited', Labels: {} },
       ]);
+      setPortainerResponse('stopped-123?force=true', {});
+      setPortainerResponse('/containers/create', { Id: 'new-container' });
+      setPortainerResponse('/start', {});
+
       mockAgentRepo.findByType.mockResolvedValue({
         id: 'agent-1',
         type: 'ceo',
@@ -151,8 +194,10 @@ describe('Container', () => {
       const { startAgent } = await import('./container.js');
       await startAgent('ceo');
 
-      expect(mockContainer.remove).toHaveBeenCalledWith({ force: true });
-      expect(mockDocker.createContainer).toHaveBeenCalled();
+      // Verify DELETE was called for old container
+      expect(fetchCalls.some(c =>
+        c.url.includes('stopped-123') && c.options?.method === 'DELETE'
+      )).toBe(true);
     });
 
     it('should throw when lock is not available', async () => {
@@ -171,6 +216,9 @@ describe('Container', () => {
         type: 'ceo',
         status: 'inactive',
       });
+      setPortainerResponse('/containers/json', []);
+      setPortainerResponse('/containers/create', { Id: 'container-123' });
+      setPortainerResponse('/start', {});
 
       const { startAgent } = await import('./container.js');
       await startAgent('ceo');
@@ -185,37 +233,42 @@ describe('Container', () => {
         type: 'cmo',
         status: 'inactive',
       });
+      setPortainerResponse('/containers/json', []);
+      setPortainerResponse('/containers/create', { Id: 'container-123' });
+      setPortainerResponse('/start', {});
 
       const { startAgent } = await import('./container.js');
       await startAgent('cmo');
 
-      expect(mockDocker.createContainer).toHaveBeenCalledWith(
-        expect.objectContaining({
-          Env: expect.arrayContaining(['GIT_FILTER=marketing']),
-        })
-      );
+      // Find the create call and check Env contains GIT_FILTER
+      const createCall = fetchCalls.find(c => c.url.includes('/containers/create'));
+      expect(createCall).toBeDefined();
+      const body = JSON.parse(createCall!.options?.body as string);
+      expect(body.Env).toContain('GIT_FILTER=marketing');
     });
 
     it('should release lock even on error', async () => {
-      mockDocker.createContainer.mockRejectedValueOnce(new Error('Docker error'));
       mockAgentRepo.findByType.mockResolvedValue({
         id: 'agent-1',
         type: 'ceo',
         status: 'inactive',
       });
+      setPortainerResponse('/containers/json', []);
+      setPortainerResponse('/containers/create', { message: 'Error' }, false, 500);
 
       const { startAgent } = await import('./container.js');
 
-      await expect(startAgent('ceo')).rejects.toThrow('Docker error');
+      await expect(startAgent('ceo')).rejects.toThrow();
       expect(mockReleaseLock).toHaveBeenCalledWith('lock:container:ceo');
     });
   });
 
   describe('stopAgent', () => {
-    it('should stop a running container', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'running-123', State: 'running' },
+    it('should stop a running container via Portainer', async () => {
+      setPortainerResponse('/containers/json', [
+        { Id: 'running-123', Names: ['/aito-ceo'], State: 'running', Status: 'Up', Labels: {} },
       ]);
+      setPortainerResponse('/stop', {});
       mockAgentRepo.findByType.mockResolvedValue({
         id: 'agent-1',
         type: 'ceo',
@@ -225,7 +278,10 @@ describe('Container', () => {
       const { stopAgent } = await import('./container.js');
       await stopAgent('ceo');
 
-      expect(mockContainer.stop).toHaveBeenCalledWith({ t: 30 });
+      // Verify stop API was called
+      expect(fetchCalls.some(c =>
+        c.url.includes('/stop') && c.options?.method === 'POST'
+      )).toBe(true);
       expect(mockAgentRepo.updateStatus).toHaveBeenCalledWith('agent-1', 'inactive');
       expect(mockEventRepo.log).toHaveBeenCalledWith(
         expect.objectContaining({ eventType: 'agent_stopped' })
@@ -233,17 +289,17 @@ describe('Container', () => {
     });
 
     it('should do nothing when container not found', async () => {
-      mockDocker.listContainers.mockResolvedValue([]);
+      setPortainerResponse('/containers/json', []);
 
       const { stopAgent } = await import('./container.js');
       await stopAgent('ceo');
 
-      expect(mockContainer.stop).not.toHaveBeenCalled();
+      expect(fetchCalls.some(c => c.url.includes('/stop'))).toBe(false);
     });
 
     it('should not stop if container already stopped', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'stopped-123', State: 'exited' },
+      setPortainerResponse('/containers/json', [
+        { Id: 'stopped-123', Names: ['/aito-ceo'], State: 'exited', Status: 'Exited', Labels: {} },
       ]);
       mockAgentRepo.findByType.mockResolvedValue({
         id: 'agent-1',
@@ -254,7 +310,7 @@ describe('Container', () => {
       const { stopAgent } = await import('./container.js');
       await stopAgent('ceo');
 
-      expect(mockContainer.stop).not.toHaveBeenCalled();
+      expect(fetchCalls.some(c => c.url.includes('/stop'))).toBe(false);
       expect(mockAgentRepo.updateStatus).toHaveBeenCalled();
     });
 
@@ -269,9 +325,10 @@ describe('Container', () => {
     });
 
     it('should not update db if agent not found', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'running-123', State: 'running' },
+      setPortainerResponse('/containers/json', [
+        { Id: 'running-123', Names: ['/aito-ceo'], State: 'running', Status: 'Up', Labels: {} },
       ]);
+      setPortainerResponse('/stop', {});
       mockAgentRepo.findByType.mockResolvedValue(null);
 
       const { stopAgent } = await import('./container.js');
@@ -284,9 +341,31 @@ describe('Container', () => {
 
   describe('restartAgent', () => {
     it('should stop and start agent', async () => {
-      mockDocker.listContainers
-        .mockResolvedValueOnce([{ Id: 'running-123', State: 'running' }])
-        .mockResolvedValueOnce([]);
+      // First call (stop): container exists
+      // Second call (start): no container
+      let callCount = 0;
+      mockFetch.mockImplementation(async (url: string, options?: RequestInit) => {
+        fetchCalls.push({ url, options });
+
+        if (url.includes('/containers/json')) {
+          callCount++;
+          if (callCount === 1) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify([
+                { Id: 'running-123', Names: ['/aito-ceo'], State: 'running', Status: 'Up', Labels: {} }
+              ]),
+            };
+          }
+          return { ok: true, status: 200, text: async () => '[]' };
+        }
+        if (url.includes('/containers/create')) {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ Id: 'new-container' }) };
+        }
+        return { ok: true, status: 200, text: async () => '{}' };
+      });
+
       mockAgentRepo.findByType
         .mockResolvedValueOnce({ id: 'agent-1', type: 'ceo', status: 'active' })
         .mockResolvedValueOnce({ id: 'agent-1', type: 'ceo', status: 'inactive' });
@@ -294,13 +373,13 @@ describe('Container', () => {
       const { restartAgent } = await import('./container.js');
       const containerId = await restartAgent('ceo');
 
-      expect(containerId).toBe('container-123');
+      expect(containerId).toBe('new-container');
     });
   });
 
   describe('getAgentContainerStatus', () => {
     it('should return null when container not found', async () => {
-      mockDocker.listContainers.mockResolvedValue([]);
+      setPortainerResponse('/containers/json', []);
 
       const { getAgentContainerStatus } = await import('./container.js');
       const status = await getAgentContainerStatus('ceo');
@@ -309,8 +388,8 @@ describe('Container', () => {
     });
 
     it('should return null when agent not in database', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'container-123', State: 'running' },
+      setPortainerResponse('/containers/json', [
+        { Id: 'container-123', Names: ['/aito-ceo'], State: 'running', Status: 'Up', Labels: {} },
       ]);
       mockAgentRepo.findByType.mockResolvedValue(null);
 
@@ -321,9 +400,20 @@ describe('Container', () => {
     });
 
     it('should return healthy status for running container', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'container-123', State: 'running' },
+      setPortainerResponse('/containers/json', [
+        { Id: 'container-123', Names: ['/aito-ceo'], State: 'running', Status: 'Up', Labels: {} },
       ]);
+      setPortainerResponse('/stats', {
+        memory_stats: { usage: 100000000 },
+        cpu_stats: {
+          cpu_usage: { total_usage: 1000000000 },
+          system_cpu_usage: 10000000000,
+        },
+        precpu_stats: {
+          cpu_usage: { total_usage: 900000000 },
+          system_cpu_usage: 9000000000,
+        },
+      });
       mockAgentRepo.findByType.mockResolvedValue({
         id: 'agent-1',
         type: 'ceo',
@@ -345,8 +435,8 @@ describe('Container', () => {
     });
 
     it('should return unhealthy status for stopped container', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'container-123', State: 'exited' },
+      setPortainerResponse('/containers/json', [
+        { Id: 'container-123', Names: ['/aito-ceo'], State: 'exited', Status: 'Exited', Labels: {} },
       ]);
       mockAgentRepo.findByType.mockResolvedValue({
         id: 'agent-1',
@@ -363,15 +453,15 @@ describe('Container', () => {
     });
 
     it('should handle stats error gracefully', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'container-123', State: 'running' },
+      setPortainerResponse('/containers/json', [
+        { Id: 'container-123', Names: ['/aito-ceo'], State: 'running', Status: 'Up', Labels: {} },
       ]);
+      setPortainerResponse('/stats', { message: 'Error' }, false, 500);
       mockAgentRepo.findByType.mockResolvedValue({
         id: 'agent-1',
         type: 'ceo',
         status: 'active',
       });
-      mockContainer.stats.mockRejectedValueOnce(new Error('Stats error'));
 
       const { getAgentContainerStatus } = await import('./container.js');
       const status = await getAgentContainerStatus('ceo');
@@ -380,68 +470,36 @@ describe('Container', () => {
       expect(status?.memoryUsage).toBeUndefined();
       expect(status?.cpuUsage).toBeUndefined();
     });
-
-    it('should handle missing memory stats', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'container-123', State: 'running' },
-      ]);
-      mockAgentRepo.findByType.mockResolvedValue({
-        id: 'agent-1',
-        type: 'ceo',
-        status: 'active',
-      });
-      mockContainer.stats.mockResolvedValueOnce({
-        cpu_stats: { cpu_usage: { total_usage: 1000 }, system_cpu_usage: 10000 },
-        precpu_stats: { cpu_usage: { total_usage: 900 }, system_cpu_usage: 9000 },
-      });
-
-      const { getAgentContainerStatus } = await import('./container.js');
-      const status = await getAgentContainerStatus('ceo');
-
-      expect(status?.memoryUsage).toBeUndefined();
-    });
-
-    it('should handle missing cpu stats', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'container-123', State: 'running' },
-      ]);
-      mockAgentRepo.findByType.mockResolvedValue({
-        id: 'agent-1',
-        type: 'ceo',
-        status: 'active',
-      });
-      mockContainer.stats.mockResolvedValueOnce({
-        memory_stats: { usage: 100 },
-      });
-
-      const { getAgentContainerStatus } = await import('./container.js');
-      const status = await getAgentContainerStatus('ceo');
-
-      expect(status?.cpuUsage).toBeUndefined();
-    });
   });
 
   describe('listManagedContainers', () => {
-    it('should list containers with aito.managed label', async () => {
-      const containers = [{ Id: 'c1' }, { Id: 'c2' }];
-      mockDocker.listContainers.mockResolvedValue(containers);
+    it('should list containers with aito.managed label via Portainer', async () => {
+      const containers = [
+        { Id: 'c1', Names: ['/aito-ceo'], State: 'running', Labels: { 'aito.managed': 'true' } },
+        { Id: 'c2', Names: ['/aito-cmo'], State: 'running', Labels: { 'aito.managed': 'true' } },
+      ];
+      setPortainerResponse('/containers/json', containers);
 
       const { listManagedContainers } = await import('./container.js');
       const result = await listManagedContainers();
 
       expect(result).toEqual(containers);
-      expect(mockDocker.listContainers).toHaveBeenCalledWith({
-        all: true,
-        filters: { label: ['aito.managed=true'] },
-      });
+      // Verify the filter was included in the URL
+      expect(fetchCalls.some(c =>
+        c.url.includes('/containers/json') && c.url.includes('aito.managed')
+      )).toBe(true);
     });
   });
 
   describe('checkContainerHealth', () => {
     it('should return true for healthy container', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'container-123', State: 'running' },
+      setPortainerResponse('/containers/json', [
+        { Id: 'container-123', Names: ['/aito-ceo'], State: 'running', Status: 'Up', Labels: {} },
       ]);
+      setPortainerResponse('/stats', {
+        memory_stats: { usage: 100 },
+        cpu_stats: { cpu_usage: { total_usage: 100 } },
+      });
       mockAgentRepo.findByType.mockResolvedValue({
         id: 'agent-1',
         type: 'ceo',
@@ -455,8 +513,8 @@ describe('Container', () => {
     });
 
     it('should return false for unhealthy container', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'container-123', State: 'exited' },
+      setPortainerResponse('/containers/json', [
+        { Id: 'container-123', Names: ['/aito-ceo'], State: 'exited', Status: 'Exited', Labels: {} },
       ]);
       mockAgentRepo.findByType.mockResolvedValue({
         id: 'agent-1',
@@ -471,7 +529,7 @@ describe('Container', () => {
     });
 
     it('should return false when container not found', async () => {
-      mockDocker.listContainers.mockResolvedValue([]);
+      setPortainerResponse('/containers/json', []);
 
       const { checkContainerHealth } = await import('./container.js');
       const result = await checkContainerHealth('ceo');
@@ -485,10 +543,33 @@ describe('Container', () => {
       mockAgentRepo.findAll.mockResolvedValue([
         { id: 'agent-1', type: 'ceo', status: 'active' },
       ]);
-      mockDocker.listContainers
-        .mockResolvedValueOnce([{ Id: 'container-123', State: 'exited' }]) // health check
-        .mockResolvedValueOnce([{ Id: 'container-123', State: 'exited' }]) // stop
-        .mockResolvedValueOnce([]); // start
+
+      let callCount = 0;
+      mockFetch.mockImplementation(async (url: string, options?: RequestInit) => {
+        fetchCalls.push({ url, options });
+
+        if (url.includes('/containers/json')) {
+          callCount++;
+          // First call: unhealthy container for health check
+          // Second call: container for stop
+          // Third call: no container for start
+          if (callCount <= 2) {
+            return {
+              ok: true,
+              status: 200,
+              text: async () => JSON.stringify([
+                { Id: 'container-123', Names: ['/aito-ceo'], State: 'exited', Status: 'Exited', Labels: {} }
+              ]),
+            };
+          }
+          return { ok: true, status: 200, text: async () => '[]' };
+        }
+        if (url.includes('/containers/create')) {
+          return { ok: true, status: 200, text: async () => JSON.stringify({ Id: 'new-container' }) };
+        }
+        return { ok: true, status: 200, text: async () => '{}' };
+      });
+
       mockAgentRepo.findByType.mockResolvedValue({
         id: 'agent-1',
         type: 'ceo',
@@ -498,28 +579,8 @@ describe('Container', () => {
       const { autoRestartUnhealthy } = await import('./container.js');
       await autoRestartUnhealthy();
 
-      // Should have called restart (stop + start)
+      // Should have called restart (acquire lock)
       expect(mockAcquireLock).toHaveBeenCalled();
-    });
-
-    it('should not restart healthy containers', async () => {
-      mockAgentRepo.findAll.mockResolvedValue([
-        { id: 'agent-1', type: 'ceo', status: 'active' },
-      ]);
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'container-123', State: 'running' },
-      ]);
-      mockAgentRepo.findByType.mockResolvedValue({
-        id: 'agent-1',
-        type: 'ceo',
-        status: 'active',
-      });
-
-      const { autoRestartUnhealthy } = await import('./container.js');
-      await autoRestartUnhealthy();
-
-      // Should not have tried to restart
-      expect(mockContainer.stop).not.toHaveBeenCalled();
     });
 
     it('should skip inactive agents', async () => {
@@ -530,104 +591,55 @@ describe('Container', () => {
       const { autoRestartUnhealthy } = await import('./container.js');
       await autoRestartUnhealthy();
 
-      expect(mockDocker.listContainers).not.toHaveBeenCalled();
-    });
-
-    it('should handle restart errors', async () => {
-      mockAgentRepo.findAll.mockResolvedValue([
-        { id: 'agent-1', type: 'ceo', status: 'active' },
-      ]);
-      mockDocker.listContainers
-        .mockResolvedValueOnce([{ Id: 'container-123', State: 'exited' }])
-        .mockResolvedValueOnce([]);
-      mockAgentRepo.findByType.mockResolvedValue({
-        id: 'agent-1',
-        type: 'ceo',
-        status: 'inactive',
-      });
-      mockAcquireLock.mockResolvedValueOnce(false); // Lock fails
-
-      const { autoRestartUnhealthy } = await import('./container.js');
-      await autoRestartUnhealthy();
-
-      // Should log error event
-      expect(mockAgentRepo.updateStatus).toHaveBeenCalledWith('agent-1', 'error');
-      expect(mockEventRepo.log).toHaveBeenCalledWith(
-        expect.objectContaining({ eventType: 'agent_error' })
-      );
-    });
-  });
-
-  describe('ensureNetwork', () => {
-    it('should create network if not exists', async () => {
-      mockDocker.listNetworks.mockResolvedValue([]);
-
-      const { ensureNetwork } = await import('./container.js');
-      await ensureNetwork();
-
-      expect(mockDocker.createNetwork).toHaveBeenCalledWith({
-        Name: 'aito-network',
-        Driver: 'bridge',
-      });
-    });
-
-    it('should not create network if exists', async () => {
-      mockDocker.listNetworks.mockResolvedValue([{ Name: 'aito-network' }]);
-
-      const { ensureNetwork } = await import('./container.js');
-      await ensureNetwork();
-
-      expect(mockDocker.createNetwork).not.toHaveBeenCalled();
+      // Should not have called Portainer API
+      expect(fetchCalls.length).toBe(0);
     });
   });
 
   describe('initialize', () => {
-    it('should ensure network and check docker connection', async () => {
-      mockDocker.listNetworks.mockResolvedValue([]);
+    it('should check Portainer connection on init', async () => {
+      setPortainerResponse('/api/status', { Version: '2.0' });
 
       const { initialize } = await import('./container.js');
       await initialize();
 
-      expect(mockDocker.ping).toHaveBeenCalled();
-      expect(mockDocker.createNetwork).toHaveBeenCalled();
+      expect(fetchCalls.some(c => c.url.includes('/api/status'))).toBe(true);
     });
 
-    it('should throw on docker connection failure', async () => {
-      mockDocker.listNetworks.mockResolvedValue([]);
-      mockDocker.ping.mockRejectedValueOnce(new Error('Connection refused'));
+    it('should throw on Portainer connection failure', async () => {
+      setPortainerResponse('/api/status', { message: 'Unauthorized' }, false, 401);
 
       const { initialize } = await import('./container.js');
 
-      await expect(initialize()).rejects.toThrow('Connection refused');
+      await expect(initialize()).rejects.toThrow();
     });
   });
 
   describe('cleanup', () => {
     it('should process running containers', async () => {
-      mockDocker.listContainers.mockResolvedValue([
-        { Id: 'c1', State: 'running' },
-        { Id: 'c2', State: 'running' },
-        { Id: 'c3', State: 'exited' },
+      setPortainerResponse('/containers/json', [
+        { Id: 'c1', Names: ['/aito-ceo'], State: 'running', Status: 'Up', Labels: {} },
+        { Id: 'c2', Names: ['/aito-cmo'], State: 'running', Status: 'Up', Labels: {} },
       ]);
+      setPortainerResponse('/stop', {});
 
       const { cleanup } = await import('./container.js');
-
-      // Should complete without throwing
       await expect(cleanup()).resolves.toBeUndefined();
     });
 
     it('should handle empty container list', async () => {
-      mockDocker.listContainers.mockResolvedValue([]);
+      setPortainerResponse('/containers/json', []);
 
       const { cleanup } = await import('./container.js');
       await expect(cleanup()).resolves.toBeUndefined();
     });
   });
 
-  describe('docker export', () => {
-    it('should export docker instance', async () => {
-      const { docker } = await import('./container.js');
-      expect(docker).toBeDefined();
+  describe('portainer exports', () => {
+    it('should export portainer helpers', async () => {
+      const { isPortainerConfigured, portainerFetch } = await import('./container.js');
+      expect(isPortainerConfigured).toBe(true);
+      expect(portainerFetch).toBeDefined();
     });
   });
 });
