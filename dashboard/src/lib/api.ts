@@ -269,3 +269,52 @@ export interface WorkerStats {
   byAgent: Record<string, number>;
   byServer: Record<string, number>;
 }
+
+// Focus Settings
+export interface FocusSettings {
+  revenueFocus: number;
+  communityGrowth: number;
+  marketingVsDev: number;
+  riskTolerance: number;
+  timeHorizon: number;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export async function getFocusSettings() {
+  return fetchApi<FocusSettings>('/focus');
+}
+
+export async function updateFocusSettings(settings: Partial<FocusSettings>) {
+  return fetchApi<FocusSettings>('/focus', {
+    method: 'POST',
+    body: JSON.stringify(settings),
+  });
+}
+
+// Initiatives (read from Redis via API)
+export interface Initiative {
+  title: string;
+  description: string;
+  priority: string;
+  revenueImpact: number;
+  effort: number;
+  suggestedAssignee: string;
+  tags: string[];
+  issueUrl?: string;
+  status: 'pending' | 'in_progress' | 'completed';
+  createdAt?: string;
+}
+
+export async function getInitiatives() {
+  return fetchApi<Initiative[]>('/initiatives');
+}
+
+// API object wrapper for convenience
+export const api = {
+  get: async <T>(endpoint: string) => fetchApi<T>(endpoint),
+  post: async <T>(endpoint: string, data?: unknown) => fetchApi<T>(endpoint, {
+    method: 'POST',
+    body: data ? JSON.stringify(data) : undefined,
+  }),
+};

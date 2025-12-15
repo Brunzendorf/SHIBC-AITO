@@ -225,9 +225,86 @@ const BOOTSTRAP_INITIATIVES: Initiative[] = [
   },
 ];
 
-// Redis key for tracking created initiatives
+// Redis keys
 const INITIATIVE_CREATED_KEY = 'initiatives:created';
 const INITIATIVE_COOLDOWN_KEY = 'initiatives:cooldown';
+const FOCUS_KEY = 'settings:focus';
+
+// Focus settings interface
+interface FocusSettings {
+  revenueFocus: number;
+  communityGrowth: number;
+  marketingVsDev: number;
+  riskTolerance: number;
+  timeHorizon: number;
+}
+
+const DEFAULT_FOCUS: FocusSettings = {
+  revenueFocus: 80,
+  communityGrowth: 60,
+  marketingVsDev: 50,
+  riskTolerance: 40,
+  timeHorizon: 30,
+};
+
+/**
+ * Get current focus settings from Redis
+ */
+async function getFocusSettings(): Promise<FocusSettings> {
+  try {
+    const stored = await redis.get(FOCUS_KEY);
+    if (stored) {
+      return JSON.parse(stored);
+    }
+  } catch (error) {
+    logger.warn({ error }, 'Failed to load focus settings, using defaults');
+  }
+  return DEFAULT_FOCUS;
+}
+
+/**
+ * Calculate initiative score based on focus settings
+ */
+function calculateInitiativeScore(initiative: Initiative, focus: FocusSettings, agentType: AgentType): number {
+  let score = 0;
+
+  // Base score from revenue impact
+  score += initiative.revenueImpact * (focus.revenueFocus / 100) * 2;
+
+  // Adjust based on agent type and marketingVsDev slider
+  const isMarketingAgent = ['cmo', 'coo'].includes(agentType);
+  const isDevAgent = ['cto', 'cfo'].includes(agentType);
+
+  if (isMarketingAgent) {
+    score += (focus.marketingVsDev / 100) * 3;
+  } else if (isDevAgent) {
+    score += ((100 - focus.marketingVsDev) / 100) * 3;
+  }
+
+  // Community growth bonus for community-related initiatives
+  if (initiative.tags.some(t => ['community', 'growth', 'social'].includes(t))) {
+    score += (focus.communityGrowth / 100) * 2;
+  }
+
+  // Risk adjustment
+  const isRisky = initiative.tags.some(t => ['aggressive', 'experimental'].includes(t));
+  if (isRisky) {
+    score *= (focus.riskTolerance / 100);
+  }
+
+  // Time horizon adjustment
+  const isLongTerm = initiative.effort > 5;
+  if (isLongTerm) {
+    score *= (focus.timeHorizon / 100);
+  } else {
+    score *= ((100 - focus.timeHorizon) / 100) + 0.5; // Boost quick wins when short-term focused
+  }
+
+  // Subtract effort
+  score -= initiative.effort * 0.5;
+
+  return score;
+}
 
 /**
  * Check if an initiative was already created
@@ -291,14 +368,17 @@ export async function generateInitiatives(agentType: AgentType): Promise<Initiat
     return [];
   }
 
-  const focus = AGENT_FOCUS[agentType];
-  if (!focus) {
+  const agentFocus = AGENT_FOCUS[agentType];
+  if (!agentFocus) {
     logger.warn({ agentType }, 'Unknown agent type');
     return [];
   }
 
+  // Get focus settings from dashboard
+  const focusSettings = await getFocusSettings();
+
   // Scan RAG for context
-  const ragContext = await scanRAG(focus.scanTopics);
+  const ragContext = await scanRAG(agentFocus.scanTopics);
 
   // Filter bootstrap initiatives relevant to this agent
   const relevantInitiatives = BOOTSTRAP_INITIATIVES.filter(
@@ -313,10 +393,10 @@ export async function generateInitiatives(agentType: AgentType): Promise<Initiat
     }
   }
 
-  // Sort by revenue impact (descending) then effort (ascending)
+  // Sort by focus-adjusted score (uses dashboard slider settings)
   newInitiatives.sort((a, b) => {
-    const scoreA = a.revenueImpact * 2 - a.effort;
-    const scoreB = b.revenueImpact * 2 - b.effort;
+    const scoreA = calculateInitiativeScore(a, focusSettings, agentType);
+    const scoreB = calculateInitiativeScore(b, focusSettings, agentType);
     return scoreB - scoreA;
   });
 
@@ -324,7 +404,11 @@ export async function generateInitiatives(agentType: AgentType): Promise<Initiat
     agentType,
     totalInitiatives: newInitiatives.length,
     ragContextItems: ragContext.length,
-  }, 'Generated initiatives');
+    focusSettings: {
+      revenueFocus: focusSettings.revenueFocus,
+      marketingVsDev: focusSettings.marketingVsDev,
+    },
+  }, 'Generated initiatives with focus-adjusted scoring');
 
   return newInitiatives;
 }

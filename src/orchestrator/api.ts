@@ -616,6 +616,93 @@ app.get('/metrics', asyncHandler(async (_req, res) => {
   res.send(metrics.join('\n'));
 }));
 
+// === Focus Settings Endpoints ===
+
+const FOCUS_KEY = 'settings:focus';
+
+interface FocusSettings {
+  revenueFocus: number;
+  communityGrowth: number;
+  marketingVsDev: number;
+  riskTolerance: number;
+  timeHorizon: number;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+const DEFAULT_FOCUS: FocusSettings = {
+  revenueFocus: 80,
+  communityGrowth: 60,
+  marketingVsDev: 50,
+  riskTolerance: 40,
+  timeHorizon: 30,
+};
+
+// Get focus settings
+app.get('/focus', asyncHandler(async (_req, res) => {
+  const stored = await redis.get(FOCUS_KEY);
+  if (stored) {
+    sendResponse(res, JSON.parse(stored));
+  } else {
+    sendResponse(res, DEFAULT_FOCUS);
+  }
+}));
+
+// Get initiatives
+app.get('/initiatives', asyncHandler(async (_req, res) => {
+  // Get created initiatives from Redis
+  const createdSet = await redis.smembers('initiatives:created');
+
+  // Get initiative details from events
+  const events = await eventRepo.getRecent(100);
+  const initiativeEvents = events.filter(e => e.eventType === 'initiative_created');
+
+  const initiatives = initiativeEvents.map(e => {
+    const payload = e.payload as Record<string, unknown>;
+    return {
+      title: payload?.title || 'Unknown',
+      description: payload?.description || '',
+      priority: payload?.priority || 'medium',
+      revenueImpact: payload?.revenueImpact || 0,
+      effort: payload?.effort || 0,
+      suggestedAssignee: e.sourceAgent || 'unknown',
+      tags: payload?.tags || [],
+      issueUrl: payload?.issueUrl || null,
+      status: 'completed',
+      createdAt: e.createdAt,
+    };
+  });
+
+  sendResponse(res, initiatives);
+}));
+
+// Update focus settings
+app.post('/focus', asyncHandler(async (req, res) => {
+  const settings: FocusSettings = {
+    revenueFocus: Math.max(0, Math.min(100, req.body.revenueFocus ?? DEFAULT_FOCUS.revenueFocus)),
+    communityGrowth: Math.max(0, Math.min(100, req.body.communityGrowth ?? DEFAULT_FOCUS.communityGrowth)),
+    marketingVsDev: Math.max(0, Math.min(100, req.body.marketingVsDev ?? DEFAULT_FOCUS.marketingVsDev)),
+    riskTolerance: Math.max(0, Math.min(100, req.body.riskTolerance ?? DEFAULT_FOCUS.riskTolerance)),
+    timeHorizon: Math.max(0, Math.min(100, req.body.timeHorizon ?? DEFAULT_FOCUS.timeHorizon)),
+    updatedAt: new Date().toISOString(),
+    updatedBy: req.body.updatedBy || 'dashboard',
+  };
+
+  await redis.set(FOCUS_KEY, JSON.stringify(settings));
+
+  // Broadcast focus change to all agents
+  await publisher.publish(channels.broadcast, JSON.stringify({
+    id: crypto.randomUUID(),
+    type: 'focus_updated',
+    from: 'orchestrator',
+    to: 'broadcast',
+    payload: settings,
+  }));
+
+  logger.info({ settings }, 'Focus settings updated');
+  sendResponse(res, settings);
+}));
+
 // Error handling middleware
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   logger.error({ err }, 'API error');

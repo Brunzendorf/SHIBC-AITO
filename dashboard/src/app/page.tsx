@@ -5,6 +5,8 @@ import SummaryCards from '@/components/widgets/SummaryCards';
 import HealthWidget from '@/components/widgets/HealthWidget';
 import AgentGrid from '@/components/agents/AgentGrid';
 import RecentActivity from '@/components/widgets/RecentActivity';
+import FocusPanel from '@/components/FocusPanel';
+import InitiativesPanel from '@/components/InitiativesPanel';
 
 export default function DashboardPage() {
   return (
@@ -23,11 +25,21 @@ export default function DashboardPage() {
 
       {/* Health + Activity Row */}
       <Grid container spacing={3} sx={{ mb: 4 }}>
-        <Grid item xs={12} md={4}>
+        <Grid item xs={12} md={6}>
           <HealthWidget />
         </Grid>
-        <Grid item xs={12} md={8}>
+        <Grid item xs={12} md={6}>
           <RecentActivity />
+        </Grid>
+      </Grid>
+
+      {/* Focus + Initiatives Row */}
+      <Grid container spacing={3} sx={{ mb: 4 }}>
+        <Grid item xs={12} md={5}>
+          <FocusPanel />
+        </Grid>
+        <Grid item xs={12} md={7}>
+          <InitiativesPanel />
         </Grid>
       </Grid>
 
