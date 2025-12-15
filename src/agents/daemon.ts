@@ -28,6 +28,7 @@ import {
 import type { AgentType, AgentMessage, EventType } from '../lib/types.js';
 import { spawnWorkerAsync } from '../workers/spawner.js';
 import { queueForArchive } from '../workers/archive-worker.js';
+import { runInitiativePhase, type AgentType as InitiativeAgentType } from './initiative.js';
 
 const logger = createLogger('daemon');
 
@@ -593,7 +594,34 @@ export class AgentDaemon {
           // Small delay to prevent tight loop, then continue
           setTimeout(() => this.runLoop('queue_continuation'), 2000);
         } else {
-          logger.info({ agentType: this.config.agentType }, 'Task queue empty, waiting for new tasks');
+          // INITIATIVE PHASE: No tasks in queue, be proactive!
+          logger.info({ agentType: this.config.agentType }, 'Task queue empty, running initiative phase');
+          try {
+            const initiativeResult = await runInitiativePhase(this.config.agentType as InitiativeAgentType);
+            if (initiativeResult.created && initiativeResult.initiative) {
+              logger.info({
+                title: initiativeResult.initiative.title,
+                issueUrl: initiativeResult.issueUrl,
+                revenueImpact: initiativeResult.initiative.revenueImpact,
+              }, 'Initiative created - agent generated own work!');
+
+              // Log initiative as event
+              await eventRepo.log({
+                eventType: 'initiative_created' as EventType,
+                sourceAgent: this.config.agentId,
+                payload: {
+                  title: initiativeResult.initiative.title,
+                  priority: initiativeResult.initiative.priority,
+                  issueUrl: initiativeResult.issueUrl,
+                },
+              });
+            } else {
+              logger.debug({ agentType: this.config.agentType }, 'No new initiatives to create (all done or cooldown)');
+            }
+          } catch (initError) {
+            const errMsg = initError instanceof Error ? initError.message : String(initError);
+            logger.warn({ error: errMsg }, 'Initiative phase failed, continuing normally');
+          }
         }
       }
 

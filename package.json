@@ -19,6 +19,7 @@
   "dependencies": {
     "@chaindead/telegram-mcp": "^0.1.23",
     "@modelcontextprotocol/sdk": "^1.24.3",
+    "@octokit/rest": "^22.0.1",
     "dockerode": "^4.0.2",
     "etherscan-mcp": "^1.0.4",
     "express": "^4.18.2",

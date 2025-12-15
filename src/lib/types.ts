@@ -135,7 +135,8 @@ export type EventType =
   | 'status_request'
   | 'status_response'
   | 'broadcast'
-  | 'human_message';
+  | 'human_message'
+  | 'initiative_created';
 
 export interface Event {
   id: string;
