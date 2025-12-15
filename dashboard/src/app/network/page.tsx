@@ -16,16 +16,28 @@ const AGENT_COLORS: Record<string, string> = {
   orchestrator: '#95A5A6', // Gray
 };
 
-// Agent positions (circular layout)
-const AGENT_POSITIONS: Record<string, { x: number; y: number }> = {
-  ceo: { x: 400, y: 100 },
-  dao: { x: 600, y: 200 },
-  cmo: { x: 600, y: 400 },
-  cto: { x: 400, y: 500 },
-  cfo: { x: 200, y: 400 },
-  coo: { x: 200, y: 200 },
-  cco: { x: 400, y: 300 },
-};
+// Center point and radius for circular layout
+const CENTER_X = 400;
+const CENTER_Y = 300;
+const ORBIT_RADIUS = 180;
+
+// Agent positions (circular layout around orchestrator)
+// 7 agents = 360°/7 ≈ 51.4° between each, CEO at top
+const AGENTS_ORDER = ['ceo', 'dao', 'cmo', 'cto', 'cfo', 'coo', 'cco'];
+const AGENT_ANGLES: Record<string, number> = {};
+AGENTS_ORDER.forEach((agent, index) => {
+  // Start at -90° (top) and go clockwise
+  AGENT_ANGLES[agent] = -90 + (index * (360 / AGENTS_ORDER.length));
+});
+
+function getAgentPosition(type: string): { x: number; y: number } {
+  const angle = AGENT_ANGLES[type] ?? 0;
+  const radians = (angle * Math.PI) / 180;
+  return {
+    x: CENTER_X + Math.cos(radians) * ORBIT_RADIUS,
+    y: CENTER_Y + Math.sin(radians) * ORBIT_RADIUS,
+  };
+}
 
 interface CanvasNode extends AgentNode {
   x: number;
@@ -41,7 +53,7 @@ export default function NetworkPage() {
   // Convert agents to canvas nodes with positions (memoized to prevent infinite loops)
   const canvasNodes = useMemo(() => {
     const nodes: CanvasNode[] = agents.map(agent => {
-      const pos = AGENT_POSITIONS[agent.type] || { x: 400, y: 300 };
+      const pos = getAgentPosition(agent.type);
       return {
         ...agent,
         x: pos.x,
@@ -50,7 +62,7 @@ export default function NetworkPage() {
       };
     });
 
-    // Add orchestrator node in center if not present
+    // Add orchestrator node in center
     if (!nodes.find(n => n.type === 'orchestrator')) {
       nodes.push({
         id: 'orchestrator',
@@ -58,8 +70,8 @@ export default function NetworkPage() {
         name: 'Orchestrator',
         status: connected ? 'active' : 'inactive',
         lastActivity: new Date().toISOString(),
-        x: 400,
-        y: 300,
+        x: CENTER_X,
+        y: CENTER_Y,
         radius: 50,
       });
     }
@@ -95,7 +107,22 @@ export default function NetworkPage() {
       ctx.stroke();
     }
 
-    // Draw links (communication lines)
+    // Draw permanent connections from orchestrator to all agents
+    const orchestrator = canvasNodes.find(n => n.type === 'orchestrator');
+    if (orchestrator) {
+      canvasNodes.forEach(node => {
+        if (node.type !== 'orchestrator') {
+          ctx.beginPath();
+          ctx.strokeStyle = '#3a3a5e';
+          ctx.lineWidth = 1;
+          ctx.moveTo(orchestrator.x, orchestrator.y);
+          ctx.lineTo(node.x, node.y);
+          ctx.stroke();
+        }
+      });
+    }
+
+    // Draw dynamic links (communication lines)
     links.forEach(link => {
       const sourceNode = canvasNodes.find(n => n.id === link.source || n.type === link.source);
       const targetNode = canvasNodes.find(n => n.id === link.target || n.type === link.target);

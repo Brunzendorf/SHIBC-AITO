@@ -87,15 +87,16 @@ export function useWebSocket() {
 
     switch (msg.type) {
       case 'agent_status': {
-        const data = msg.data as Partial<AgentNode>;
+        const data = msg.data as Partial<AgentNode> & { agentId?: string; agentType?: string };
         if (data.id || data.agentId) {
-          const id = data.id || (data as { agentId?: string }).agentId || '';
+          const id = data.id || data.agentId || '';
+          const type = data.type || data.agentType || 'unknown';
           setAgents(prev => {
             const newMap = new Map(prev);
             const existing = newMap.get(id) || {
               id,
-              type: 'unknown',
-              name: 'Unknown',
+              type,
+              name: data.name || type.toUpperCase(),
               status: 'inactive' as const,
               lastActivity: new Date().toISOString(),
             };
@@ -103,6 +104,8 @@ export function useWebSocket() {
               ...existing,
               ...data,
               id,
+              type,
+              name: data.name || existing.name || type.toUpperCase(),
               status: determineStatus(data),
               lastActivity: data.lastActivity || msg.timestamp,
               currentAction: data.currentAction,
