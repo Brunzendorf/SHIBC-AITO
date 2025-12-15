@@ -342,7 +342,7 @@ export default function NetworkPage() {
                       <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
                     </div>
                     <div className="text-white mt-1 truncate">
-                      {formatMessageData(msg.data)}
+                      {formatMessageData(msg.data, agents)}
                     </div>
                   </div>
                 ))}
@@ -391,14 +391,39 @@ function adjustColor(color: string, amount: number): string {
 }
 
 // Format message data for display
-function formatMessageData(data: unknown): string {
+function formatMessageData(data: unknown, agents: AgentNode[]): string {
   if (!data) return '-';
   if (typeof data === 'string') return data;
   const obj = data as Record<string, unknown>;
-  if (obj.agentType) return `${obj.agentType}: ${obj.currentAction || obj.status || 'update'}`;
+
+  // Helper to resolve agent ID/type to display name
+  const resolveAgentName = (idOrType: string): string => {
+    if (!idOrType) return '?';
+    // Check if it's already a known type
+    if (['ceo', 'cmo', 'cto', 'cfo', 'coo', 'cco', 'dao', 'orchestrator'].includes(idOrType.toLowerCase())) {
+      return idOrType.toUpperCase();
+    }
+    // Try to find agent by ID
+    const agent = agents.find(a => a.id === idOrType);
+    if (agent) return agent.type.toUpperCase();
+    // Check if ID contains agent type hint
+    if (idOrType.includes('-')) {
+      const parts = idOrType.split('-');
+      const possibleType = parts.find(p =>
+        ['ceo', 'cmo', 'cto', 'cfo', 'coo', 'cco', 'dao'].includes(p.toLowerCase())
+      );
+      if (possibleType) return possibleType.toUpperCase();
+    }
+    // Return shortened UUID as fallback
+    return idOrType.slice(0, 8);
+  };
+
+  if (obj.agentType) return `${String(obj.agentType).toUpperCase()}: ${obj.currentAction || obj.status || 'update'}`;
   if (obj.message) {
     const msg = obj.message as Record<string, unknown>;
-    return `${msg.from} → ${msg.to}: ${msg.type}`;
+    const from = resolveAgentName(String(msg.from || ''));
+    const to = resolveAgentName(String(msg.to || ''));
+    return `${from} → ${to}: ${msg.type}`;
   }
   return JSON.stringify(data).slice(0, 50);
 }

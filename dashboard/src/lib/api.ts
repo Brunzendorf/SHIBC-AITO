@@ -22,7 +22,9 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<Api
       return { data: null, error: errorText || `HTTP ${response.status}` };
     }
 
-    const data = await response.json();
+    const json = await response.json();
+    // Unwrap orchestrator response format: {success: true, data: T}
+    const data = json.data !== undefined ? json.data : json;
     return { data, error: null };
   } catch (error) {
     return { data: null, error: error instanceof Error ? error.message : 'Unknown error' };
@@ -256,6 +258,7 @@ export interface WorkerExecution {
   success: boolean;
   duration: number;
   error?: string;
+  result?: string;  // Worker output result
   mode?: string;
   dryRun?: boolean;
 }
@@ -308,6 +311,116 @@ export interface Initiative {
 
 export async function getInitiatives() {
   return fetchApi<Initiative[]>('/initiatives');
+}
+
+// Domain Approval Requests
+export interface DomainApprovalRequest {
+  id: string;
+  domain: string;
+  url: string;
+  requestedBy: string;
+  taskContext: string;
+  reason?: string;
+  status: 'pending' | 'approved' | 'rejected' | 'auto_approved';
+  reviewedBy?: string;
+  reviewNotes?: string;
+  suggestedCategory?: string;
+  securityScore?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function getDomainApprovals(status?: string, limit = 50) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (status) params.append('status', status);
+  return fetchApi<DomainApprovalRequest[]>(`/domain-approvals?${params}`);
+}
+
+export async function getPendingDomainApprovals() {
+  return fetchApi<DomainApprovalRequest[]>('/domain-approvals?status=pending');
+}
+
+export async function getPendingDomainApprovalsCount() {
+  return fetchApi<{ count: number }>('/domain-approvals/pending/count');
+}
+
+export async function approveDomainRequest(id: string, reviewedBy = 'human', notes?: string, category?: string) {
+  return fetchApi<DomainApprovalRequest>(`/domain-approvals/${id}/approve`, {
+    method: 'POST',
+    body: JSON.stringify({ reviewedBy, notes, category }),
+  });
+}
+
+export async function rejectDomainRequest(id: string, reviewedBy = 'human', notes?: string) {
+  return fetchApi<DomainApprovalRequest>(`/domain-approvals/${id}/reject`, {
+    method: 'POST',
+    body: JSON.stringify({ reviewedBy, notes }),
+  });
+}
+
+// Domain Whitelist
+export interface WhitelistDomain {
+  id: string;
+  domain: string;
+  category: string;
+  description?: string;
+  isActive: boolean;
+  addedBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function getWhitelist() {
+  return fetchApi<WhitelistDomain[]>('/whitelist');
+}
+
+export async function getWhitelistCategories() {
+  return fetchApi<string[]>('/whitelist/categories');
+}
+
+export async function addToWhitelist(domain: string, category: string, description?: string) {
+  return fetchApi<WhitelistDomain>('/whitelist', {
+    method: 'POST',
+    body: JSON.stringify({ domain, category, description }),
+  });
+}
+
+export async function removeFromWhitelist(domain: string) {
+  return fetchApi<{ domain: string; status: string }>(`/whitelist/${encodeURIComponent(domain)}`, {
+    method: 'DELETE',
+  });
+}
+
+// Kanban / Backlog
+export interface KanbanIssue {
+  number: number;
+  title: string;
+  body: string | null;
+  labels: string[];
+  status: 'backlog' | 'ready' | 'in_progress' | 'review' | 'done' | 'blocked';
+  priority?: 'critical' | 'high' | 'medium' | 'low';
+  effort?: 'xs' | 's' | 'm' | 'l' | 'xl';
+  assignee?: string;
+  epicNumber?: number;
+  isEpic?: boolean;
+  created_at: string;
+  html_url?: string;
+}
+
+export interface BacklogStats {
+  total: number;
+  byStatus: Record<string, number>;
+  byPriority: Record<string, number>;
+  byAgent: Record<string, number>;
+  lastGroomed?: string;
+}
+
+export async function getBacklogIssues() {
+  return fetchApi<KanbanIssue[]>('/backlog/issues');
+}
+
+export async function getBacklogStats() {
+  return fetchApi<BacklogStats>('/backlog/stats');
 }
 
 // API object wrapper for convenience

@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { createLogger } from '../lib/logger.js';
 import { numericConfig } from '../lib/config.js';
-import { agentRepo, eventRepo, taskRepo, decisionRepo, escalationRepo, historyRepo } from '../lib/db.js';
+import { agentRepo, eventRepo, taskRepo, decisionRepo, escalationRepo, historyRepo, domainApprovalRepo, domainWhitelistRepo } from '../lib/db.js';
 import { publisher, channels, redis } from '../lib/redis.js';
 import { startAgent, stopAgent, restartAgent, getAgentContainerStatus, listManagedContainers } from './container.js';
 import { getScheduledJobs, pauseJob, resumeJob } from './scheduler.js';
@@ -256,6 +256,7 @@ interface WorkerLogEntry {
   success: boolean;
   duration: number;
   error?: string;
+  result?: string;  // Worker output result
   mode?: string;
   dryRun?: boolean;
 }
@@ -650,12 +651,8 @@ app.get('/focus', asyncHandler(async (_req, res) => {
 
 // Get initiatives
 app.get('/initiatives', asyncHandler(async (_req, res) => {
-  // Get created initiatives from Redis
-  const createdSet = await redis.smembers('initiatives:created');
-
-  // Get initiative details from events
-  const events = await eventRepo.getRecent(100);
-  const initiativeEvents = events.filter(e => e.eventType === 'initiative_created');
+  // Get initiative events directly by type (not filtered from recent)
+  const initiativeEvents = await eventRepo.getByType('initiative_created', 100);
 
   const initiatives = initiativeEvents.map(e => {
     const payload = e.payload as Record<string, unknown>;
@@ -663,10 +660,10 @@ app.get('/initiatives', asyncHandler(async (_req, res) => {
       title: payload?.title || 'Unknown',
       description: payload?.description || '',
       priority: payload?.priority || 'medium',
-      revenueImpact: payload?.revenueImpact || 0,
-      effort: payload?.effort || 0,
-      suggestedAssignee: e.sourceAgent || 'unknown',
-      tags: payload?.tags || [],
+      revenueImpact: Number(payload?.revenueImpact) || 0,
+      effort: Number(payload?.effort) || 0,
+      suggestedAssignee: (payload?.suggestedAssignee as string) || e.sourceAgent || 'unknown',
+      tags: (payload?.tags as string[]) || [],
       issueUrl: payload?.issueUrl || null,
       status: 'completed',
       createdAt: e.createdAt,
@@ -701,6 +698,253 @@ app.post('/focus', asyncHandler(async (req, res) => {
 
   logger.info({ settings }, 'Focus settings updated');
   sendResponse(res, settings);
+}));
+
+// === Domain Approval Endpoints ===
+
+// Get all domain approval requests
+app.get('/domain-approvals', asyncHandler(async (req, res) => {
+  const status = req.query.status as string | undefined;
+  const limit = parseInt(req.query.limit as string) || 50;
+
+  let approvals;
+  if (status === 'pending') {
+    approvals = await domainApprovalRepo.getPending();
+  } else {
+    approvals = await domainApprovalRepo.getAll(limit);
+  }
+
+  sendResponse(res, approvals);
+}));
+
+// Get pending domain approval requests count
+app.get('/domain-approvals/pending/count', asyncHandler(async (_req, res) => {
+  const pending = await domainApprovalRepo.getPending();
+  sendResponse(res, { count: pending.length });
+}));
+
+// Get single domain approval request
+app.get('/domain-approvals/:id', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const approval = await domainApprovalRepo.getById(id);
+
+  if (!approval) {
+    return sendError(res, 'Domain approval request not found', 404);
+  }
+
+  sendResponse(res, approval);
+}));
+
+// Approve domain request
+app.post('/domain-approvals/:id/approve', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { reviewedBy = 'human', notes, category } = req.body;
+
+  const approval = await domainApprovalRepo.getById(id);
+  if (!approval) {
+    return sendError(res, 'Domain approval request not found', 404);
+  }
+
+  if (approval.status !== 'pending') {
+    return sendError(res, `Request is already ${approval.status}`, 400);
+  }
+
+  const result = await domainApprovalRepo.approve(id, reviewedBy, notes, category || approval.suggestedCategory);
+
+  if (result) {
+    // Broadcast approval notification
+    await publisher.publish(channels.broadcast, JSON.stringify({
+      type: 'domain_approved',
+      domain: result.domain,
+      approvedBy: reviewedBy,
+      timestamp: new Date().toISOString(),
+    }));
+
+    logger.info({ id, domain: result.domain, reviewedBy }, 'Domain approval request approved');
+  }
+
+  sendResponse(res, result);
+}));
+
+// Reject domain request
+app.post('/domain-approvals/:id/reject', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { reviewedBy = 'human', notes } = req.body;
+
+  const approval = await domainApprovalRepo.getById(id);
+  if (!approval) {
+    return sendError(res, 'Domain approval request not found', 404);
+  }
+
+  if (approval.status !== 'pending') {
+    return sendError(res, `Request is already ${approval.status}`, 400);
+  }
+
+  const result = await domainApprovalRepo.reject(id, reviewedBy, notes);
+
+  if (result) {
+    logger.info({ id, domain: result.domain, reviewedBy, notes }, 'Domain approval request rejected');
+  }
+
+  sendResponse(res, result);
+}));
+
+// === Domain Whitelist Endpoints ===
+
+// Get all whitelisted domains
+app.get('/whitelist', asyncHandler(async (_req, res) => {
+  const domains = await domainWhitelistRepo.getAll();
+  sendResponse(res, domains);
+}));
+
+// Get whitelist categories
+app.get('/whitelist/categories', asyncHandler(async (_req, res) => {
+  const categories = await domainWhitelistRepo.getCategories();
+  sendResponse(res, categories);
+}));
+
+// Add domain to whitelist (manual)
+app.post('/whitelist', asyncHandler(async (req, res) => {
+  const { domain, category, description, addedBy = 'human' } = req.body;
+
+  if (!domain || !category) {
+    return sendError(res, 'Domain and category are required', 400);
+  }
+
+  const result = await domainWhitelistRepo.add(domain, category, description, addedBy);
+  logger.info({ domain, category, addedBy }, 'Domain added to whitelist');
+  sendResponse(res, result, 201);
+}));
+
+// Remove domain from whitelist
+app.delete('/whitelist/:domain', asyncHandler(async (req, res) => {
+  const { domain } = req.params;
+  await domainWhitelistRepo.remove(domain);
+  logger.info({ domain }, 'Domain removed from whitelist');
+  sendResponse(res, { domain, status: 'removed' });
+}));
+
+// === Backlog / Kanban Endpoints ===
+
+// Get backlog issues (from Redis cache or GitHub)
+app.get('/backlog/issues', asyncHandler(async (_req, res) => {
+  // Try to get from Redis cache first
+  const cached = await redis.get('backlog:context');
+  if (cached) {
+    try {
+      const backlogState = JSON.parse(cached);
+      // Transform to KanbanIssue format
+      const issues = backlogState.issues?.map((issue: {
+        number: number;
+        title: string;
+        body?: string;
+        labels?: string[];
+        state?: string;
+        created_at?: string;
+        assignee?: string;
+        html_url?: string;
+      }) => {
+        // Extract status from labels
+        const statusLabel = issue.labels?.find((l: string) => l.startsWith('status:')) || '';
+        const status = statusLabel.replace('status:', '').replace('-', '_') || 'backlog';
+
+        // Extract priority from labels
+        const priorityLabel = issue.labels?.find((l: string) => l.startsWith('priority:'));
+        const priority = priorityLabel?.replace('priority:', '');
+
+        // Extract effort from labels
+        const effortLabel = issue.labels?.find((l: string) => l.startsWith('effort:'));
+        const effort = effortLabel?.replace('effort:', '');
+
+        // Extract agent from labels
+        const agentLabel = issue.labels?.find((l: string) => l.startsWith('agent:'));
+        const assignee = agentLabel?.replace('agent:', '') || issue.assignee;
+
+        // Check if epic or subtask
+        const isEpic = issue.labels?.includes('type:epic');
+        const subtaskLabel = issue.labels?.find((l: string) => l.startsWith('epic:'));
+        const epicNumber = subtaskLabel ? parseInt(subtaskLabel.replace('epic:', '')) : undefined;
+
+        return {
+          number: issue.number,
+          title: issue.title,
+          body: issue.body || null,
+          labels: issue.labels || [],
+          status,
+          priority,
+          effort,
+          assignee,
+          isEpic,
+          epicNumber,
+          created_at: issue.created_at || new Date().toISOString(),
+          html_url: issue.html_url || `https://github.com/Brunzendorf/SHIBC-AITO/issues/${issue.number}`,
+        };
+      }) || [];
+
+      sendResponse(res, issues);
+      return;
+    } catch {
+      // Fall through to empty response
+    }
+  }
+
+  // No cached data - return empty with message
+  sendResponse(res, []);
+}));
+
+// Get backlog stats
+app.get('/backlog/stats', asyncHandler(async (_req, res) => {
+  const cached = await redis.get('backlog:context');
+  if (cached) {
+    try {
+      const backlogState = JSON.parse(cached);
+      const issues = backlogState.issues || [];
+
+      // Calculate stats
+      const byStatus: Record<string, number> = {};
+      const byPriority: Record<string, number> = {};
+      const byAgent: Record<string, number> = {};
+
+      for (const issue of issues) {
+        // Count by status
+        const statusLabel = issue.labels?.find((l: string) => l.startsWith('status:')) || 'status:backlog';
+        const status = statusLabel.replace('status:', '');
+        byStatus[status] = (byStatus[status] || 0) + 1;
+
+        // Count by priority
+        const priorityLabel = issue.labels?.find((l: string) => l.startsWith('priority:'));
+        if (priorityLabel) {
+          const priority = priorityLabel.replace('priority:', '');
+          byPriority[priority] = (byPriority[priority] || 0) + 1;
+        }
+
+        // Count by agent
+        const agentLabel = issue.labels?.find((l: string) => l.startsWith('agent:'));
+        if (agentLabel) {
+          const agent = agentLabel.replace('agent:', '');
+          byAgent[agent] = (byAgent[agent] || 0) + 1;
+        }
+      }
+
+      sendResponse(res, {
+        total: issues.length,
+        byStatus,
+        byPriority,
+        byAgent,
+        lastGroomed: backlogState.lastGroomed,
+      });
+      return;
+    } catch {
+      // Fall through
+    }
+  }
+
+  sendResponse(res, {
+    total: 0,
+    byStatus: {},
+    byPriority: {},
+    byAgent: {},
+  });
 }));
 
 // Error handling middleware

@@ -208,6 +208,35 @@ CREATE TRIGGER update_domain_whitelist_updated_at
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- ============================================
+-- DOMAIN APPROVAL REQUESTS
+-- ============================================
+-- Pending approval requests for non-whitelisted domains
+
+CREATE TABLE domain_approval_requests (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    domain VARCHAR(255) NOT NULL,
+    url TEXT NOT NULL,
+    requested_by VARCHAR(50) NOT NULL,
+    task_context TEXT NOT NULL,
+    reason TEXT,
+    status VARCHAR(20) DEFAULT 'pending',
+    reviewed_by VARCHAR(50),
+    review_notes TEXT,
+    suggested_category VARCHAR(50),
+    security_score INTEGER,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_domain_approval_status ON domain_approval_requests(status);
+CREATE INDEX idx_domain_approval_domain ON domain_approval_requests(domain);
+CREATE INDEX idx_domain_approval_created ON domain_approval_requests(created_at DESC);
+
+CREATE TRIGGER update_domain_approval_updated_at
+    BEFORE UPDATE ON domain_approval_requests
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================
 -- SEED DATA: Default Agents
 -- ============================================
 

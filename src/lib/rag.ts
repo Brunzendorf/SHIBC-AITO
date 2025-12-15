@@ -76,7 +76,7 @@ export async function initialize(): Promise<void> {
             distance: 'Cosine'
           },
           optimizers_config: {
-            indexing_threshold: 10000
+            indexing_threshold: 100  // Build HNSW index after 100 docs
           }
         })
       });
@@ -89,6 +89,24 @@ export async function initialize(): Promise<void> {
       logger.info({ collection: COLLECTION_NAME, vectorSize: VECTOR_SIZE }, 'Qdrant collection created');
     } else if (response.ok) {
       logger.debug({ collection: COLLECTION_NAME }, 'Qdrant collection exists');
+
+      // Update optimizer config for existing collections (lower indexing threshold)
+      try {
+        const updateResponse = await fetch(`${QDRANT_URL}/collections/${COLLECTION_NAME}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            optimizers_config: {
+              indexing_threshold: 100
+            }
+          })
+        });
+        if (updateResponse.ok) {
+          logger.info('Updated Qdrant indexing threshold to 100');
+        }
+      } catch (err) {
+        logger.debug({ err }, 'Could not update optimizer config (non-fatal)');
+      }
     } else {
       throw new Error(`Qdrant check failed: ${response.status}`);
     }

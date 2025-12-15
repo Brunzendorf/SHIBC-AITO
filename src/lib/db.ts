@@ -467,6 +467,18 @@ export const eventRepo = {
       [agentId, limit]
     );
   },
+
+  async getByType(eventType: string, limit = 50): Promise<Event[]> {
+    return query<Event>(
+      `SELECT id, event_type as "eventType", source_agent as "sourceAgent",
+              target_agent as "targetAgent", payload, correlation_id as "correlationId",
+              created_at as "createdAt"
+       FROM events
+       WHERE event_type = $1
+       ORDER BY created_at DESC LIMIT $2`,
+      [eventType, limit]
+    );
+  },
 };
 
 // Escalation Repository
@@ -581,6 +593,157 @@ export const domainWhitelistRepo = {
       `SELECT DISTINCT category FROM domain_whitelist WHERE is_active = true ORDER BY category`
     );
     return rows.map(r => r.category);
+  },
+};
+
+// Domain Approval Requests Repository
+export interface DomainApprovalRequest {
+  id: string;
+  domain: string;
+  url: string;
+  requestedBy: string;
+  taskContext: string;
+  reason: string | null;
+  status: 'pending' | 'approved' | 'rejected' | 'auto_approved';
+  reviewedBy: string | null;
+  reviewNotes: string | null;
+  suggestedCategory: string | null;
+  securityScore: number | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export const domainApprovalRepo = {
+  async create(data: {
+    domain: string;
+    url: string;
+    requestedBy: string;
+    taskContext: string;
+    reason?: string;
+    suggestedCategory?: string;
+    securityScore?: number;
+  }): Promise<DomainApprovalRequest> {
+    const [result] = await query<DomainApprovalRequest>(
+      `INSERT INTO domain_approval_requests
+        (domain, url, requested_by, task_context, reason, suggested_category, security_score)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, domain, url, requested_by as "requestedBy", task_context as "taskContext",
+                 reason, status, reviewed_by as "reviewedBy", review_notes as "reviewNotes",
+                 suggested_category as "suggestedCategory", security_score as "securityScore",
+                 created_at as "createdAt", updated_at as "updatedAt"`,
+      [data.domain, data.url, data.requestedBy, data.taskContext, data.reason, data.suggestedCategory, data.securityScore]
+    );
+    return result;
+  },
+
+  async getPending(): Promise<DomainApprovalRequest[]> {
+    return query<DomainApprovalRequest>(
+      `SELECT id, domain, url, requested_by as "requestedBy", task_context as "taskContext",
+              reason, status, reviewed_by as "reviewedBy", review_notes as "reviewNotes",
+              suggested_category as "suggestedCategory", security_score as "securityScore",
+              created_at as "createdAt", updated_at as "updatedAt"
+       FROM domain_approval_requests WHERE status = 'pending'
+       ORDER BY created_at ASC`
+    );
+  },
+
+  async getAll(limit = 50): Promise<DomainApprovalRequest[]> {
+    return query<DomainApprovalRequest>(
+      `SELECT id, domain, url, requested_by as "requestedBy", task_context as "taskContext",
+              reason, status, reviewed_by as "reviewedBy", review_notes as "reviewNotes",
+              suggested_category as "suggestedCategory", security_score as "securityScore",
+              created_at as "createdAt", updated_at as "updatedAt"
+       FROM domain_approval_requests
+       ORDER BY created_at DESC
+       LIMIT $1`,
+      [limit]
+    );
+  },
+
+  async getById(id: string): Promise<DomainApprovalRequest | null> {
+    return queryOne<DomainApprovalRequest>(
+      `SELECT id, domain, url, requested_by as "requestedBy", task_context as "taskContext",
+              reason, status, reviewed_by as "reviewedBy", review_notes as "reviewNotes",
+              suggested_category as "suggestedCategory", security_score as "securityScore",
+              created_at as "createdAt", updated_at as "updatedAt"
+       FROM domain_approval_requests WHERE id = $1`,
+      [id]
+    );
+  },
+
+  async hasPendingRequest(domain: string): Promise<boolean> {
+    const result = await queryOne<{ exists: boolean }>(
+      `SELECT EXISTS(SELECT 1 FROM domain_approval_requests WHERE domain = $1 AND status = 'pending') as exists`,
+      [domain.toLowerCase()]
+    );
+    return result?.exists || false;
+  },
+
+  async approve(id: string, reviewedBy: string, reviewNotes?: string, category = 'general'): Promise<DomainApprovalRequest | null> {
+    // Update approval status
+    const [result] = await query<DomainApprovalRequest>(
+      `UPDATE domain_approval_requests
+       SET status = 'approved', reviewed_by = $2, review_notes = $3, updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, domain, url, requested_by as "requestedBy", task_context as "taskContext",
+                 reason, status, reviewed_by as "reviewedBy", review_notes as "reviewNotes",
+                 suggested_category as "suggestedCategory", security_score as "securityScore",
+                 created_at as "createdAt", updated_at as "updatedAt"`,
+      [id, reviewedBy, reviewNotes]
+    );
+
+    if (result) {
+      // Also add to whitelist
+      await domainWhitelistRepo.add(
+        result.domain,
+        result.suggestedCategory || category,
+        `Approved via request: ${result.taskContext}`,
+        reviewedBy
+      );
+    }
+
+    return result;
+  },
+
+  async reject(id: string, reviewedBy: string, reviewNotes?: string): Promise<DomainApprovalRequest | null> {
+    const [result] = await query<DomainApprovalRequest>(
+      `UPDATE domain_approval_requests
+       SET status = 'rejected', reviewed_by = $2, review_notes = $3, updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, domain, url, requested_by as "requestedBy", task_context as "taskContext",
+                 reason, status, reviewed_by as "reviewedBy", review_notes as "reviewNotes",
+                 suggested_category as "suggestedCategory", security_score as "securityScore",
+                 created_at as "createdAt", updated_at as "updatedAt"`,
+      [id, reviewedBy, reviewNotes]
+    );
+    return result;
+  },
+
+  async autoApprove(id: string, reason: string): Promise<DomainApprovalRequest | null> {
+    const request = await this.getById(id);
+    if (!request) return null;
+
+    const [result] = await query<DomainApprovalRequest>(
+      `UPDATE domain_approval_requests
+       SET status = 'auto_approved', reviewed_by = 'auto', review_notes = $2, updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, domain, url, requested_by as "requestedBy", task_context as "taskContext",
+                 reason, status, reviewed_by as "reviewedBy", review_notes as "reviewNotes",
+                 suggested_category as "suggestedCategory", security_score as "securityScore",
+                 created_at as "createdAt", updated_at as "updatedAt"`,
+      [id, reason]
+    );
+
+    if (result) {
+      await domainWhitelistRepo.add(
+        result.domain,
+        result.suggestedCategory || 'auto_approved',
+        `Auto-approved: ${reason}`,
+        'auto'
+      );
+    }
+
+    return result;
   },
 };
 

@@ -28,7 +28,13 @@ import {
 import type { AgentType, AgentMessage, EventType } from '../lib/types.js';
 import { spawnWorkerAsync } from '../workers/spawner.js';
 import { queueForArchive } from '../workers/archive-worker.js';
-import { runInitiativePhase, type AgentType as InitiativeAgentType } from './initiative.js';
+import {
+  runInitiativePhase,
+  getInitiativePromptContext,
+  createInitiativeFromProposal,
+  buildInitiativeGenerationPrompt,
+  type AgentType as InitiativeAgentType
+} from './initiative.js';
 
 const logger = createLogger('daemon');
 
@@ -201,6 +207,11 @@ export class AgentDaemon {
   private async handleMessage(message: AgentMessage, channel: string): Promise<void> {
     logger.debug({ type: message.type, from: message.from, channel }, 'Received message');
 
+    // Auto-extract state from worker_result to keep volatile state fresh
+    if (message.type === 'worker_result' && message.payload) {
+      await this.extractAndSaveWorkerState(message.payload as Record<string, unknown>);
+    }
+
     // Determine if we need to trigger AI
     const needsAI = this.shouldTriggerAI(message);
 
@@ -210,6 +221,114 @@ export class AgentDaemon {
     } else {
       // Handle simple events without AI
       await this.handleSimpleMessage(message);
+    }
+  }
+
+  /**
+   * Auto-extract volatile state from worker results
+   * This keeps market data, treasury balances, etc. fresh without relying on AI
+   */
+  private async extractAndSaveWorkerState(payload: Record<string, unknown>): Promise<void> {
+    const result = payload.result as string | undefined;
+    const task = payload.task as string | undefined;
+    const success = payload.success as boolean | undefined;
+
+    if (!success || !result) return;
+
+    const taskLower = (task || '').toLowerCase();
+    // Store reference to avoid TypeScript null check issues in nested async blocks
+    const state = this.state;
+    if (!state) return; // Guard against null state
+
+    try {
+      // Market data extraction
+      if (taskLower.includes('price') || taskLower.includes('market') || taskLower.includes('coingecko')) {
+        // Extract price if present (e.g., "$0.00001234" or "0.00001234 USD")
+        const priceMatch = result.match(/\$?([\d.]+(?:e[+-]?\d+)?)\s*(?:usd|USD|\$)?/i);
+        const priceStr = priceMatch?.[1];
+        if (priceStr) {
+          const price = parseFloat(priceStr);
+          if (!isNaN(price) && price > 0) {
+            await state.set('last_shibc_price', price);
+            await state.set('market_data_timestamp', new Date().toISOString());
+            logger.info({ price }, 'Auto-extracted SHIBC price from worker result');
+          }
+        }
+
+        // Mark market data as fresh
+        await state.set('market_data_verified', true);
+        await state.set('market_data_fresh', true);
+      }
+
+      // Fear & Greed index extraction
+      if (taskLower.includes('fear') && taskLower.includes('greed')) {
+        const fgMatch = result.match(/(?:index|score)[:\s]*(\d+)/i);
+        const fgStr = fgMatch?.[1];
+        if (fgStr) {
+          const fgIndex = parseInt(fgStr, 10);
+          if (!isNaN(fgIndex) && fgIndex >= 0 && fgIndex <= 100) {
+            await state.set('fear_greed_index', fgIndex);
+            await state.set('market_sentiment', fgIndex < 25 ? 'extreme_fear' : fgIndex < 45 ? 'fear' : fgIndex < 55 ? 'neutral' : fgIndex < 75 ? 'greed' : 'extreme_greed');
+            logger.info({ fgIndex }, 'Auto-extracted Fear & Greed index from worker result');
+          }
+        }
+      }
+
+      // Treasury/balance extraction
+      if (taskLower.includes('balance') || taskLower.includes('treasury') || taskLower.includes('etherscan')) {
+        // Extract ETH balance (e.g., "1.5 ETH" or "1,500 ETH")
+        const ethMatch = result.match(/([\d,.]+)\s*ETH/i);
+        const ethStr = ethMatch?.[1];
+        if (ethStr) {
+          const ethBalance = parseFloat(ethStr.replace(/,/g, ''));
+          if (!isNaN(ethBalance)) {
+            await state.set('treasury_eth_balance', ethBalance);
+            await state.set('treasury_status', 'verified');
+            logger.info({ ethBalance }, 'Auto-extracted ETH balance from worker result');
+          }
+        }
+
+        // Extract USD value if present
+        const usdMatch = result.match(/\$([\d,.]+)/);
+        const usdStr = usdMatch?.[1];
+        if (usdStr) {
+          const usdValue = parseFloat(usdStr.replace(/,/g, ''));
+          if (!isNaN(usdValue)) {
+            await state.set('treasury_total_usd', usdValue);
+          }
+        }
+      }
+
+      // Holder count extraction
+      if (taskLower.includes('holder') || (taskLower.includes('token') && taskLower.includes('info'))) {
+        const holderMatch = result.match(/([\d,]+)\s*(?:holder|address)/i);
+        const holderStr = holderMatch?.[1];
+        if (holderStr) {
+          const holderCount = parseInt(holderStr.replace(/,/g, ''), 10);
+          if (!isNaN(holderCount) && holderCount > 0) {
+            await state.set('holder_count_known', holderCount);
+            await state.set('holder_count_timestamp', new Date().toISOString());
+            logger.info({ holderCount }, 'Auto-extracted holder count from worker result');
+          }
+        }
+      }
+
+      // Telegram member count extraction
+      if (taskLower.includes('telegram') && (taskLower.includes('member') || taskLower.includes('count'))) {
+        const memberMatch = result.match(/([\d,]+)\s*(?:member|subscriber)/i);
+        const memberStr = memberMatch?.[1];
+        if (memberStr) {
+          const memberCount = parseInt(memberStr.replace(/,/g, ''), 10);
+          if (!isNaN(memberCount) && memberCount > 0) {
+            await state.set('telegram_members', memberCount);
+            logger.info({ memberCount }, 'Auto-extracted Telegram member count from worker result');
+          }
+        }
+      }
+
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.warn({ error: errMsg }, 'Failed to extract state from worker result');
     }
   }
 
@@ -417,7 +536,18 @@ export class AgentDaemon {
 
       // Build prompt
       const systemPrompt = generateSystemPrompt(this.profile);
-      const loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data }, pendingDecisions, ragContext, pendingTasks);
+      let loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data }, pendingDecisions, ragContext, pendingTasks);
+
+      // Add initiative context so agents can propose their own initiatives
+      try {
+        const initiativeContext = await getInitiativePromptContext(this.config.agentType as InitiativeAgentType);
+        if (initiativeContext) {
+          loopPrompt += '\n' + initiativeContext;
+        }
+      } catch (initCtxErr) {
+        logger.debug({ error: initCtxErr }, 'Failed to get initiative context');
+      }
+
       logger.info({ systemPromptLength: systemPrompt.length, loopPromptLength: loopPrompt.length }, 'Prompt lengths');
 
       // FULL PROMPT LOGGING - to debug why agents don't use spawn_worker
@@ -605,18 +735,27 @@ export class AgentDaemon {
                 revenueImpact: initiativeResult.initiative.revenueImpact,
               }, 'Initiative created - agent generated own work!');
 
-              // Log initiative as event
+              // Log initiative as event (include all fields for dashboard)
               await eventRepo.log({
                 eventType: 'initiative_created' as EventType,
                 sourceAgent: this.config.agentId,
                 payload: {
                   title: initiativeResult.initiative.title,
+                  description: initiativeResult.initiative.description,
                   priority: initiativeResult.initiative.priority,
+                  revenueImpact: initiativeResult.initiative.revenueImpact,
+                  effort: initiativeResult.initiative.effort,
+                  tags: initiativeResult.initiative.tags,
+                  suggestedAssignee: initiativeResult.initiative.suggestedAssignee,
                   issueUrl: initiativeResult.issueUrl,
                 },
               });
+            } else if (initiativeResult.needsAIGeneration) {
+              // No bootstrap initiatives left - run Claude Code to generate new ideas
+              logger.info({ agentType: this.config.agentType }, 'Running AI-driven initiative generation');
+              await this.runAIInitiativeGeneration();
             } else {
-              logger.debug({ agentType: this.config.agentType }, 'No new initiatives to create (all done or cooldown)');
+              logger.debug({ agentType: this.config.agentType }, 'No new initiatives to create (cooldown active)');
             }
           } catch (initError) {
             const errMsg = initError instanceof Error ? initError.message : String(initError);
@@ -634,6 +773,70 @@ export class AgentDaemon {
     } finally {
       // Always release the lock
       this.loopInProgress = false;
+    }
+  }
+
+  /**
+   * Run AI-driven initiative generation using Claude Code CLI
+   * Called when no bootstrap initiatives are available
+   */
+  private async runAIInitiativeGeneration(): Promise<void> {
+    if (!this.profile) {
+      logger.warn('No profile loaded, skipping AI initiative generation');
+      return;
+    }
+
+    try {
+      // Build the initiative generation prompt with rich context (news, market, focus)
+      const initiativePrompt = await buildInitiativeGenerationPrompt(
+        this.config.agentType as InitiativeAgentType
+      );
+
+      if (!initiativePrompt) {
+        logger.warn('Failed to build initiative prompt');
+        return;
+      }
+
+      // Check if Claude is available
+      if (!await isClaudeAvailable()) {
+        logger.warn('Claude not available for AI initiative generation');
+        return;
+      }
+
+      // Generate system prompt
+      const systemPrompt = await generateSystemPrompt(this.profile);
+
+      // Execute Claude Code to generate initiative
+      logger.info({ agentType: this.config.agentType }, 'Calling Claude Code for initiative generation');
+      const result = await executeClaudeCodeWithRetry({
+        prompt: initiativePrompt,
+        systemPrompt,
+        timeout: 60000,
+      });
+
+      if (!result.success || !result.output) {
+        logger.warn({ error: result.error }, 'Claude initiative generation failed');
+        return;
+      }
+
+      // Parse the output for actions (specifically propose_initiative)
+      const parsed = parseClaudeOutput(result.output);
+      if (!parsed || !parsed.actions || parsed.actions.length === 0) {
+        logger.info('No actions returned from AI initiative generation');
+        return;
+      }
+
+      // Process any propose_initiative actions
+      for (const action of parsed.actions) {
+        if (action.type === 'propose_initiative') {
+          await this.processAction(action);
+        }
+      }
+
+      logger.info({ agentType: this.config.agentType }, 'AI initiative generation completed');
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      logger.warn({ error: errMsg }, 'AI initiative generation failed');
     }
   }
 
@@ -810,6 +1013,291 @@ export class AgentDaemon {
         break;
       }
 
+      case 'create_pr': {
+        // Create a Pull Request for workspace changes
+        // This handles all git operations: branch, commit, push, PR creation
+        const folder = (actionData?.folder as string) || `/app/workspace/${this.profile?.codename || `SHIBC-${this.config.agentType.toUpperCase()}-001`}/`;
+        const summary = (actionData?.summary as string) || `Workspace update from ${this.config.agentType.toUpperCase()}`;
+        const loopNumber = (await this.state?.get(StateKeys.LOOP_COUNT)) || 0;
+
+        logger.info({ folder, summary, agentType: this.config.agentType }, 'Creating PR for workspace changes');
+
+        try {
+          const prResult = await workspace.commitAndCreatePR(
+            this.config.agentType,
+            summary,
+            loopNumber as number
+          );
+
+          if (prResult.success) {
+            if (prResult.prUrl) {
+              logger.info({
+                prUrl: prResult.prUrl,
+                prNumber: prResult.prNumber,
+                branch: prResult.branchName,
+                filesChanged: prResult.filesChanged,
+              }, 'PR created successfully');
+
+              // Store PR info in state for agent feedback
+              await this.state?.set('last_pr_url', prResult.prUrl);
+              await this.state?.set('last_pr_number', prResult.prNumber);
+
+              // Log as event
+              await eventRepo.log({
+                eventType: 'pr_created' as EventType,
+                sourceAgent: this.config.agentId,
+                payload: {
+                  prUrl: prResult.prUrl,
+                  prNumber: prResult.prNumber,
+                  branch: prResult.branchName,
+                  filesChanged: prResult.filesChanged,
+                  summary,
+                },
+              });
+
+              // Notify CTO for review (if not CTO creating the PR)
+              if (this.config.agentType !== 'cto') {
+                const reviewMessage: AgentMessage = {
+                  id: crypto.randomUUID(),
+                  type: 'task',
+                  from: this.config.agentId,
+                  to: 'cto',
+                  payload: {
+                    task_id: `pr-review-${prResult.prNumber}`,
+                    title: `Review PR #${prResult.prNumber}: ${summary}`,
+                    description: `Please review and merge/close PR: ${prResult.prUrl}`,
+                    prUrl: prResult.prUrl,
+                    prNumber: prResult.prNumber,
+                    branch: prResult.branchName,
+                  },
+                  priority: 'normal',
+                  timestamp: new Date(),
+                  requiresResponse: false,
+                };
+                await publisher.publish(`channel:agent:cto`, JSON.stringify(reviewMessage));
+                logger.info({ prNumber: prResult.prNumber }, 'Sent PR review request to CTO');
+              }
+            } else if (prResult.filesChanged === 0) {
+              logger.info('No changes to commit');
+            } else {
+              logger.info({ commitHash: prResult.commitHash }, 'Changes committed locally (push/PR may have failed)');
+            }
+          } else {
+            logger.warn('PR creation failed');
+          }
+        } catch (prError) {
+          const errMsg = prError instanceof Error ? prError.message : String(prError);
+          logger.error({ error: errMsg, folder }, 'Failed to create PR');
+        }
+        break;
+      }
+
+      case 'merge_pr': {
+        // Merge a Pull Request (typically used by CTO after review)
+        const prNumber = actionData?.prNumber as number;
+        if (!prNumber) {
+          logger.warn('merge_pr action missing prNumber');
+          break;
+        }
+
+        try {
+          const merged = await workspace.mergePullRequest(prNumber);
+          if (merged) {
+            logger.info({ prNumber }, 'PR merged successfully');
+
+            // Log event
+            await eventRepo.log({
+              eventType: 'pr_merged' as EventType,
+              sourceAgent: this.config.agentId,
+              payload: { prNumber, mergedBy: this.config.agentType },
+            });
+
+            // TODO: Notify original PR author
+          } else {
+            logger.warn({ prNumber }, 'Failed to merge PR');
+          }
+        } catch (mergeError) {
+          const errMsg = mergeError instanceof Error ? mergeError.message : String(mergeError);
+          logger.error({ error: errMsg, prNumber }, 'Error merging PR');
+        }
+        break;
+      }
+
+      case 'close_pr': {
+        // Close a Pull Request with feedback (reject)
+        const prNumber = actionData?.prNumber as number;
+        const reason = (actionData?.reason as string) || 'Closed by reviewer';
+
+        if (!prNumber) {
+          logger.warn('close_pr action missing prNumber');
+          break;
+        }
+
+        try {
+          const closed = await workspace.closePullRequest(prNumber, reason);
+          if (closed) {
+            logger.info({ prNumber, reason }, 'PR closed with feedback');
+
+            // Log event
+            await eventRepo.log({
+              eventType: 'pr_rejected' as EventType,
+              sourceAgent: this.config.agentId,
+              payload: { prNumber, closedBy: this.config.agentType, reason },
+            });
+
+            // TODO: Notify original PR author with feedback
+          } else {
+            logger.warn({ prNumber }, 'Failed to close PR');
+          }
+        } catch (closeError) {
+          const errMsg = closeError instanceof Error ? closeError.message : String(closeError);
+          logger.error({ error: errMsg, prNumber }, 'Error closing PR');
+        }
+        break;
+      }
+
+      case 'request_human_action': {
+        // Agent requests human to do something - creates GitHub issue assigned to human
+        const request = actionData as {
+          title?: string;
+          description?: string;
+          urgency?: 'low' | 'medium' | 'high' | 'critical';
+          blockedInitiatives?: string[];
+          category?: string;
+        };
+
+        if (!request?.title || !request?.description) {
+          logger.warn({ request }, 'Invalid request_human_action: missing title or description');
+          break;
+        }
+
+        try {
+          const { createHumanActionRequest } = await import('./initiative.js');
+          const result = await createHumanActionRequest({
+            title: request.title,
+            description: request.description,
+            urgency: request.urgency || 'medium',
+            requestedBy: this.config.agentType,
+            blockedInitiatives: request.blockedInitiatives,
+            category: request.category,
+          });
+
+          if (result.issueUrl) {
+            logger.info({
+              issueUrl: result.issueUrl,
+              issueNumber: result.issueNumber,
+              title: request.title,
+            }, 'Human action request created - issue assigned to human');
+
+            // Log as event
+            await eventRepo.log({
+              eventType: 'human_action_requested' as EventType,
+              sourceAgent: this.config.agentId,
+              payload: {
+                title: request.title,
+                description: request.description,
+                urgency: request.urgency,
+                issueUrl: result.issueUrl,
+                issueNumber: result.issueNumber,
+              },
+            });
+          }
+        } catch (reqErr) {
+          logger.warn({ error: reqErr, title: request.title }, 'Failed to create human action request');
+        }
+        break;
+      }
+
+      case 'update_issue': {
+        // Agent updates a GitHub issue with progress comment
+        const update = actionData as {
+          issueNumber?: number;
+          comment?: string;
+        };
+
+        if (!update?.issueNumber || !update?.comment) {
+          logger.warn({ update }, 'Invalid update_issue: missing issueNumber or comment');
+          break;
+        }
+
+        try {
+          const { addIssueComment } = await import('./initiative.js');
+          const success = await addIssueComment(
+            update.issueNumber,
+            update.comment,
+            this.config.agentType
+          );
+
+          if (success) {
+            logger.info({ issueNumber: update.issueNumber }, 'Issue updated with agent comment');
+          }
+        } catch (updateErr) {
+          logger.warn({ error: updateErr, issueNumber: update.issueNumber }, 'Failed to update issue');
+        }
+        break;
+      }
+
+      case 'propose_initiative': {
+        // Agent proposes a new initiative - create GitHub issue
+        const proposal = actionData as {
+          title?: string;
+          description?: string;
+          priority?: string;
+          revenueImpact?: number;
+          effort?: number;
+          tags?: string[];
+        };
+
+        if (!proposal?.title) {
+          logger.warn({ proposal }, 'Invalid propose_initiative: missing title');
+          break;
+        }
+
+        try {
+          const result = await createInitiativeFromProposal(
+            this.config.agentType as InitiativeAgentType,
+            {
+              title: proposal.title,
+              description: proposal.description || '',
+              priority: proposal.priority || 'medium',
+              revenueImpact: proposal.revenueImpact || 5,
+              effort: proposal.effort || 5,
+              tags: proposal.tags || [],
+            }
+          );
+
+          if (result.issueUrl) {
+            logger.info({
+              title: result.initiative.title,
+              issueUrl: result.issueUrl,
+              revenueImpact: result.initiative.revenueImpact,
+              effort: result.initiative.effort,
+            }, 'Agent proposed initiative - GitHub issue created!');
+
+            // Log as event
+            await eventRepo.log({
+              eventType: 'initiative_created' as EventType,
+              sourceAgent: this.config.agentId,
+              payload: {
+                title: result.initiative.title,
+                description: result.initiative.description,
+                priority: result.initiative.priority,
+                revenueImpact: result.initiative.revenueImpact,
+                effort: result.initiative.effort,
+                tags: result.initiative.tags,
+                suggestedAssignee: result.initiative.suggestedAssignee,
+                issueUrl: result.issueUrl,
+                source: 'agent-proposed',
+              },
+            });
+          } else {
+            logger.debug({ title: proposal.title }, 'Initiative already exists or creation failed');
+          }
+        } catch (initErr) {
+          logger.warn({ error: initErr, title: proposal.title }, 'Failed to create initiative from proposal');
+        }
+        break;
+      }
 
       default:
         logger.debug({ actionType: action.type }, 'Unknown action type');

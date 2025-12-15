@@ -58,7 +58,8 @@ export type APIDomain = 'finance' | 'blockchain' | 'content' | 'social' | 'gener
 // Loaded dynamically from database for easy management
 // Use the /whitelist API or dashboard to add/remove domains
 
-import { domainWhitelistRepo, type DomainWhitelist } from './db.js';
+import { domainWhitelistRepo, domainApprovalRepo, type DomainWhitelist } from './db.js';
+import type { AgentType as AgentTypeFromTypes } from './types.js';
 
 // Cache for whitelist (refreshed periodically)
 let cachedWhitelist: string[] = [];
@@ -542,6 +543,180 @@ export function getSuggestedAgent(apiName: string): AgentType | null {
   return api.primaryAgents[0] || null;
 }
 
+// ============================================
+// DOMAIN APPROVAL REQUEST
+// ============================================
+
+/**
+ * Extract domain from URL
+ */
+export function extractDomain(url: string): string | null {
+  try {
+    const urlObj = new URL(url);
+    return urlObj.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Suggest a category for a domain based on URL patterns
+ */
+function suggestCategory(domain: string, url: string): string {
+  const d = domain.toLowerCase();
+  const u = url.toLowerCase();
+
+  // API domains
+  if (d.startsWith('api.') || d.includes('.api.') || u.includes('/api/')) {
+    if (d.includes('coingecko') || d.includes('coinmarketcap') || d.includes('crypto')) {
+      return 'crypto_data';
+    }
+    if (d.includes('etherscan') || d.includes('blockchain') || d.includes('eth')) {
+      return 'blockchain';
+    }
+    return 'api';
+  }
+
+  // Social platforms
+  if (d.includes('twitter') || d.includes('x.com') || d.includes('reddit') ||
+      d.includes('telegram') || d.includes('discord') || d.includes('t.me')) {
+    return 'social';
+  }
+
+  // News sites
+  if (d.includes('news') || d.includes('blog') || d.includes('medium')) {
+    return 'news';
+  }
+
+  // Blockchain explorers
+  if (d.includes('scan') || d.includes('explorer')) {
+    return 'blockchain';
+  }
+
+  // Documentation
+  if (d.includes('docs.') || d.includes('doc.') || u.includes('/docs/')) {
+    return 'documentation';
+  }
+
+  // GitHub
+  if (d.includes('github') || d.includes('gitlab')) {
+    return 'development';
+  }
+
+  return 'general';
+}
+
+/**
+ * Calculate a basic security score for a domain (0-100)
+ * Higher scores = more likely safe
+ */
+function calculateSecurityScore(domain: string, url: string): number {
+  let score = 50; // Base score
+
+  const d = domain.toLowerCase();
+
+  // Positive indicators
+  if (d.endsWith('.com') || d.endsWith('.org') || d.endsWith('.io')) score += 10;
+  if (d.includes('api.')) score += 10; // API subdomain
+  if (d.includes('docs.')) score += 10; // Documentation
+  if (d.startsWith('www.')) score += 5; // Standard www prefix
+
+  // Well-known domains get bonus
+  const knownPatterns = [
+    'coingecko', 'coinmarketcap', 'etherscan', 'github', 'telegram',
+    'twitter', 'reddit', 'google', 'amazon', 'cloudflare', 'microsoft',
+    'cointelegraph', 'coindesk', 'decrypt', 'ethereum', 'bitcoin'
+  ];
+  if (knownPatterns.some(p => d.includes(p))) score += 20;
+
+  // Negative indicators
+  if (d.length > 30) score -= 10; // Very long domain
+  if (d.split('.').length > 4) score -= 10; // Too many subdomains
+  if (/\d{4,}/.test(d)) score -= 15; // Has 4+ consecutive digits
+  if (d.includes('free') || d.includes('bonus') || d.includes('win')) score -= 20; // Spammy words
+
+  // HTTPS check (from URL)
+  if (url.startsWith('https://')) score += 5;
+  if (url.startsWith('http://') && !url.startsWith('https://')) score -= 10;
+
+  return Math.max(0, Math.min(100, score));
+}
+
+/**
+ * Create a domain approval request for a non-whitelisted URL
+ * Returns the request ID if created, or null if already pending
+ */
+export async function createDomainApprovalRequest(
+  url: string,
+  requestedBy: AgentTypeFromTypes,
+  taskContext: string,
+  reason?: string
+): Promise<{ created: boolean; requestId?: string; alreadyPending?: boolean; domain: string } | null> {
+  const domain = extractDomain(url);
+  if (!domain) {
+    logger.warn({ url }, 'Invalid URL for domain approval request');
+    return null;
+  }
+
+  // Check if already whitelisted (race condition safety)
+  const isWhitelisted = await isDomainWhitelistedAsync(url);
+  if (isWhitelisted) {
+    logger.debug({ domain }, 'Domain already whitelisted, no approval needed');
+    return { created: false, domain, alreadyPending: false };
+  }
+
+  // Check if there's already a pending request for this domain
+  const hasPending = await domainApprovalRepo.hasPendingRequest(domain);
+  if (hasPending) {
+    logger.info({ domain }, 'Pending approval request already exists for domain');
+    return { created: false, domain, alreadyPending: true };
+  }
+
+  // Calculate suggestions
+  const suggestedCategory = suggestCategory(domain, url);
+  const securityScore = calculateSecurityScore(domain, url);
+
+  // Create the request
+  const request = await domainApprovalRepo.create({
+    domain,
+    url,
+    requestedBy,
+    taskContext: taskContext.slice(0, 500), // Limit context length
+    reason,
+    suggestedCategory,
+    securityScore,
+  });
+
+  logger.info({
+    requestId: request.id,
+    domain,
+    requestedBy,
+    suggestedCategory,
+    securityScore,
+  }, 'Domain approval request created');
+
+  return { created: true, requestId: request.id, domain };
+}
+
+/**
+ * Check multiple URLs and return non-whitelisted domains
+ */
+export async function checkUrlsForApproval(urls: string[]): Promise<{ url: string; domain: string }[]> {
+  const nonWhitelisted: { url: string; domain: string }[] = [];
+
+  for (const url of urls) {
+    const domain = extractDomain(url);
+    if (!domain) continue;
+
+    const isWhitelisted = await isDomainWhitelistedAsync(url);
+    if (!isWhitelisted) {
+      nonWhitelisted.push({ url, domain });
+    }
+  }
+
+  return nonWhitelisted;
+}
+
 // Log registry on load
 logger.info({
   apiCount: API_REGISTRY.length,
@@ -555,6 +730,9 @@ export default {
   generateAPIPrompt,
   canAgentUseAPI,
   getSuggestedAgent,
+  extractDomain,
+  createDomainApprovalRequest,
+  checkUrlsForApproval,
   API_REGISTRY,
   DOMAIN_AGENTS,
 };

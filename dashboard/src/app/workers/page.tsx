@@ -371,6 +371,21 @@ export default function WorkersPage() {
                           </Box>
                         )}
 
+                        {/* Result (Worker Output) */}
+                        {exec.result && exec.success && (
+                          <Box>
+                            <Typography variant="caption" sx={{ color: '#4caf50' }}>Ergebnis</Typography>
+                            <Paper sx={{ p: 1.5, bgcolor: 'rgba(76,175,80,0.1)', mt: 0.5, maxHeight: 300, overflow: 'auto' }}>
+                              <Typography
+                                variant="body2"
+                                sx={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '0.8rem' }}
+                              >
+                                {exec.result}
+                              </Typography>
+                            </Paper>
+                          </Box>
+                        )}
+
                         {/* Tools Used */}
                         {exec.toolsUsed && exec.toolsUsed.length > 0 && (
                           <Box>

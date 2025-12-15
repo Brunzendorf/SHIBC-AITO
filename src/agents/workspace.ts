@@ -24,6 +24,9 @@ export async function initializeWorkspace(agentType: string): Promise<boolean> {
     // Check if workspace already exists with .git
     if (existsSync(`${WORKSPACE_PATH}/.git`)) {
       logger.info('Workspace already initialized, pulling latest...');
+      // Configure authentication for existing workspace
+      await configureRemoteAuth();
+      await configureGitUser(agentType);
       await pullWorkspace();
       // Always switch back to main branch on init
       await execAsync(`cd ${WORKSPACE_PATH} && git checkout ${workspaceConfig.branch}`).catch(() => {});
@@ -49,6 +52,9 @@ export async function initializeWorkspace(agentType: string): Promise<boolean> {
 
     // Configure git user for commits
     await configureGitUser(agentType);
+
+    // Configure remote URL with authentication (clone URL may not persist token)
+    await configureRemoteAuth();
 
     // Configure gh CLI auth via GITHUB_TOKEN
     if (config.GITHUB_TOKEN) {
@@ -90,6 +96,27 @@ async function configureGitUser(agentType: string): Promise<void> {
   await execAsync(`cd ${WORKSPACE_PATH} && git config user.email "${email}"`);
 
   logger.debug({ name, email }, 'Git user configured');
+}
+
+/**
+ * Configure remote URL with authentication token
+ * This is necessary because git clone stores the plain URL,
+ * and interactive credential prompts don't work in containers
+ */
+async function configureRemoteAuth(): Promise<void> {
+  if (!config.GITHUB_TOKEN) {
+    logger.debug('No GITHUB_TOKEN, skipping remote auth configuration');
+    return;
+  }
+
+  try {
+    const authenticatedUrl = workspaceConfig.getAuthenticatedUrl();
+    await execAsync(`cd ${WORKSPACE_PATH} && git remote set-url origin "${authenticatedUrl}"`);
+    logger.debug('Remote URL configured with authentication');
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.warn({ error: errMsg }, 'Failed to configure remote auth');
+  }
 }
 
 /**
@@ -227,14 +254,28 @@ export async function commitAndCreatePR(
     const { stdout: hash } = await execAsync(`cd ${WORKSPACE_PATH} && git rev-parse --short HEAD`);
     const commitHash = hash.trim();
 
-    // Try to push branch (may fail if no GitHub auth)
+    // Try to push branch
     let pushSucceeded = false;
     try {
-      await execAsync(`cd ${WORKSPACE_PATH} && git push -u origin ${branchName}`, { timeout: 30000 });
+      const { stderr: pushStderr } = await execAsync(`cd ${WORKSPACE_PATH} && git push -u origin ${branchName}`, { timeout: 30000 });
       pushSucceeded = true;
+      logger.info({ branchName }, 'Branch pushed to remote successfully');
+      if (pushStderr && !pushStderr.includes('To https://') && !pushStderr.includes('new branch')) {
+        logger.debug({ stderr: pushStderr }, 'Push stderr (informational)');
+      }
     } catch (pushError) {
       const pushErrMsg = pushError instanceof Error ? pushError.message : String(pushError);
-      logger.warn({ error: pushErrMsg, branchName }, 'Failed to push branch (no remote auth?), commit saved locally');
+      logger.error({ error: pushErrMsg, branchName }, 'Failed to push branch to remote - PR workflow blocked');
+      // Re-configure auth and retry once
+      await configureRemoteAuth();
+      try {
+        await execAsync(`cd ${WORKSPACE_PATH} && git push -u origin ${branchName}`, { timeout: 30000 });
+        pushSucceeded = true;
+        logger.info({ branchName }, 'Branch pushed on retry after auth reconfiguration');
+      } catch (retryError) {
+        const retryErrMsg = retryError instanceof Error ? retryError.message : String(retryError);
+        logger.error({ error: retryErrMsg, branchName }, 'Push retry also failed - commit saved locally only');
+      }
     }
 
     // Create PR if push succeeded and PR workflow enabled

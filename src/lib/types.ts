@@ -264,3 +264,22 @@ export interface WorkerResult {
   error?: string;             // Error message if failed
   duration: number;           // Execution time in ms
 }
+
+// Domain Approval Request Types
+export type DomainApprovalStatus = 'pending' | 'approved' | 'rejected' | 'auto_approved';
+
+export interface DomainApprovalRequest {
+  id: string;
+  domain: string;
+  requestedBy: AgentType;       // Agent that requested access
+  taskContext: string;          // What task needed this domain
+  url: string;                  // Full URL that was attempted
+  reason?: string;              // Why it's needed
+  status: DomainApprovalStatus;
+  reviewedBy?: string;          // 'ceo', 'human', or 'auto'
+  reviewNotes?: string;
+  suggestedCategory?: string;   // AI suggested category
+  securityScore?: number;       // AI security assessment (0-100)
+  createdAt: Date;
+  updatedAt: Date;
+}

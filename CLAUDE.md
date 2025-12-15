@@ -151,3 +151,4 @@ cp .env.example .env
 - **Wrong spawn_worker format**: Check profile has MCP Workers section
 - **Invalid action error**: Need `type`, `task`, `servers` fields
 - **Claude unavailable**: Check auth in container
+- no ANTHROPIC_API_KEY usage in the complete AITO system! we use the installed claude code via cli!!!!

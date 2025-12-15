@@ -6,6 +6,8 @@ import { publish, channels } from '../lib/redis.js';
 import { agentConfigs, numericConfig } from '../lib/config.js';
 import { autoRestartUnhealthy } from './container.js';
 import { runArchiveWorker, getArchiveStats } from '../workers/archive-worker.js';
+import { runDataFetch } from '../lib/data-fetcher.js';
+import { runBacklogGrooming } from '../workers/backlog-groomer.js';
 import type { AgentType, ScheduledJob, AgentMessage } from '../lib/types.js';
 
 const logger = createLogger('scheduler');
@@ -204,6 +206,60 @@ export function scheduleArchiveWorker(): string {
   return jobId;
 }
 
+// Schedule Data Fetcher - external data (news, market, etc.) caching
+export function scheduleDataFetcher(): string {
+  const jobId = 'data-fetcher';
+  const cronExpression = '*/10 * * * *'; // Every 10 minutes
+
+  logger.info({ cronExpression }, 'Scheduling Data Fetcher');
+
+  const task = cron.schedule(cronExpression, async () => {
+    try {
+      logger.info('Running Data Fetcher');
+      await runDataFetch();
+    } catch (err) {
+      logger.error({ err }, 'Data Fetcher failed');
+    }
+  });
+
+  jobs.set(jobId, task);
+  jobMetadata.set(jobId, {
+    id: jobId,
+    agentId: 'system',
+    cronExpression,
+    enabled: true,
+  });
+
+  return jobId;
+}
+
+// Schedule Backlog Grooming - workflow optimization every 3 hours
+export function scheduleBacklogGrooming(): string {
+  const jobId = 'backlog-grooming';
+  const cronExpression = '0 */3 * * *'; // Every 3 hours
+
+  logger.info({ cronExpression }, 'Scheduling Backlog Grooming');
+
+  const task = cron.schedule(cronExpression, async () => {
+    try {
+      logger.info('Running Backlog Grooming');
+      await runBacklogGrooming();
+    } catch (err) {
+      logger.error({ err }, 'Backlog Grooming failed');
+    }
+  });
+
+  jobs.set(jobId, task);
+  jobMetadata.set(jobId, {
+    id: jobId,
+    agentId: 'system',
+    cronExpression,
+    enabled: true,
+  });
+
+  return jobId;
+}
+
 // Schedule daily digest
 export function scheduleDailyDigest(): string {
   const jobId = 'daily-digest';
@@ -324,6 +380,12 @@ export async function initialize(): Promise<void> {
   scheduleEscalationChecks();
   scheduleDailyDigest();
   scheduleArchiveWorker();
+  scheduleDataFetcher();
+  scheduleBacklogGrooming();
+
+  // Run data fetch immediately on startup
+  logger.info('Running initial data fetch...');
+  runDataFetch().catch(err => logger.error({ err }, 'Initial data fetch failed'));
 
   // Schedule agent loops
   await initializeAgentSchedules();

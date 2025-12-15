@@ -69,9 +69,9 @@ export function calculateBackoffDelay(attempt: number): number {
 }
 
 /**
- * Check if Claude Code CLI is available
+ * Check if Claude Code CLI is available (single attempt)
  */
-export async function isClaudeAvailable(): Promise<boolean> {
+function checkClaudeOnce(): Promise<boolean> {
   return new Promise((resolve) => {
     const proc = spawn('claude', ['--version'], {
       shell: false,
@@ -92,6 +92,24 @@ export async function isClaudeAvailable(): Promise<boolean> {
       resolve(false);
     }, 5000);
   });
+}
+
+/**
+ * Check if Claude Code CLI is available with retries
+ * This handles startup timing issues with shared volumes
+ */
+export async function isClaudeAvailable(retries = 3, delayMs = 2000): Promise<boolean> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    const available = await checkClaudeOnce();
+    if (available) {
+      return true;
+    }
+    if (attempt < retries) {
+      logger.debug({ attempt, retries }, 'Claude not available, retrying...');
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  return false;
 }
 
 /**
@@ -279,12 +297,18 @@ export function buildLoopPrompt(
   ragContext?: string,
   pendingTasks?: PendingTask[]
 ): string {
-  // Current date/time for agent awareness
+  // Current date/time for agent awareness - CRITICAL for time-sensitive content
   const now = new Date();
-  const currentDate = now.toISOString().split('T')[0]; // YYYY-MM-DD
+  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const months = ['January', 'February', 'March', 'April', 'May', 'June',
+                  'July', 'August', 'September', 'October', 'November', 'December'];
+  const dayName = days[now.getUTCDay()];
+  const monthName = months[now.getUTCMonth()];
+  const dayOfMonth = now.getUTCDate();
+  const year = now.getUTCFullYear();
   const currentTime = now.toISOString().split('T')[1].split('.')[0]; // HH:MM:SS
-  const quarter = 'Q' + (Math.floor(now.getMonth() / 3) + 1);
-  const year = now.getFullYear();
+  const quarter = 'Q' + (Math.floor(now.getUTCMonth() / 3) + 1);
+  const humanDate = `${dayName}, ${monthName} ${dayOfMonth}, ${year}`;
 
   const parts = [
     '# Agent Loop Execution',
@@ -292,11 +316,14 @@ export function buildLoopPrompt(
     '## Agent: ' + profile.name + ' (' + profile.codename + ')',
     '## Trigger: ' + trigger.type,
     '',
-    '## 📅 Current Date & Time',
-    '- **Date:** ' + currentDate,
+    '## 📅 CURRENT DATE & TIME (USE THIS!)',
+    '⚠️ **TODAY IS: ' + humanDate + '**',
+    '- **Day:** ' + dayName,
+    '- **Date:** ' + year + '-' + String(now.getUTCMonth() + 1).padStart(2, '0') + '-' + String(dayOfMonth).padStart(2, '0'),
     '- **Time (UTC):** ' + currentTime,
     '- **Quarter:** ' + quarter + ' ' + year,
-    '- **Year:** ' + year,
+    '',
+    'When creating content, ALWAYS use the current date above. Do NOT guess the day.',
     '',
     '## Current State',
     '```json',

@@ -5,10 +5,14 @@
 
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
+import { dirname, join } from 'path';
 import { createLogger } from '../lib/logger.js';
 import type { AgentType } from '../lib/types.js';
 
 const logger = createLogger('profile');
+
+// Cache for base profile to avoid re-reading
+let cachedBaseProfile: string | null = null;
 
 export interface AgentProfile {
   type: AgentType;
@@ -142,7 +146,36 @@ function extractStartupPrompt(content: string): string {
 }
 
 /**
+ * Load base profile from profiles/base.md
+ * Returns empty string if not found (backwards compatible)
+ */
+async function loadBaseProfile(profileDir: string): Promise<string> {
+  if (cachedBaseProfile !== null) {
+    return cachedBaseProfile;
+  }
+
+  const basePath = join(profileDir, 'base.md');
+
+  if (!existsSync(basePath)) {
+    logger.debug({ basePath }, 'No base profile found, using individual profile only');
+    cachedBaseProfile = '';
+    return '';
+  }
+
+  try {
+    cachedBaseProfile = await readFile(basePath, 'utf-8');
+    logger.info({ basePath }, 'Base profile loaded');
+    return cachedBaseProfile;
+  } catch (error) {
+    logger.warn({ error, basePath }, 'Failed to load base profile');
+    cachedBaseProfile = '';
+    return '';
+  }
+}
+
+/**
  * Load and parse an agent profile from markdown file
+ * Automatically merges with base.md if present
  */
 export async function loadProfile(profilePath: string, agentType: AgentType): Promise<AgentProfile> {
   logger.info({ profilePath, agentType }, 'Loading agent profile');
@@ -151,8 +184,20 @@ export async function loadProfile(profilePath: string, agentType: AgentType): Pr
     throw new Error('Profile file not found: ' + profilePath);
   }
 
-  const content = await readFile(profilePath, 'utf-8');
-  const identity = extractIdentity(content);
+  // Load base profile first
+  const profileDir = dirname(profilePath);
+  const baseContent = await loadBaseProfile(profileDir);
+
+  // Load individual profile
+  const individualContent = await readFile(profilePath, 'utf-8');
+
+  // Merge: base first, then individual (individual can override)
+  // The individual profile should focus on role-specific content
+  const mergedContent = baseContent
+    ? `${baseContent}\n\n---\n\n# Role-Specific Profile\n\n${individualContent}`
+    : individualContent;
+
+  const identity = extractIdentity(individualContent); // Identity comes from individual
 
   const profile: AgentProfile = {
     type: agentType,
@@ -161,21 +206,27 @@ export async function loadProfile(profilePath: string, agentType: AgentType): Pr
     department: identity.department || 'Unknown',
     reportsTo: identity.reportsTo || 'CEO Agent',
     manages: identity.manages,
-    mission: extractSection(content, 'Mission Statement'),
-    responsibilities: extractBulletPoints(extractSection(content, 'Core Responsibilities')),
-    decisionAuthority: extractDecisionAuthority(content),
-    loopInterval: parseLoopInterval(content),
-    loopActions: extractBulletPoints(extractSection(content, 'Loop Schedule')),
-    metrics: extractBulletPoints(extractSection(content, 'Key Metrics')),
+    mission: extractSection(individualContent, 'Mission Statement'),
+    responsibilities: extractBulletPoints(extractSection(individualContent, 'Core Responsibilities')),
+    decisionAuthority: extractDecisionAuthority(individualContent),
+    loopInterval: parseLoopInterval(individualContent),
+    loopActions: extractBulletPoints(extractSection(individualContent, 'Loop Schedule')),
+    metrics: extractBulletPoints(extractSection(individualContent, 'Key Metrics')),
     communicationStyle: {
-      internal: extractSection(content, 'Communication Style').substring(0, 500),
+      internal: extractSection(individualContent, 'Communication Style').substring(0, 500),
     },
-    guidingPrinciples: extractBulletPoints(extractSection(content, 'Guiding Principles')),
-    startupPrompt: extractStartupPrompt(content),
-    rawContent: content,
+    guidingPrinciples: extractBulletPoints(extractSection(mergedContent, 'Guiding Principles')),
+    startupPrompt: extractStartupPrompt(individualContent),
+    rawContent: mergedContent, // Claude gets the merged content!
   };
 
-  logger.info({ agentType, name: profile.name, loopInterval: profile.loopInterval }, 'Profile loaded');
+  logger.info({
+    agentType,
+    name: profile.name,
+    loopInterval: profile.loopInterval,
+    hasBaseProfile: !!baseContent
+  }, 'Profile loaded');
+
   return profile;
 }
 

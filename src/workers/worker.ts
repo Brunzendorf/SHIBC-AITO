@@ -13,48 +13,57 @@ import { MCP_SERVERS_BY_AGENT, loadMCPConfig, type MCPServerConfig } from '../li
 import { executeClaudeCodeWithMCP, isClaudeAvailable } from '../agents/claude.js';
 import { publisher, channels } from '../lib/redis.js';
 import { isDryRun } from '../lib/config.js';
-import { getAPIsForTask, generateAPIPrompt, getWhitelistForPromptAsync, type APIDefinition } from '../lib/api-registry.js';
+import { getAPIsForTask, generateAPIPrompt, getWhitelistForPromptAsync, createDomainApprovalRequest, extractDomain, type APIDefinition } from '../lib/api-registry.js';
 import { indexAPIUsage, searchAPIPatterns, buildContext } from '../lib/rag.js';
 import type { AgentType, WorkerTask, WorkerResult } from '../lib/types.js';
 
 const logger = createLogger('worker');
 
-// Dry-run mode: log what WOULD happen without executing
-async function executeDryRun(task: WorkerTask): Promise<WorkerResult> {
-  const start = Date.now();
+// Servers that can modify external state (write operations)
+const WRITE_CAPABLE_SERVERS = ['telegram', 'twitter', 'directus'];
 
-  logger.info({
-    taskId: task.id,
-    parentAgent: task.parentAgent,
-    servers: task.servers,
-    task: task.task,
-    mode: 'DRY_RUN'
-  }, '🔸 DRY-RUN: Would execute MCP task');
+// Servers that only read data (safe in DRY_RUN)
+const READ_ONLY_SERVERS = ['fetch', 'etherscan', 'time'];
 
-  // Log to Redis for dashboard visibility
-  const dryRunLog = {
-    timestamp: new Date().toISOString(),
-    taskId: task.id,
-    parentAgent: task.parentAgent,
-    servers: task.servers,
-    task: task.task,
-    mode: 'DRY_RUN',
-    wouldExecute: true,
-    actuallyExecuted: false,
-  };
+// Check if task uses any write-capable servers
+function hasWriteServers(servers: string[]): boolean {
+  return servers.some(s => WRITE_CAPABLE_SERVERS.includes(s));
+}
 
-  await publisher.publish(channels.workerLogs, JSON.stringify(dryRunLog));
-  await publisher.lpush('worker:dryrun:history', JSON.stringify(dryRunLog));
-  await publisher.ltrim('worker:dryrun:history', 0, 999);
+// Generate DRY_RUN instructions for the worker prompt
+function getDryRunInstructions(servers: string[]): string {
+  const writeServers = servers.filter(s => WRITE_CAPABLE_SERVERS.includes(s));
+  if (writeServers.length === 0) return '';
 
-  return {
-    taskId: task.id,
-    success: true,
-    result: `[DRY-RUN] Would execute: "${task.task}" using servers: [${task.servers.join(', ')}]`,
-    toolsUsed: ['DRY_RUN_SIMULATED'],
-    duration: Date.now() - start,
-    data: { dryRun: true, task: task.task, servers: task.servers },
-  };
+  return `
+## 🔸 DRY-RUN MODE ACTIVE
+
+**CRITICAL: This is a DRY-RUN - DO NOT execute write operations!**
+
+Write-capable servers in your task: ${writeServers.join(', ')}
+
+### What you MUST do:
+1. ✅ EXECUTE all read operations (fetch data, get prices, read files)
+2. ✅ PROCESS the data normally
+3. ❌ DO NOT send messages (telegram, twitter)
+4. ❌ DO NOT create/update content (directus)
+5. ❌ DO NOT write files (filesystem write operations)
+
+### For write operations, SIMULATE instead:
+- Return what you WOULD have sent/posted
+- Include the full content in your result
+- Mark it clearly as "[DRY-RUN] Would send: ..."
+
+### Example response format:
+{
+  "success": true,
+  "result": "[DRY-RUN] Would send to Telegram: 'Your message here'",
+  "data": { "simulatedAction": "telegram_send", "content": "..." },
+  "dryRun": true
+}
+
+**Remember: Fetch real data, but simulate external writes!**
+`;
 }
 
 function generateDynamicMCPConfig(servers: string[], taskId: string): { configPath: string; serverConfigs: Record<string, MCPServerConfig> } {
@@ -73,7 +82,18 @@ function cleanupMCPConfig(configPath: string): void {
 
 async function logToolCalls(task: WorkerTask, toolsUsed: string[], result: WorkerResult): Promise<void> {
   try {
-    const entry = { timestamp: new Date().toISOString(), taskId: task.id, parentAgent: task.parentAgent, servers: task.servers, toolsUsed, success: result.success, duration: result.duration, error: result.error };
+    const entry = {
+      timestamp: new Date().toISOString(),
+      taskId: task.id,
+      parentAgent: task.parentAgent,
+      servers: task.servers,
+      task: task.task,
+      toolsUsed,
+      success: result.success,
+      duration: result.duration,
+      error: result.error,
+      result: result.result,  // Include worker output for dashboard display
+    };
     await publisher.publish(channels.workerLogs, JSON.stringify(entry));
     await publisher.lpush('worker:logs:history', JSON.stringify(entry));
     await publisher.ltrim('worker:logs:history', 0, 999);
@@ -84,11 +104,71 @@ interface ParsedWorkerOutput extends Partial<WorkerResult> {
   toolsUsed?: string[];
   apiUsed?: string;
   endpoint?: string;
+  blockedDomain?: string;
+  blockedUrl?: string;
+}
+
+// Patterns that indicate a domain was blocked
+const DOMAIN_BLOCKED_PATTERNS = [
+  /domain\s+(?:is\s+)?not\s+(?:on\s+)?(?:the\s+)?whitelist/i,
+  /nicht\s+(?:auf\s+der\s+)?whitelist/i,
+  /(?:not\s+)?(?:a\s+)?trusted\s+domain/i,
+  /security[:\s]+(?:domain|url)\s+(?:blocked|rejected)/i,
+  /unbekannte\s+domain/i,
+  /domain\s+blocked/i,
+  /url\s+not\s+allowed/i,
+];
+
+// Extract URL from worker output that mentions domain issues
+function extractBlockedUrl(output: string): string | null {
+  // Look for URLs in the output
+  const urlPatterns = [
+    /https?:\/\/[^\s"'<>]+/gi,
+    /(?:domain|url)[:\s]+([a-z0-9][-a-z0-9]*(?:\.[a-z0-9][-a-z0-9]*)+)/gi,
+  ];
+
+  for (const pattern of urlPatterns) {
+    const matches = output.match(pattern);
+    if (matches && matches.length > 0) {
+      // Return the first URL found
+      const url = matches[0].replace(/[.,;:]$/, ''); // Remove trailing punctuation
+      if (url.startsWith('http')) return url;
+    }
+  }
+  return null;
 }
 
 function parseWorkerOutput(output: string): ParsedWorkerOutput {
-  try { const m = output.match(/\{[\s\S]*\}/); if (m) return JSON.parse(m[0]); } catch {}
-  return { success: true, result: output.slice(0, 500), toolsUsed: [] };
+  // First check for domain blocked patterns
+  let blockedDomain: string | undefined;
+  let blockedUrl: string | undefined;
+
+  for (const pattern of DOMAIN_BLOCKED_PATTERNS) {
+    if (pattern.test(output)) {
+      blockedUrl = extractBlockedUrl(output) || undefined;
+      if (blockedUrl) {
+        blockedDomain = extractDomain(blockedUrl) || undefined;
+      }
+      break;
+    }
+  }
+
+  // Try to parse JSON from output
+  try {
+    const m = output.match(/\{[\s\S]*\}/);
+    if (m) {
+      const parsed = JSON.parse(m[0]);
+      return { ...parsed, blockedDomain, blockedUrl };
+    }
+  } catch {}
+
+  return {
+    success: !blockedDomain, // Mark as failed if domain was blocked
+    result: output.slice(0, 500),
+    toolsUsed: [],
+    blockedDomain,
+    blockedUrl,
+  };
 }
 
 export function validateServerAccess(agentType: AgentType, servers: string[]): { valid: boolean; denied: string[] } {
@@ -104,10 +184,10 @@ export async function executeWorker(task: WorkerTask): Promise<WorkerResult> {
 
   logger.info({ taskId: task.id, parentAgent: task.parentAgent, servers: task.servers, dryRun: isDryRun }, 'Starting MCP worker');
 
-  // DRY-RUN MODE: Log but don't execute external MCP calls
+  // DRY-RUN MODE: Execute reads, simulate writes via prompt instructions
   if (isDryRun) {
-    logger.warn({ taskId: task.id }, '⚠️ DRY-RUN MODE ACTIVE - External calls will be simulated');
-    return executeDryRun(task);
+    const hasWrites = hasWriteServers(task.servers);
+    logger.info({ taskId: task.id, hasWriteServers: hasWrites }, '🔸 DRY-RUN MODE - Reads will execute, writes will be simulated');
   }
 
   const access = validateServerAccess(task.parentAgent, task.servers);
@@ -174,10 +254,11 @@ export async function executeWorker(task: WorkerTask): Promise<WorkerResult> {
 
     // Enhanced system prompt with API guidance and security
     const domainWhitelist = await getWhitelistForPromptAsync();
+    const dryRunInstructions = isDryRun ? getDryRunInstructions(task.servers) : '';
 
     const systemPrompt = `MCP Worker for ${task.parentAgent.toUpperCase()} agent.
 Available MCP servers: ${task.servers.join(', ')}
-
+${dryRunInstructions}
 ## 🔒 SECURITY: Domain Whitelist
 ${domainWhitelist}
 
@@ -192,7 +273,19 @@ When using the fetch tool for external APIs:
 3. Reference environment variables like \${ENV_VAR_NAME} for API keys
 4. Return structured JSON with your results
 
-Execute the task and return JSON with: { "success": true/false, "result": "description", "data": {...}, "apiUsed": "api_name", "endpoint": "/path" }`;
+## ⚠️ CRITICAL: Response Format
+Return JSON with ACTUAL DATA in the result field, not just "success":
+
+{
+  "success": true/false,
+  "result": "INCLUDE ACTUAL DATA HERE! Example: 'SHIBC price: $2.5e-10, Market Cap: $150K, 24h Change: +2.3%' or 'Fear & Greed Index: 25 (Extreme Fear)' or 'Treasury Balance: 0.0205 ETH ($64.02)'",
+  "data": { /* structured data object */ },
+  "apiUsed": "api_name",
+  "endpoint": "/path",
+  "toolsUsed": ["tool1", "tool2"]
+}
+
+The "result" field MUST contain the key data points as a readable string - this is what the agent sees!`;
 
     const claude = await executeClaudeCodeWithMCP({
       prompt,
@@ -225,6 +318,70 @@ Execute the task and return JSON with: { "success": true/false, "result": "descr
     }
 
     const parsed = parseWorkerOutput(claude.output);
+
+    // ========================================
+    // DOMAIN APPROVAL REQUEST (if blocked)
+    // ========================================
+    if (parsed.blockedDomain && parsed.blockedUrl) {
+      logger.info({
+        taskId: task.id,
+        blockedDomain: parsed.blockedDomain,
+        blockedUrl: parsed.blockedUrl,
+        parentAgent: task.parentAgent,
+      }, 'Detected blocked domain, creating approval request');
+
+      try {
+        const approvalResult = await createDomainApprovalRequest(
+          parsed.blockedUrl,
+          task.parentAgent,
+          task.task, // Task context
+          `Worker attempted fetch during task: ${task.task.slice(0, 200)}`
+        );
+
+        if (approvalResult?.created) {
+          logger.info({
+            taskId: task.id,
+            requestId: approvalResult.requestId,
+            domain: approvalResult.domain,
+          }, 'Domain approval request created');
+
+          // Publish notification for dashboard/CEO
+          await publisher.publish(channels.broadcast, JSON.stringify({
+            type: 'domain_approval_needed',
+            requestId: approvalResult.requestId,
+            domain: approvalResult.domain,
+            requestedBy: task.parentAgent,
+            taskContext: task.task.slice(0, 200),
+            timestamp: new Date().toISOString(),
+          }));
+        } else if (approvalResult?.alreadyPending) {
+          logger.info({
+            taskId: task.id,
+            domain: approvalResult.domain,
+          }, 'Domain approval request already pending');
+        }
+      } catch (approvalError) {
+        logger.error({ error: approvalError, domain: parsed.blockedDomain }, 'Failed to create domain approval request');
+      }
+
+      // Return with domain_blocked error
+      const r: WorkerResult = {
+        taskId: task.id,
+        success: false,
+        result: parsed.result || claude.output.slice(0, 1000),
+        error: `Domain not whitelisted: ${parsed.blockedDomain}. Approval request created.`,
+        toolsUsed: parsed.toolsUsed || [],
+        duration: Date.now() - start,
+        data: {
+          blockedDomain: parsed.blockedDomain,
+          blockedUrl: parsed.blockedUrl,
+          approvalPending: true,
+        },
+      };
+      await logToolCalls(task, r.toolsUsed || [], r);
+      return r;
+    }
+
     const result: WorkerResult = {
       taskId: task.id,
       success: parsed.success ?? true,

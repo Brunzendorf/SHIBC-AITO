@@ -55,7 +55,10 @@ export default function InitiativesPanel() {
     try {
       const response = await getInitiatives();
       if (response.data) {
-        setInitiatives(response.data);
+        // API returns { success, data, timestamp } - extract the actual array
+        const data = response.data as { data?: Initiative[] } | Initiative[];
+        const initiativesList = Array.isArray(data) ? data : (data?.data || []);
+        setInitiatives(Array.isArray(initiativesList) ? initiativesList : []);
       } else if (response.error) {
         setError(response.error);
       }

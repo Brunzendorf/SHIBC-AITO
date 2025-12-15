@@ -89,6 +89,9 @@ services:
         # Optional: Smaller embedding model as fallback
         curl -X POST http://ollama:11434/api/pull -d '{"name": "nomic-embed-text"}'
         echo "nomic-embed-text pulled"
+        # LLM for text generation (archive-worker, fallback)
+        curl -X POST http://ollama:11434/api/pull -d '{"name": "llama3.2:3b"}'
+        echo "llama3.2:3b pulled"
         echo "All models ready!"
     networks:
       - aito-network
@@ -168,6 +171,9 @@ services:
       TELEGRAM_ADMIN_CHAT_ID: ${TELEGRAM_ADMIN_CHAT_ID}
       SENDGRID_API_KEY: ${SENDGRID_API_KEY}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
+      # Data fetcher API keys
+      NEWS_API_KEY: ${NEWS_API_KEY}
+      COINGECKO_API_KEY: ${COINGECKO_API_KEY}
     volumes:
       - ./profiles:/app/profiles:ro
       - orchestrator_logs:/app/logs
@@ -241,6 +247,8 @@ services:
       QDRANT_URL: http://qdrant:6333
       SNAPSHOT_SPACE: ${SNAPSHOT_SPACE:-shibaclassic.eth}
       GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
     volumes:
       - ./profiles:/app/profiles:ro
       - dao_memory:/app/memory
@@ -280,6 +288,8 @@ services:
       DIRECTUS_URL: ${DIRECTUS_URL}
       DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
       DEEPL_API_KEY: ${DEEPL_API_KEY}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
     volumes:
       - ./profiles:/app/profiles:ro
       - cmo_memory:/app/memory
@@ -345,6 +355,8 @@ services:
       COINGECKO_API_KEY: ${COINGECKO_API_KEY}
       QUICKNODE_HTTP_URL: ${QUICKNODE_HTTP_URL}
       GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
     volumes:
       - ./profiles:/app/profiles:ro
       - cfo_memory:/app/memory
@@ -377,6 +389,8 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       # DISCORD_BOT_TOKEN removed - Discord does not exist
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
     volumes:
       - ./profiles:/app/profiles:ro
       - coo_memory:/app/memory
@@ -406,6 +420,8 @@ services:
       REDIS_URL: redis://redis:6379
       OLLAMA_URL: http://ollama:11434
       QDRANT_URL: http://qdrant:6333
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_ORG: ${GITHUB_ORG:-og-shibaclassic}
     volumes:
       - ./profiles:/app/profiles:ro
       - cco_memory:/app/memory

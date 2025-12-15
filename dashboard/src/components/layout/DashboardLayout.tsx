@@ -40,11 +40,14 @@ import {
   Close as CloseIcon,
   Chat as ChatIcon,
   Hub as NetworkIcon,
+  Security as SecurityIcon,
+  ViewColumn as KanbanIcon,
 } from '@mui/icons-material';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { usePendingDecisions, usePendingEscalations } from '@/hooks/useDecisions';
 import { useHealth } from '@/hooks/useHealth';
+import { usePendingDomainCount } from '@/hooks/useDomains';
 
 const DRAWER_WIDTH = 260;
 
@@ -66,6 +69,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   const { data: decisions } = usePendingDecisions();
   const { data: escalations } = usePendingEscalations();
   const { data: health } = useHealth();
+  const { count: pendingDomainCount } = usePendingDomainCount();
 
   const pendingDecisionCount = decisions?.length || 0;
   const pendingEscalationCount = escalations?.length || 0;
@@ -83,10 +87,17 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   const navItems: NavItem[] = [
     { label: 'Overview', href: '/', icon: <DashboardIcon /> },
+    { label: 'Kanban', href: '/kanban', icon: <KanbanIcon /> },
     { label: 'Network', href: '/network', icon: <NetworkIcon /> },
     { label: 'Agents', href: '/agents', icon: <AgentIcon /> },
     { label: 'Messages', href: '/messages', icon: <ChatIcon /> },
     { label: 'Workers', href: '/workers', icon: <WorkerIcon /> },
+    {
+      label: 'Domains',
+      href: '/domains',
+      icon: <SecurityIcon />,
+      badge: pendingDomainCount,
+    },
     {
       label: 'Decisions',
       href: '/decisions',

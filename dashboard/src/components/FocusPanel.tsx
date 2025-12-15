@@ -118,8 +118,11 @@ export default function FocusPanel() {
     try {
       const response = await api.get<FocusSettings>('/focus');
       if (response.data) {
-        setSettings(response.data as FocusSettings);
-        setOriginalSettings(response.data as FocusSettings);
+        // API returns { success, data, timestamp } - extract actual settings
+        const rawData = response.data as { data?: FocusSettings } | FocusSettings;
+        const settings = (rawData && 'revenueFocus' in rawData) ? rawData : (rawData?.data || DEFAULT_SETTINGS);
+        setSettings(settings as FocusSettings);
+        setOriginalSettings(settings as FocusSettings);
       }
     } catch (err) {
       console.error('Failed to load focus settings:', err);
