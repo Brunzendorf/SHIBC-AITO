@@ -6,6 +6,7 @@ import { initialize as initializeScheduler, stopAllJobs } from './scheduler.js';
 import { initialize as initializeEvents } from './events.js';
 import { initialize as initializeRAG } from '../lib/rag.js';
 import { startServer } from './api.js';
+import { initializeWebSocket } from './websocket.js';
 import { numericConfig } from '../lib/config.js';
 
 const logger = createLogger('orchestrator');
@@ -35,7 +36,11 @@ async function main(): Promise<void> {
 
     // Start API server
     logger.info('Starting API server...');
-    startServer();
+    const server = startServer();
+
+    // Initialize WebSocket for real-time dashboard
+    logger.info('Initializing WebSocket server...');
+    await initializeWebSocket(server);
 
     // Ensure all agents are running (start stopped containers)
     logger.info('Starting agent containers...');
@@ -48,6 +53,7 @@ async function main(): Promise<void> {
 ║                                                              ║
 ║  Status:    RUNNING                                         ║
 ║  API:       http://localhost:${numericConfig.port}                          ║
+║  WebSocket: ws://localhost:${numericConfig.port}/ws                         ║
 ║  Health:    http://localhost:${numericConfig.port}/health                   ║
 ║  Metrics:   http://localhost:${numericConfig.port}/metrics                  ║
 ║                                                              ║

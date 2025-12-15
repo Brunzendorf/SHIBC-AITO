@@ -623,8 +623,12 @@ app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 // Start API server
-export function startServer(port: number = numericConfig.port): void {
-  app.listen(port, () => {
+import { createServer, Server } from 'http';
+
+export function startServer(port: number = numericConfig.port): Server {
+  const server = createServer(app);
+  server.listen(port, () => {
     logger.info({ port }, 'API server started');
   });
+  return server;
 }
