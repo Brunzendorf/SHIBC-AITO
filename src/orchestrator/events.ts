@@ -322,43 +322,62 @@ registerHandler('pr_review_requested', async (message) => {
       logger.info({
         prNumber: payload.prNumber,
         score: reviewResult.score,
+        category: payload.category || 'content',
       }, 'PR passed RAG quality check');
 
-      // Auto-merge if enabled, otherwise notify CEO
-      const { workspaceConfig } = await import('../lib/config.js');
-      if (workspaceConfig.autoMerge) {
-        const { mergePullRequest } = await import('../agents/workspace.js');
+      const category = payload.category || 'content'; // status | content | strategic
+      const { mergePullRequest } = await import('../agents/workspace.js');
+
+      if (category === 'status') {
+        // Status updates: auto-merge, NO RAG indexing
         await mergePullRequest(payload.prNumber);
-        logger.info({ prNumber: payload.prNumber }, 'PR auto-merged after RAG approval');
-      } else {
-        // Notify CEO for final review
+        logger.info({ prNumber: payload.prNumber }, 'Status PR auto-merged (no RAG index)');
+      } else if (category === 'strategic') {
+        // Strategic: CEO must review
         await publish(channels.head, {
           id: uuid(),
           type: 'pr_approved_by_rag',
           from: 'orchestrator',
-          to: 'head',
+          to: 'ceo',
           payload: {
             prNumber: payload.prNumber,
             prUrl: payload.prUrl,
             agentType: payload.agentType,
             summary: payload.summary,
+            category,
             ragScore: reviewResult.score,
             ragFeedback: reviewResult.feedback,
+          },
+          priority: 'high',
+          timestamp: new Date(),
+          requiresResponse: true,
+        });
+        logger.info({ prNumber: payload.prNumber }, 'Strategic PR sent to CEO for review');
+      } else {
+        // Content: broadcast to clevel, first to claim reviews
+        await publish(channels.clevel, {
+          id: uuid(),
+          type: 'pr_approved_by_rag',
+          from: 'orchestrator',
+          to: 'clevel',
+          payload: {
+            prNumber: payload.prNumber,
+            prUrl: payload.prUrl,
+            agentType: payload.agentType,
+            summary: payload.summary,
+            category,
+            ragScore: reviewResult.score,
+            ragFeedback: reviewResult.feedback,
+            claimable: true, // First to claim reviews it
           },
           priority: 'normal',
           timestamp: new Date(),
           requiresResponse: false,
         });
-        logger.info({ prNumber: payload.prNumber }, 'CEO notified for final PR approval');
+        logger.info({ prNumber: payload.prNumber }, 'Content PR broadcast to clevel for review');
       }
 
-      // Index the content for RAG
-      const { indexAgentOutput } = await import('../lib/rag.js');
-      await indexAgentOutput(
-        message.from as string,
-        payload.agentType,
-        payload.summary || 'Agent workspace update'
-      );
+      // NOTE: RAG indexing happens in pr_merged handler, NOT here!
     } else {
       logger.warn({
         prNumber: payload.prNumber,
@@ -392,6 +411,124 @@ registerHandler('pr_review_requested', async (message) => {
     const errMsg = error instanceof Error ? error.message : String(error);
     logger.error({ error: errMsg, prNumber: payload.prNumber }, 'Failed to review PR content');
   }
+});
+
+// Handle PR merged events - RAG indexing happens here (NOT on approval)
+registerHandler('pr_merged', async (message) => {
+  const payload = message.payload as any;
+  const category = payload.category || 'content';
+  const prNumber = payload.prNumber;
+  const agentType = payload.agentType;
+  const summary = payload.summary;
+
+  logger.info({
+    prNumber,
+    category,
+    agentType,
+    mergedBy: payload.mergedBy,
+  }, 'PR merged event received');
+
+  // Status updates: NO RAG indexing
+  if (category === 'status') {
+    logger.info({ prNumber }, 'Status PR merged - skipping RAG indexing');
+    return;
+  }
+
+  // Content and Strategic PRs: Index to RAG
+  try {
+    const { indexAgentOutput } = await import('../lib/rag.js');
+    await indexAgentOutput(
+      message.from as string,
+      agentType,
+      summary || `PR #${prNumber} merged`
+    );
+    logger.info({ prNumber, category, agentType }, 'PR content indexed to RAG after merge');
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error({ error: errMsg, prNumber }, 'Failed to index merged PR to RAG');
+  }
+
+  // Broadcast merge completion
+  await publish(channels.broadcast, {
+    id: uuid(),
+    type: 'broadcast',
+    from: 'orchestrator',
+    to: 'all',
+    payload: {
+      eventType: 'pr_merged',
+      prNumber,
+      agentType,
+      category,
+      summary,
+      mergedBy: payload.mergedBy,
+    },
+    priority: 'low',
+    timestamp: new Date(),
+    requiresResponse: false,
+  });
+});
+
+// Handle PR claim requests from C-Level agents
+registerHandler('claim_pr', async (message) => {
+  const payload = message.payload as any;
+  const prNumber = payload.prNumber;
+  const claimedBy = message.from;
+
+  logger.info({
+    prNumber,
+    claimedBy,
+  }, 'PR claim request received');
+
+  // Check if PR is still claimable (not already claimed)
+  // This is a simple first-come-first-served implementation
+  // In production, you might want to use Redis locks for atomicity
+  const claimKey = `pr:claim:${prNumber}`;
+  const existingClaim = await import('../lib/redis.js').then(r => r.redis.get(claimKey));
+
+  if (existingClaim) {
+    logger.info({ prNumber, alreadyClaimedBy: existingClaim }, 'PR already claimed');
+    // Notify the claimant that they were too late
+    await publish(channels.agent(claimedBy as string), {
+      id: uuid(),
+      type: 'pr_claim_rejected',
+      from: 'orchestrator',
+      to: claimedBy,
+      payload: {
+        prNumber,
+        reason: `PR #${prNumber} already claimed by ${existingClaim}`,
+      },
+      priority: 'normal',
+      timestamp: new Date(),
+      requiresResponse: false,
+    });
+    return;
+  }
+
+  // Claim the PR (expires after 1 hour)
+  await import('../lib/redis.js').then(r => r.redis.setex(claimKey, 3600, claimedBy as string));
+
+  logger.info({ prNumber, claimedBy }, 'PR claimed successfully');
+
+  // Send the full PR details to the claiming agent for review
+  await publish(channels.agent(claimedBy as string), {
+    id: uuid(),
+    type: 'pr_review_assigned',
+    from: 'orchestrator',
+    to: claimedBy,
+    payload: {
+      prNumber,
+      prUrl: payload.prUrl,
+      agentType: payload.agentType,
+      summary: payload.summary,
+      category: payload.category,
+      ragScore: payload.ragScore,
+      ragFeedback: payload.ragFeedback,
+      claimedAt: new Date().toISOString(),
+    },
+    priority: 'high',
+    timestamp: new Date(),
+    requiresResponse: true,
+  });
 });
 
 // === Decision Timeout Scheduling ===

@@ -829,7 +829,7 @@ app.delete('/whitelist/:domain', asyncHandler(async (req, res) => {
 // Get backlog issues (from Redis cache or GitHub)
 app.get('/backlog/issues', asyncHandler(async (_req, res) => {
   // Try to get from Redis cache first
-  const cached = await redis.get('backlog:context');
+  const cached = await redis.get('context:backlog');
   if (cached) {
     try {
       const backlogState = JSON.parse(cached);
@@ -894,7 +894,7 @@ app.get('/backlog/issues', asyncHandler(async (_req, res) => {
 
 // Get backlog stats
 app.get('/backlog/stats', asyncHandler(async (_req, res) => {
-  const cached = await redis.get('backlog:context');
+  const cached = await redis.get('context:backlog');
   if (cached) {
     try {
       const backlogState = JSON.parse(cached);
@@ -945,6 +945,17 @@ app.get('/backlog/stats', asyncHandler(async (_req, res) => {
     byPriority: {},
     byAgent: {},
   });
+}));
+
+// Trigger backlog grooming manually
+app.post('/backlog/refresh', asyncHandler(async (_req, res) => {
+  const { runBacklogGrooming } = await import('../workers/backlog-groomer.js');
+  logger.info('Manual backlog grooming triggered');
+
+  // Run async, don't wait
+  runBacklogGrooming().catch(err => logger.error({ err }, 'Backlog grooming failed'));
+
+  sendResponse(res, { message: 'Backlog grooming started', timestamp: new Date().toISOString() });
 }));
 
 // Error handling middleware

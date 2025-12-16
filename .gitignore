@@ -32,8 +32,11 @@ docker-compose.override.yml
 *.db
 *.sqlite
 
-# Claude
-.claude/
+# Claude - ignore auth/credentials but track agents and configs
+.claude/*
+!.claude/agents/
+!.claude/commands/
+!.claude/mcp_servers.json
 .claude-auth/
 
 # N8N

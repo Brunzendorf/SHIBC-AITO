@@ -136,7 +136,13 @@ export function scheduleHealthChecks(): string {
     try {
       await autoRestartUnhealthy();
     } catch (err) {
-      logger.error({ err }, 'Health check failed');
+      // Only log at debug level for Portainer errors (not critical)
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('Portainer')) {
+        logger.debug({ error: errMsg }, 'Health check skipped - Portainer unavailable');
+      } else {
+        logger.error({ err }, 'Health check failed');
+      }
     }
   });
 

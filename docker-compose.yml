@@ -174,6 +174,9 @@ services:
       # Data fetcher API keys
       NEWS_API_KEY: ${NEWS_API_KEY}
       COINGECKO_API_KEY: ${COINGECKO_API_KEY}
+      # GitHub (for backlog grooming)
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
     volumes:
       - ./profiles:/app/profiles:ro
       - orchestrator_logs:/app/logs
@@ -209,7 +212,7 @@ services:
     environment:
       AGENT_TYPE: ceo
       AGENT_PROFILE: /app/profiles/ceo.md
-      LOOP_INTERVAL: 3600
+      LOOP_INTERVAL: 900
       DRY_RUN: ${DRY_RUN:-false}
       POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
       REDIS_URL: redis://redis:6379
@@ -217,6 +220,8 @@ services:
       QDRANT_URL: http://qdrant:6333
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
+      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
+      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - ceo_memory:/app/memory
@@ -249,6 +254,8 @@ services:
       GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
+      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
+      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - dao_memory:/app/memory
@@ -283,6 +290,10 @@ services:
       OLLAMA_URL: http://ollama:11434
       QDRANT_URL: http://qdrant:6333
       TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN}
+      TWITTER_API_KEY: ${TWITTER_API_KEY}
+      TWITTER_API_SECRET: ${TWITTER_API_SECRET}
+      TWITTER_ACCESS_TOKEN: ${TWITTER_ACCESS_TOKEN}
+      TWITTER_ACCESS_TOKEN_SECRET: ${TWITTER_ACCESS_TOKEN_SECRET}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       DIRECTUS_URL: ${DIRECTUS_URL}
@@ -290,6 +301,8 @@ services:
       DEEPL_API_KEY: ${DEEPL_API_KEY}
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
+      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
+      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - cmo_memory:/app/memory
@@ -323,6 +336,8 @@ services:
       DIRECTUS_URL: ${DIRECTUS_URL}
       DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
       GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
+      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
+      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - cto_memory:/app/memory
@@ -358,6 +373,8 @@ services:
       GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
+      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
+      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - cfo_memory:/app/memory
@@ -392,6 +409,8 @@ services:
       # DISCORD_BOT_TOKEN removed - Discord does not exist
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
+      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
+      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - coo_memory:/app/memory
@@ -423,6 +442,8 @@ services:
       QDRANT_URL: http://qdrant:6333
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
+      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
+      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - cco_memory:/app/memory
@@ -469,7 +490,7 @@ services:
     container_name: aito-dashboard
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3080:3000"
     environment:
       - NEXT_PUBLIC_API_URL=http://orchestrator:8080
     depends_on:

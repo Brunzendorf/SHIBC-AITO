@@ -100,6 +100,10 @@ COPY package*.json ./
 # Copy agent profiles into image (no volume mount needed for Portainer API)
 COPY profiles ./profiles
 
+# Copy Claude config (agents, commands, mcp_servers) to base location
+# Will be merged into /app/.claude on startup (volume mount overwrites direct copy)
+COPY .claude ./claude-base
+
 # Create directories for agent
 RUN mkdir -p \
     /app/.claude \
@@ -133,5 +137,6 @@ EXPOSE 3001
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:3001/health || exit 1
 
-# Default command (override per agent type)
-CMD ["node", "dist/agents/index.js"]
+# Default command - merge claude-base into .claude volume, then start agent
+# cp -rn = recursive, no-clobber (don't overwrite existing files like credentials)
+CMD ["sh", "-c", "cp -rn /app/claude-base/* /app/.claude/ 2>/dev/null || true; node dist/agents/index.js"]

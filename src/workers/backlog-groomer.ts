@@ -15,6 +15,7 @@ import { redis, publisher, channels } from '../lib/redis.js';
 import { agentRepo, eventRepo } from '../lib/db.js';
 import { Octokit } from '@octokit/rest';
 import { buildDataContext } from '../lib/data-fetcher.js';
+import { triageIssues, formatTriageForCEO, getFocusSettings } from '../lib/triage.js';
 import type { EventType } from '../lib/types.js';
 
 const logger = createLogger('backlog-groomer');
@@ -432,24 +433,32 @@ async function validateEstimates(issues: GithubIssue[]): Promise<number> {
 }
 
 /**
- * Send prioritization request to CEO
+ * Send prioritization request to CEO with focus-based triage suggestions
  */
 async function requestCEOPrioritization(issues: GithubIssue[]): Promise<void> {
-  // Filter backlog issues that are ready for prioritization
+  // Filter backlog issues that need triage (no agent assigned yet)
+  const needsTriage = issues.filter(i =>
+    !isInProgress(i) &&
+    !i.labels.includes('needs-estimate') &&
+    !i.labels.includes('duplicate') &&
+    !i.labels.includes('subtask') &&
+    !i.labels.some(l => l.startsWith('agent:')) // No agent assigned yet
+  );
+
+  // Filter issues that are triaged but need prioritization
   const readyForPrio = issues.filter(i =>
     !isInProgress(i) &&
     !i.labels.includes('needs-estimate') &&
     !i.labels.includes('duplicate') &&
-    !i.labels.includes('subtask') // Subtasks are prioritized via their epic
+    !i.labels.includes('subtask') &&
+    i.labels.some(l => l.startsWith('agent:')) && // Has agent
+    !i.labels.some(l => l.startsWith('priority:')) // But no priority
   );
 
-  if (readyForPrio.length === 0) {
-    logger.info('No issues ready for prioritization');
+  if (needsTriage.length === 0 && readyForPrio.length === 0) {
+    logger.info('No issues need triage or prioritization');
     return;
   }
-
-  // Get market context for prioritization
-  const marketContext = await buildDataContext();
 
   // Find CEO agent
   const ceoAgent = await agentRepo.findByType('ceo');
@@ -458,14 +467,31 @@ async function requestCEOPrioritization(issues: GithubIssue[]): Promise<void> {
     return;
   }
 
-  // Build prioritization task
-  const issueList = readyForPrio.slice(0, 20).map(i => {
+  // Get focus settings and triage suggestions
+  const focusSettings = await getFocusSettings();
+  const triageResults = await triageIssues(needsTriage.map(i => ({
+    number: i.number,
+    title: i.title,
+    body: i.body,
+    labels: i.labels,
+  })));
+
+  // Format triage section
+  const triageSection = triageResults.length > 0
+    ? formatTriageForCEO(triageResults, focusSettings)
+    : '';
+
+  // Get market context for prioritization
+  const marketContext = await buildDataContext();
+
+  // Build prioritization list for already-triaged issues
+  const prioList = readyForPrio.slice(0, 10).map(i => {
     const effortMatch = i.body?.match(/effort[:\s]+(\d+)/i);
     const revenueMatch = i.body?.match(/revenue[:\s]+(\d+)|impact[:\s]+(\d+)/i);
     const effort = effortMatch ? effortMatch[1] : '?';
     const revenue = revenueMatch ? (revenueMatch[1] || revenueMatch[2]) : '?';
-    const labels = i.labels.filter(l => !l.startsWith('status:')).join(', ');
-    return `#${i.number}: ${i.title} [E:${effort} R:${revenue}] (${labels})`;
+    const agent = i.labels.find(l => l.startsWith('agent:'))?.replace('agent:', '').toUpperCase() || '?';
+    return `#${i.number}: ${i.title} [Agent: ${agent}, E:${effort} R:${revenue}]`;
   }).join('\n');
 
   const prioritizationTask = {
@@ -474,33 +500,54 @@ async function requestCEOPrioritization(issues: GithubIssue[]): Promise<void> {
     to: ceoAgent.id,
     payload: {
       task_id: `prio-${Date.now()}`,
-      title: 'Backlog Prioritization Review',
-      description: `## Backlog Prioritization Required
+      title: 'Backlog Triage & Prioritization',
+      description: `## Backlog Management Required
 
-The backlog has ${readyForPrio.length} issues ready for prioritization.
+### Summary
+- **${needsTriage.length}** issues need triage (agent assignment)
+- **${readyForPrio.length}** issues need prioritization
+
+---
+
+${triageSection}
+
+${readyForPrio.length > 0 ? `
+---
+
+## Issues Needing Priority Assignment
+
+These issues have agents assigned but need priority labels:
+
+${prioList}
+
+**Set priorities with:**
+\`\`\`json
+{
+  "actions": [{
+    "type": "spawn_worker",
+    "task": "Action: triage\\nIssue: #42\\nPriority: high\\nReason: Market opportunity",
+    "agent": "issue-manager"
+  }]
+}
+\`\`\`
+` : ''}
+
+---
 
 ### Current Market Context
 ${marketContext}
 
-### Issues to Prioritize (Top 20)
-${issueList}
+---
 
-### Your Task
-1. Review the issues in context of current market conditions
-2. Set priority labels: priority:critical, priority:high, priority:medium, priority:low
-3. Move top 3-5 highest priority to status:ready
+## Your Task as CEO
 
-Use this action to update priorities:
-\`\`\`json
-{
-  "actions": [
-    {"type": "update_issue", "data": {"issueNumber": 42, "comment": "Priority set to high based on market conditions"}},
-    {"type": "spawn_worker", "task": "Add label priority:high to issue 42", "servers": ["fetch"]}
-  ]
-}
-\`\`\`
+1. **Review triage suggestions** - Accept or override agent assignments
+2. **Set priorities** - critical/high/medium/low based on focus settings
+3. **Move to ready** - Top 3-5 issues should go to status:ready
+
+**Focus Alignment:** ${focusSettings.marketingVsDev > 50 ? 'Marketing-heavy' : 'Development-heavy'}, Revenue: ${focusSettings.revenueFocus}%
 `,
-      deadline: new Date(Date.now() + 3600000).toISOString(), // 1 hour
+      deadline: new Date(Date.now() + 3600000).toISOString(),
     },
     priority: 'high' as const,
     timestamp: new Date(),
@@ -509,7 +556,7 @@ Use this action to update priorities:
 
   // Publish to CEO's channel
   await publisher.publish(channels.agent(ceoAgent.id), JSON.stringify({
-    id: `grooming-prio-${Date.now()}`,
+    id: `grooming-triage-${Date.now()}`,
     ...prioritizationTask,
   }));
 
@@ -519,15 +566,22 @@ Use this action to update priorities:
     sourceAgent: 'backlog-groomer',
     targetAgent: ceoAgent.id,
     payload: {
-      action: 'prioritization_request',
-      issueCount: readyForPrio.length,
+      action: 'triage_request',
+      needsTriage: needsTriage.length,
+      needsPriority: readyForPrio.length,
+      focusSettings: {
+        marketingVsDev: focusSettings.marketingVsDev,
+        revenueFocus: focusSettings.revenueFocus,
+      },
     },
   });
 
   logger.info({
-    issueCount: readyForPrio.length,
+    needsTriage: needsTriage.length,
+    needsPriority: readyForPrio.length,
+    triageSuggestions: triageResults.length,
     ceoId: ceoAgent.id,
-  }, 'Sent prioritization request to CEO');
+  }, 'Sent triage request to CEO with focus-based suggestions');
 }
 
 /**
@@ -566,6 +620,17 @@ async function updateBacklogContext(issues: GithubIssue[]): Promise<void> {
       review: issues.filter(i => i.labels.includes(STATUS_LABELS.REVIEW)).length,
       blocked: issues.filter(i => i.labels.includes(STATUS_LABELS.BLOCKED)).length,
     },
+    // Full issues array for dashboard Kanban board
+    issues: issues.map(i => ({
+      number: i.number,
+      title: i.title,
+      body: i.body,
+      labels: i.labels,
+      state: i.state,
+      created_at: i.created_at,
+      assignee: i.assignee,
+      html_url: `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/issues/${i.number}`,
+    })),
     inProgress: issues
       .filter(i => isInProgress(i))
       .map(i => ({

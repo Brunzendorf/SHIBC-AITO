@@ -43,8 +43,14 @@ async function main(): Promise<void> {
     await initializeWebSocket(server);
 
     // Ensure all agents are running (start stopped containers)
+    // This is non-fatal - orchestrator can run without Portainer container management
     logger.info('Starting agent containers...');
-    await ensureAllAgentsRunning();
+    try {
+      await ensureAllAgentsRunning();
+    } catch (containerErr) {
+      logger.warn({ err: containerErr }, 'Failed to ensure agents running - continuing without container management');
+      logger.info('Agents may need to be started manually or via docker-compose');
+    }
 
     logger.info('AITO Orchestrator started successfully!');
     logger.info(`

@@ -23,6 +23,8 @@ import {
   isClaudeAvailable,
   buildLoopPrompt,
   parseClaudeOutput,
+  getKanbanIssuesForAgent,
+  executeClaudeAgent,
   type PendingDecision,
 } from './claude.js';
 import type { AgentType, AgentMessage, EventType } from '../lib/types.js';
@@ -337,7 +339,15 @@ export class AgentDaemon {
    */
   private shouldTriggerAI(message: AgentMessage): boolean {
     // Always trigger AI for these types
-    const aiRequired: AgentMessage['type'][] = ['task', 'decision', 'alert', 'vote', 'worker_result', 'pr_approved_by_rag'];
+    const aiRequired: AgentMessage['type'][] = [
+      'task',
+      'decision',
+      'alert',
+      'vote',
+      'worker_result',
+      'pr_approved_by_rag',   // RAG-approved PR needs review
+      'pr_review_assigned',   // Agent claimed a PR and needs to review it
+    ];
     if (aiRequired.includes(message.type)) {
       return true;
     }
@@ -534,9 +544,26 @@ export class AgentDaemon {
         logger.warn({ error: errMsg }, 'RAG search failed, continuing without context');
       }
 
+      // Fetch Kanban issues for this agent (Scrumban workflow)
+      let kanbanIssues;
+      try {
+        kanbanIssues = await getKanbanIssuesForAgent(this.config.agentType);
+        if (kanbanIssues.inProgress.length > 0 || kanbanIssues.ready.length > 0) {
+          logger.info({
+            agentType: this.config.agentType,
+            inProgress: kanbanIssues.inProgress.length,
+            ready: kanbanIssues.ready.length,
+            review: kanbanIssues.review.length,
+          }, 'Kanban issues loaded for agent');
+        }
+      } catch (kanbanErr) {
+        const errMsg = kanbanErr instanceof Error ? kanbanErr.message : String(kanbanErr);
+        logger.warn({ error: errMsg }, 'Failed to fetch Kanban issues, continuing without');
+      }
+
       // Build prompt
       const systemPrompt = generateSystemPrompt(this.profile);
-      let loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data }, pendingDecisions, ragContext, pendingTasks);
+      let loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data }, pendingDecisions, ragContext, pendingTasks, kanbanIssues);
 
       // Add initiative context so agents can propose their own initiatives
       try {
@@ -548,11 +575,7 @@ export class AgentDaemon {
         logger.debug({ error: initCtxErr }, 'Failed to get initiative context');
       }
 
-      logger.info({ systemPromptLength: systemPrompt.length, loopPromptLength: loopPrompt.length }, 'Prompt lengths');
-
-      // FULL PROMPT LOGGING - to debug why agents don't use spawn_worker
-      logger.info({ fullSystemPrompt: systemPrompt }, '=== FULL SYSTEM PROMPT ===');
-      logger.info({ fullLoopPrompt: loopPrompt }, '=== FULL LOOP PROMPT ===');
+      logger.debug({ systemPromptLength: systemPrompt.length, loopPromptLength: loopPrompt.length }, 'Prompt lengths');
 
       // Execute AI with retry on transient errors (overload, rate limit)
       let result;
@@ -629,10 +652,30 @@ export class AgentDaemon {
 
           // Commit workspace changes to git (with PR if enabled)
           if (await workspace.hasUncommittedChanges()) {
+            // Detect PR category based on summary content
+            // Status updates (routine reports, metrics) → auto-merge, no RAG
+            // Content (marketing, community content) → clevel review
+            // Strategic (partnerships, major changes) → CEO review
+            const summaryLower = (parsed.summary || '').toLowerCase();
+            let prCategory: 'status' | 'content' | 'strategic' = 'content';
+            if (summaryLower.includes('status update') ||
+                summaryLower.includes('routine') ||
+                summaryLower.includes('metrics') ||
+                summaryLower.includes('loop') ||
+                summaryLower.includes('daily report')) {
+              prCategory = 'status';
+            } else if (summaryLower.includes('strategy') ||
+                       summaryLower.includes('partnership') ||
+                       summaryLower.includes('major') ||
+                       summaryLower.includes('critical')) {
+              prCategory = 'strategic';
+            }
+
             const commitResult = await workspace.commitAndCreatePR(
               this.config.agentType,
               parsed.summary || `Loop ${loopCount + 1} completed`,
-              loopCount + 1
+              loopCount + 1,
+              prCategory
             );
             if (commitResult.success && commitResult.filesChanged) {
               logger.info({
@@ -640,6 +683,7 @@ export class AgentDaemon {
                 commitHash: commitResult.commitHash,
                 prNumber: commitResult.prNumber,
                 prUrl: commitResult.prUrl,
+                category: prCategory,
               }, 'Workspace changes committed');
 
               // If PR was created, request RAG quality review
@@ -657,9 +701,10 @@ export class AgentDaemon {
                     commitHash: commitResult.commitHash,
                     filesChanged: await workspace.getChangedFiles(),
                     summary: parsed.summary,
+                    category: prCategory,
                   },
                 }));
-                logger.info({ prNumber: commitResult.prNumber }, 'PR review requested');
+                logger.info({ prNumber: commitResult.prNumber, category: prCategory }, 'PR review requested');
               } else {
                 // No PR (direct push) - just index the files
                 const changedFiles = await workspace.getChangedFiles();
@@ -995,6 +1040,43 @@ export class AgentDaemon {
         const servers = (actionData?.servers as string[]) || (actionAny.servers as string[]) || [];
         const context = (actionData?.context || actionAny.context) as Record<string, unknown> | undefined;
         const timeout = (actionData?.timeout || actionAny.timeout) as number | undefined;
+        const agentName = (actionData?.agent as string) || (actionAny.agent as string) || '';
+
+        // If agent is specified, use Claude Agent instead of MCP worker
+        if (agentName && task) {
+          logger.info({ agent: agentName, task: task.slice(0, 50) }, 'Spawning Claude Agent for task');
+
+          // Run Claude Agent asynchronously
+          executeClaudeAgent({
+            agent: agentName,
+            prompt: task,
+            timeout: timeout || 120000,
+          }).then(async (result) => {
+            // Send result back to parent agent
+            const message: AgentMessage = {
+              id: crypto.randomUUID(),
+              type: 'direct',
+              from: `agent:${agentName}`,
+              to: this.config.agentId,
+              payload: {
+                type: 'worker_result',
+                taskId: crypto.randomUUID(),
+                success: result.success,
+                result: result.output,
+                error: result.error,
+                duration: result.durationMs,
+              },
+              priority: 'normal',
+              timestamp: new Date(),
+              requiresResponse: false,
+            };
+            await publisher.publish(channels.agent(this.config.agentId), JSON.stringify(message));
+            logger.info({ agent: agentName, success: result.success }, 'Agent result sent back');
+          }).catch((error) => {
+            logger.error({ error, agentName }, 'Claude Agent execution failed');
+          });
+          break;
+        }
 
         if (!task || servers.length === 0) {
           logger.warn({ actionData, actionAny }, 'Invalid spawn_worker action: missing task or servers');
@@ -1019,14 +1101,18 @@ export class AgentDaemon {
         const folder = (actionData?.folder as string) || `/app/workspace/${this.profile?.codename || `SHIBC-${this.config.agentType.toUpperCase()}-001`}/`;
         const summary = (actionData?.summary as string) || `Workspace update from ${this.config.agentType.toUpperCase()}`;
         const loopNumber = (await this.state?.get(StateKeys.LOOP_COUNT)) || 0;
+        // PR category: 'status' (auto-merge, no RAG), 'content' (clevel review), 'strategic' (CEO review)
+        const rawCategory = (actionData?.category as string) || 'content';
+        const category = (['status', 'content', 'strategic'].includes(rawCategory) ? rawCategory : 'content') as 'status' | 'content' | 'strategic';
 
-        logger.info({ folder, summary, agentType: this.config.agentType }, 'Creating PR for workspace changes');
+        logger.info({ folder, summary, category, agentType: this.config.agentType }, 'Creating PR for workspace changes');
 
         try {
           const prResult = await workspace.commitAndCreatePR(
             this.config.agentType,
             summary,
-            loopNumber as number
+            loopNumber as number,
+            category
           );
 
           if (prResult.success) {
@@ -1093,8 +1179,12 @@ export class AgentDaemon {
       }
 
       case 'merge_pr': {
-        // Merge a Pull Request (typically used by CTO after review)
+        // Merge a Pull Request (used after review approval)
         const prNumber = actionData?.prNumber as number;
+        const category = (actionData?.category as string) || 'content';
+        const agentType = (actionData?.agentType as string) || this.config.agentType;
+        const summary = (actionData?.summary as string) || `PR #${prNumber} merged`;
+
         if (!prNumber) {
           logger.warn('merge_pr action missing prNumber');
           break;
@@ -1103,22 +1193,73 @@ export class AgentDaemon {
         try {
           const merged = await workspace.mergePullRequest(prNumber);
           if (merged) {
-            logger.info({ prNumber }, 'PR merged successfully');
+            logger.info({ prNumber, category }, 'PR merged successfully');
+
+            // Emit pr_merged event for RAG indexing (handled by orchestrator)
+            await publisher.publish(channels.orchestrator, JSON.stringify({
+              id: crypto.randomUUID(),
+              type: 'pr_merged',
+              from: this.config.agentId,
+              to: 'orchestrator',
+              payload: {
+                prNumber,
+                category,
+                agentType,
+                summary,
+                mergedBy: this.config.agentType,
+              },
+            }));
 
             // Log event
             await eventRepo.log({
               eventType: 'pr_merged' as EventType,
               sourceAgent: this.config.agentId,
-              payload: { prNumber, mergedBy: this.config.agentType },
+              payload: { prNumber, mergedBy: this.config.agentType, category },
             });
 
-            // TODO: Notify original PR author
+            logger.info({ prNumber, category }, 'pr_merged event emitted to orchestrator');
           } else {
             logger.warn({ prNumber }, 'Failed to merge PR');
           }
         } catch (mergeError) {
           const errMsg = mergeError instanceof Error ? mergeError.message : String(mergeError);
           logger.error({ error: errMsg, prNumber }, 'Error merging PR');
+        }
+        break;
+      }
+
+      case 'claim_pr': {
+        // Claim a PR for review (C-Level first-come-first-served)
+        const prNumber = actionData?.prNumber as number;
+        const prUrl = actionData?.prUrl as string;
+
+        if (!prNumber) {
+          logger.warn('claim_pr action missing prNumber');
+          break;
+        }
+
+        try {
+          // Send claim request to orchestrator
+          await publisher.publish(channels.orchestrator, JSON.stringify({
+            id: crypto.randomUUID(),
+            type: 'claim_pr',
+            from: this.config.agentId,
+            to: 'orchestrator',
+            payload: {
+              prNumber,
+              prUrl,
+              agentType: actionData?.agentType,
+              summary: actionData?.summary,
+              category: actionData?.category,
+              ragScore: actionData?.ragScore,
+              ragFeedback: actionData?.ragFeedback,
+            },
+          }));
+
+          logger.info({ prNumber, agentType: this.config.agentType }, 'PR claim request sent');
+        } catch (claimError) {
+          const errMsg = claimError instanceof Error ? claimError.message : String(claimError);
+          logger.error({ error: errMsg, prNumber }, 'Error claiming PR');
         }
         break;
       }

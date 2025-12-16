@@ -41,7 +41,7 @@ const configSchema = z.object({
 
   // Workspace Git Repository (separate repo for agent outputs)
   WORKSPACE_REPO_URL: z.string().default('https://github.com/Brunzendorf/shibc-workspace.git'),
-  WORKSPACE_BRANCH: z.string().default('main'),
+  WORKSPACE_BRANCH: z.string().default('main'),  // shibc-workspace uses 'main'
   WORKSPACE_AUTO_COMMIT: z.string().default('true'),  // Auto-commit on file changes
   WORKSPACE_USE_PR: z.string().default('true'),       // Use branch+PR workflow (quality gate)
   WORKSPACE_AUTO_MERGE: z.string().default('false'),  // Auto-merge PRs after RAG approval

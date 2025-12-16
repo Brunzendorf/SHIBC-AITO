@@ -34,11 +34,16 @@ RUN npm run build
 # Production stage
 FROM node:20-slim AS production
 
-# Install curl for healthcheck
+# Install curl for healthcheck + gh CLI for PR merge/close
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
+
+# Install GitHub CLI (gh) for PR workflow (merge, close, comment)
+RUN curl -fsSL https://github.com/cli/cli/releases/download/v2.63.2/gh_2.63.2_linux_amd64.tar.gz | tar xz \
+    && mv gh_2.63.2_linux_amd64/bin/gh /usr/local/bin/ \
+    && rm -rf gh_2.63.2_linux_amd64
 
 # Create non-root user
 RUN groupadd -g 1001 aito && \

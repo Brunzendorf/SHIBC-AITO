@@ -5,9 +5,100 @@
 
 import { spawn } from 'child_process';
 import { createLogger } from '../lib/logger.js';
+import { redis } from '../lib/redis.js';
 import type { AgentProfile } from './profile.js';
 
 const logger = createLogger('claude');
+
+/**
+ * Kanban Issue for Scrumban workflow
+ */
+export interface KanbanIssue {
+  number: number;
+  title: string;
+  body?: string;
+  labels: string[];
+  state: string;
+  created_at: string;
+  assignee?: string;
+  html_url: string;
+}
+
+/**
+ * Kanban issues grouped by status for an agent
+ */
+export interface AgentKanbanState {
+  inProgress: KanbanIssue[];
+  ready: KanbanIssue[];
+  review: KanbanIssue[];
+  blocked: KanbanIssue[];
+}
+
+/**
+ * Fetch Kanban issues for a specific agent from Redis
+ */
+export async function getKanbanIssuesForAgent(agentType: string): Promise<AgentKanbanState> {
+  const result: AgentKanbanState = {
+    inProgress: [],
+    ready: [],
+    review: [],
+    blocked: [],
+  };
+
+  try {
+    const cached = await redis.get('context:backlog');
+    if (!cached) {
+      logger.debug('No backlog context found in Redis');
+      return result;
+    }
+
+    const backlog = JSON.parse(cached);
+    const issues: KanbanIssue[] = backlog.issues || [];
+    const agentLabel = `agent:${agentType}`;
+
+    for (const issue of issues) {
+      const labels = issue.labels || [];
+      const hasAgentLabel = labels.some((l: string) => l === agentLabel);
+
+      // Check status labels
+      const isInProgress = labels.some((l: string) => l === 'status:in-progress' || l === 'status:in_progress');
+      const isReady = labels.some((l: string) => l === 'status:ready');
+      const isReview = labels.some((l: string) => l === 'status:review');
+      const isBlocked = labels.some((l: string) => l === 'status:blocked');
+
+      // In-progress issues for this agent
+      if (isInProgress && hasAgentLabel) {
+        result.inProgress.push(issue);
+      }
+      // Ready issues for this agent
+      else if (isReady && hasAgentLabel) {
+        result.ready.push(issue);
+      }
+      // Review issues (all agents can see these)
+      else if (isReview) {
+        result.review.push(issue);
+      }
+      // Blocked issues for this agent
+      else if (isBlocked && hasAgentLabel) {
+        result.blocked.push(issue);
+      }
+    }
+
+    logger.debug({
+      agentType,
+      inProgress: result.inProgress.length,
+      ready: result.ready.length,
+      review: result.review.length,
+      blocked: result.blocked.length,
+    }, 'Fetched Kanban issues for agent');
+
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.warn({ error: errMsg, agentType }, 'Failed to fetch Kanban issues');
+  }
+
+  return result;
+}
 
 // Retry configuration
 export const RETRY_CONFIG = {
@@ -295,7 +386,8 @@ export function buildLoopPrompt(
   trigger: { type: string; data?: unknown },
   pendingDecisions?: PendingDecision[],
   ragContext?: string,
-  pendingTasks?: PendingTask[]
+  pendingTasks?: PendingTask[],
+  kanbanIssues?: AgentKanbanState
 ): string {
   // Current date/time for agent awareness - CRITICAL for time-sensitive content
   const now = new Date();
@@ -398,6 +490,123 @@ export function buildLoopPrompt(
       '```',
       ''
     );
+  }
+
+  // Add Kanban issues for Scrumban workflow
+  if (kanbanIssues) {
+    const hasAnyIssues = kanbanIssues.inProgress.length > 0 ||
+                         kanbanIssues.ready.length > 0 ||
+                         kanbanIssues.blocked.length > 0 ||
+                         (kanbanIssues.review.length > 0 && (profile.codename === 'ceo' || profile.codename === 'dao'));
+
+    if (hasAnyIssues) {
+      parts.push(
+        '## 📋 YOUR KANBAN BOARD',
+        '',
+        '**Scrumban Workflow - Manage issues via spawn_worker with issue-manager agent!**',
+        ''
+      );
+
+      // In-Progress issues (agent MUST work on these)
+      if (kanbanIssues.inProgress.length > 0) {
+        parts.push(
+          '### 🔵 IN PROGRESS (YOU ARE WORKING ON THESE)',
+          ''
+        );
+        for (const issue of kanbanIssues.inProgress) {
+          const priority = issue.labels.find((l: string) => l.startsWith('priority:'))?.replace('priority:', '') || 'normal';
+          const priorityIcon = priority === 'critical' ? '🔴' : priority === 'high' ? '🟠' : '🟢';
+          parts.push(
+            `- ${priorityIcon} **#${issue.number}**: ${issue.title}`,
+            `  - Priority: ${priority.toUpperCase()}`,
+            `  - URL: ${issue.html_url}`,
+            ''
+          );
+        }
+        parts.push(
+          '**⚠️ ACTION REQUIRED:** Continue work or mark complete with spawn_worker!',
+          ''
+        );
+      }
+
+      // Ready issues (agent can pick one)
+      if (kanbanIssues.ready.length > 0) {
+        parts.push(
+          '### 🟢 READY TO PICK (ASSIGNED TO YOU)',
+          ''
+        );
+        for (const issue of kanbanIssues.ready) {
+          const priority = issue.labels.find((l: string) => l.startsWith('priority:'))?.replace('priority:', '') || 'normal';
+          const priorityIcon = priority === 'critical' ? '🔴' : priority === 'high' ? '🟠' : '🟢';
+          parts.push(
+            `- ${priorityIcon} **#${issue.number}**: ${issue.title}`,
+            `  - Priority: ${priority.toUpperCase()}`,
+            ''
+          );
+        }
+        if (kanbanIssues.inProgress.length === 0) {
+          parts.push(
+            '**⚠️ PICK ONE:** You have no in-progress issues. Pick a ready issue!',
+            ''
+          );
+        }
+      }
+
+      // Blocked issues
+      if (kanbanIssues.blocked.length > 0) {
+        parts.push(
+          '### 🚫 BLOCKED',
+          ''
+        );
+        for (const issue of kanbanIssues.blocked) {
+          parts.push(
+            `- **#${issue.number}**: ${issue.title}`,
+            ''
+          );
+        }
+      }
+
+      // Review issues (CEO/DAO can approve)
+      if (kanbanIssues.review.length > 0 && (profile.codename === 'ceo' || profile.codename === 'dao')) {
+        parts.push(
+          '### 👁️ AWAITING YOUR REVIEW',
+          ''
+        );
+        for (const issue of kanbanIssues.review) {
+          const completedBy = issue.labels.find((l: string) => l.startsWith('agent:'))?.replace('agent:', '') || 'unknown';
+          parts.push(
+            `- **#${issue.number}**: ${issue.title}`,
+            `  - Completed by: ${completedBy.toUpperCase()}`,
+            ''
+          );
+        }
+        parts.push(
+          '**⚠️ ACTION REQUIRED:** Review and approve/reject these issues!',
+          ''
+        );
+      }
+
+      // Kanban actions help
+      parts.push(
+        '### Kanban Actions (via spawn_worker)',
+        '',
+        '**Pick issue:**',
+        '```json',
+        '{ "type": "spawn_worker", "task": "Action: pick\\nIssue: #42\\nAgent: ' + profile.codename + '", "servers": ["fetch"], "agent": "issue-manager" }',
+        '```',
+        '',
+        '**Complete issue:**',
+        '```json',
+        '{ "type": "spawn_worker", "task": "Action: complete\\nIssue: #42\\nSummary: What was accomplished", "servers": ["fetch"], "agent": "issue-manager" }',
+        '```',
+        '',
+        '**Update progress:**',
+        '```json',
+        '{ "type": "spawn_worker", "task": "Action: update\\nIssue: #42\\nStatus: Progress update here", "servers": ["fetch"], "agent": "issue-manager" }',
+        '```',
+        ''
+      );
+    }
   }
 
   parts.push(
@@ -608,6 +817,70 @@ export async function executeClaudeCodeWithMCP(session: ClaudeSessionWithMCP): P
     proc.on('error', (error) => {
       const durationMs = Date.now() - startTime;
       logger.error({ error, durationMs }, 'Claude MCP spawn error');
+      resolve({ success: false, output: '', error: error.message, durationMs });
+    });
+
+    const timeoutId = setTimeout(() => {
+      proc.kill('SIGTERM');
+      resolve({ success: false, output: stdout.trim(), error: 'Execution timed out', durationMs: Date.now() - startTime });
+    }, timeout);
+
+    proc.on('close', () => clearTimeout(timeoutId));
+  });
+}
+
+export interface ClaudeAgentSession {
+  agent: string;        // Agent name from .claude/agents/ (e.g., 'pr-creator')
+  prompt: string;
+  timeout?: number;
+  cwd?: string;
+}
+
+/**
+ * Execute Claude Code CLI with a specific agent from .claude/agents/
+ */
+export async function executeClaudeAgent(session: ClaudeAgentSession): Promise<ClaudeResult> {
+  const startTime = Date.now();
+  const timeout = session.timeout || 120000;
+  const cwd = session.cwd || '/app/workspace';
+
+  logger.info({ agent: session.agent, promptLength: session.prompt.length, timeout }, 'Executing Claude Agent');
+
+  return new Promise((resolve) => {
+    const args = [
+      '--print',
+      '--dangerously-skip-permissions',
+      '--agent', session.agent,
+      session.prompt,
+    ];
+
+    const proc = spawn('claude', args, {
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd,
+      env: { ...process.env, CI: 'true' },
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout?.on('data', (data) => { stdout += data.toString(); });
+    proc.stderr?.on('data', (data) => { stderr += data.toString(); });
+
+    proc.on('close', (code) => {
+      const durationMs = Date.now() - startTime;
+      if (code === 0) {
+        logger.info({ agent: session.agent, durationMs, outputLength: stdout.length }, 'Claude Agent execution completed');
+        resolve({ success: true, output: stdout.trim(), durationMs });
+      } else {
+        logger.error({ agent: session.agent, code, stderr, durationMs }, 'Claude Agent execution failed');
+        resolve({ success: false, output: stdout.trim(), error: stderr.trim() || 'Exit code: ' + code, durationMs });
+      }
+    });
+
+    proc.on('error', (error) => {
+      const durationMs = Date.now() - startTime;
+      logger.error({ agent: session.agent, error, durationMs }, 'Claude Agent spawn error');
       resolve({ success: false, output: '', error: error.message, durationMs });
     });
 

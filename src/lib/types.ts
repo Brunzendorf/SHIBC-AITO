@@ -136,7 +136,11 @@ export type EventType =
   | 'status_response'
   | 'broadcast'
   | 'human_message'
-  | 'initiative_created';
+  | 'initiative_created'
+  | 'human_action_requested'
+  | 'pr_created'
+  | 'pr_merged'
+  | 'pr_rejected';
 
 export interface Event {
   id: string;
@@ -160,9 +164,13 @@ export type MessageType =
   | 'broadcast'
   | 'direct'
   | 'worker_result'        // Result from MCP worker execution
-  | 'pr_approved_by_rag'   // PR passed RAG quality check, needs CEO approval
+  | 'pr_approved_by_rag'   // PR passed RAG quality check, needs review
   | 'pr_rejected'          // PR failed RAG quality check
-  | 'pr_review_requested'; // Agent requests RAG to review PR
+  | 'pr_review_requested'  // Agent requests RAG to review PR
+  | 'pr_review_assigned'   // PR assigned to agent for review (after claim)
+  | 'pr_claim_rejected'    // PR claim was rejected (already claimed)
+  | 'claim_pr'             // C-Level agent claims PR for review
+  | 'pr_merged';           // PR was merged (triggers RAG indexing)
 
 export type MessagePriority = 'low' | 'normal' | 'high' | 'urgent' | 'critical';
 
