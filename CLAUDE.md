@@ -2,6 +2,39 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+---
+
+## WICHTIG: Workflow für Feature-Implementierung
+
+Bei jeder Feature-Anfrage oder Bug-Fix folge dem **7-Phasen-Workflow** aus `docs/AI-PROMPT-LIBRARY.md`:
+
+```
+1. PLANEN        → Anforderung verstehen, Scope definieren
+2. DOKU FINDEN   → docs/TASK-BACKLOG.md, docs/features/[MODUL].md lesen
+3. ANALYSIEREN   → Code lesen, Patterns verstehen
+4. IMPLEMENTIEREN → Code schreiben
+5. TESTEN        → npm run test, manuell testen
+6. DOKU UPDATEN  → Feature-Docs aktualisieren
+7. FINALISIEREN  → Task in TASK-BACKLOG.md abhaken, Commit mit TASK-ID
+```
+
+### Dokumentations-Referenz
+
+| Dokument | Wann lesen |
+|----------|------------|
+| `docs/AI-PROMPT-LIBRARY.md` | Template-Prompts und Workflows |
+| `docs/TASK-BACKLOG.md` | Offene Tasks, Bugs, Issues |
+| `docs/features/01-06-*.md` | Detaillierte Modul-Dokumentation |
+| `docs/FEATURE-REFERENCE.md` | Feature-Übersicht |
+
+### Nach Abschluss eines Tasks
+
+1. Task in `docs/TASK-BACKLOG.md` als ✅ erledigt markieren
+2. `docs/features/[MODUL].md` aktualisieren falls nötig
+3. Commit mit TASK-ID: `fix: ... (TASK-XXX)` oder `feat: ... (TASK-XXX)`
+
+---
+
 ## Project Overview
 
 **AITO 3.0 (AI Autonomous Operations)** - Autonomous AI Agent System for Shiba Classic ($SHIBC)

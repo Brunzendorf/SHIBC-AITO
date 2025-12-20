@@ -33,9 +33,9 @@ export interface MCPToolResult {
 
 // MCP servers available per agent type
 export const MCP_SERVERS_BY_AGENT: Record<string, string[]> = {
-  ceo: ['filesystem', 'fetch'],
+  ceo: ['filesystem', 'fetch', 'imagen'],
   dao: ['filesystem', 'etherscan'],
-  cmo: ['telegram', 'fetch', 'filesystem'],
+  cmo: ['telegram', 'fetch', 'filesystem', 'imagen'],
   cto: ['directus', 'filesystem', 'fetch'],
   cfo: ['etherscan', 'filesystem'],
   coo: ['telegram', 'filesystem'],

@@ -56,25 +56,41 @@ function getContainerConfig(agentType: AgentType, agentId: string): ContainerCon
     image: getAgentImage(agentType),
     name: getContainerName(agentType),
     environment: {
+      // Core agent settings
       AGENT_ID: agentId,
       AGENT_TYPE: agentType,
-      AGENT_PROFILE: '/profiles/' + agentType + '.md',
+      AGENT_PROFILE: '/app/profiles/' + agentType + '.md',
       LOOP_INTERVAL: String(agentConfig.loopInterval),
-      DRY_RUN: String(isDryRun), // Propagate dry-run mode to agents
+      DRY_RUN: String(isDryRun),
+      // Database & Infrastructure
       POSTGRES_URL: config.POSTGRES_URL,
       REDIS_URL: config.REDIS_URL,
       OLLAMA_URL: config.OLLAMA_URL,
       QDRANT_URL: config.QDRANT_URL,
+      // GitHub
       GITHUB_TOKEN: config.GITHUB_TOKEN || '',
       GITHUB_ORG: config.GITHUB_ORG,
+      // LLM Routing Configuration (CRITICAL - prevents Gemini quota issues)
+      LLM_ROUTING_STRATEGY: config.LLM_ROUTING_STRATEGY,
+      LLM_ENABLE_FALLBACK: config.LLM_ENABLE_FALLBACK,
+      LLM_PREFER_GEMINI: config.LLM_PREFER_GEMINI,
+      GEMINI_API_KEY: process.env.GEMINI_API_KEY || '',
+      GEMINI_DEFAULT_MODEL: config.GEMINI_DEFAULT_MODEL,
+      GEMINI_MONTHLY_QUOTA: process.env.GEMINI_MONTHLY_QUOTA || '10000000',
+      // Workspace configuration
+      WORKSPACE_REPO_URL: process.env.WORKSPACE_REPO_URL || 'https://github.com/Brunzendorf/shibc-workspace.git',
+      WORKSPACE_BRANCH: process.env.WORKSPACE_BRANCH || 'main',
+      WORKSPACE_SKIP_PR: process.env.WORKSPACE_SKIP_PR || 'false',
+      // Optional filters per agent
       ...('gitFilter' in agentConfig && agentConfig.gitFilter && { GIT_FILTER: agentConfig.gitFilter }),
     },
     volumes: [
       // Named volumes with compose project prefix for stack consistency
       COMPOSE_PROJECT + '_' + agentType + '_memory:/app/memory',
       COMPOSE_PROJECT + '_shared_claude_config:/app/.claude',
-      COMPOSE_PROJECT + '_' + agentType + '_workspace:/app/workspace',  // Named volume for git workspace
-      './profiles:/app/profiles:ro',  // Bind mount for profiles
+      COMPOSE_PROJECT + '_shared_gemini_config:/app/.gemini',
+      COMPOSE_PROJECT + '_' + agentType + '_workspace:/app/workspace',
+      './profiles:/app/profiles:ro',
     ],
     memory: '512m',
     cpus: '1',

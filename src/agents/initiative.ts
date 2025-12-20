@@ -309,11 +309,82 @@ function calculateInitiativeScore(initiative: Initiative, focus: FocusSettings, 
 }
 
 /**
- * Check if an initiative was already created
+ * Check if an initiative was already created (IMPROVED: checks GitHub too)
  */
 async function wasInitiativeCreated(title: string): Promise<boolean> {
+  // First, check Redis cache (fast path)
   const hash = title.toLowerCase().replace(/[^a-z0-9]/g, '');
-  return await redis.sismember(INITIATIVE_CREATED_KEY, hash) === 1;
+  const inRedis = await redis.sismember(INITIATIVE_CREATED_KEY, hash) === 1;
+  if (inRedis) {
+    logger.debug({ title }, 'Initiative found in Redis cache');
+    return true;
+  }
+
+  // Second, check GitHub for similar issues (slow path, but accurate)
+  try {
+    const gh = getOctokit();
+    const owner = process.env.GITHUB_ORG || 'Brunzendorf';
+    const repo = 'SHIBC-AITO';
+
+    // Extract key words from title for search
+    const keywords = title
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .split(/\s+/)
+      .filter(w => w.length > 3)
+      .slice(0, 5)
+      .join(' ');
+
+    if (!keywords) return false;
+
+    // Search both open and closed issues
+    const searchQuery = `repo:${owner}/${repo} is:issue ${keywords}`;
+    const searchResult = await gh.search.issuesAndPullRequests({
+      q: searchQuery,
+      per_page: 10,
+    });
+
+    // Check for similar titles using fuzzy matching
+    const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9]/g, '');
+    for (const issue of searchResult.data.items) {
+      const issueTitle = issue.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+      // Check for exact match
+      if (issueTitle === normalizedTitle) {
+        logger.info({ title, existingIssue: issue.number }, 'Exact duplicate found on GitHub');
+        await markInitiativeCreated(title); // Cache for next time
+        return true;
+      }
+
+      // Check for high similarity (>80% overlap)
+      const similarity = calculateSimilarity(normalizedTitle, issueTitle);
+      if (similarity > 0.8) {
+        logger.info({ title, existingIssue: issue.number, similarity }, 'Similar issue found on GitHub');
+        return true;
+      }
+    }
+  } catch (error) {
+    logger.warn({ error, title }, 'Failed to check GitHub for duplicates');
+    // Fall through - don't block on GitHub errors
+  }
+
+  return false;
+}
+
+/**
+ * Calculate similarity between two strings (Jaccard index on words)
+ */
+function calculateSimilarity(a: string, b: string): number {
+  const wordsA = new Set(a.match(/[a-z0-9]+/g) || []);
+  const wordsB = new Set(b.match(/[a-z0-9]+/g) || []);
+
+  if (wordsA.size === 0 && wordsB.size === 0) return 1;
+  if (wordsA.size === 0 || wordsB.size === 0) return 0;
+
+  const intersection = new Set([...wordsA].filter(x => wordsB.has(x)));
+  const union = new Set([...wordsA, ...wordsB]);
+
+  return intersection.size / union.size;
 }
 
 /**
@@ -989,4 +1060,219 @@ export async function getInitiativeStats(): Promise<{
     totalCreated,
     agentCooldowns,
   };
+}
+
+// === GITHUB ISSUE STATUS MANAGEMENT ===
+
+const STATUS_LABELS = {
+  BACKLOG: 'status:backlog',
+  READY: 'status:ready',
+  IN_PROGRESS: 'status:in-progress',
+  REVIEW: 'status:review',
+  DONE: 'status:done',
+  BLOCKED: 'status:blocked',
+};
+
+/**
+ * Update an issue's status label on GitHub
+ */
+export async function updateIssueStatus(
+  issueNumber: number,
+  newStatus: keyof typeof STATUS_LABELS,
+  agentType?: string
+): Promise<boolean> {
+  const owner = process.env.GITHUB_ORG || 'Brunzendorf';
+  const repo = 'SHIBC-AITO';
+
+  try {
+    const gh = getOctokit();
+
+    // Get current labels
+    const issue = await gh.issues.get({ owner, repo, issue_number: issueNumber });
+    const currentLabels = issue.data.labels.map((l) =>
+      typeof l === 'string' ? l : l.name || ''
+    );
+
+    // Remove old status labels, keep others
+    const newLabels = currentLabels.filter((l) => !l.startsWith('status:'));
+
+    // Add new status label
+    newLabels.push(STATUS_LABELS[newStatus]);
+
+    // Update labels
+    await gh.issues.setLabels({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      labels: newLabels,
+    });
+
+    logger.info({
+      issueNumber,
+      newStatus: STATUS_LABELS[newStatus],
+      agentType,
+    }, 'Updated GitHub issue status');
+
+    // Refresh backlog cache
+    await refreshBacklogCache();
+
+    return true;
+  } catch (error) {
+    logger.error({ error, issueNumber, newStatus }, 'Failed to update issue status');
+    return false;
+  }
+}
+
+/**
+ * Claim an issue - set to in-progress and assign to agent
+ */
+export async function claimIssue(
+  issueNumber: number,
+  agentType: string
+): Promise<boolean> {
+  const owner = process.env.GITHUB_ORG || 'Brunzendorf';
+  const repo = 'SHIBC-AITO';
+
+  try {
+    const gh = getOctokit();
+
+    // Get current labels
+    const issue = await gh.issues.get({ owner, repo, issue_number: issueNumber });
+    const currentLabels = issue.data.labels.map((l) =>
+      typeof l === 'string' ? l : l.name || ''
+    );
+
+    // Check if already in-progress by another agent
+    const hasOtherAgent = currentLabels.some(
+      (l) => l.startsWith('agent:') && l !== `agent:${agentType}`
+    );
+    if (hasOtherAgent && currentLabels.includes(STATUS_LABELS.IN_PROGRESS)) {
+      logger.warn({ issueNumber, agentType }, 'Issue already claimed by another agent');
+      return false;
+    }
+
+    // Remove old status labels and agent labels
+    const newLabels = currentLabels.filter(
+      (l) => !l.startsWith('status:') && !l.startsWith('agent:')
+    );
+
+    // Add in-progress status and agent label
+    newLabels.push(STATUS_LABELS.IN_PROGRESS);
+    newLabels.push(`agent:${agentType}`);
+
+    // Update labels
+    await gh.issues.setLabels({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      labels: newLabels,
+    });
+
+    // Add comment
+    await gh.issues.createComment({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      body: `🤖 **${agentType.toUpperCase()} Agent** is now working on this issue.`,
+    });
+
+    logger.info({ issueNumber, agentType }, 'Agent claimed issue');
+
+    // Refresh backlog cache
+    await refreshBacklogCache();
+
+    return true;
+  } catch (error) {
+    logger.error({ error, issueNumber, agentType }, 'Failed to claim issue');
+    return false;
+  }
+}
+
+/**
+ * Complete an issue - set to done or review
+ */
+export async function completeIssue(
+  issueNumber: number,
+  agentType: string,
+  setToReview = false,
+  completionComment?: string
+): Promise<boolean> {
+  const owner = process.env.GITHUB_ORG || 'Brunzendorf';
+  const repo = 'SHIBC-AITO';
+
+  try {
+    const gh = getOctokit();
+
+    // Update status
+    const newStatus = setToReview ? 'REVIEW' : 'DONE';
+    await updateIssueStatus(issueNumber, newStatus, agentType);
+
+    // Add completion comment
+    const comment = completionComment ||
+      (setToReview
+        ? `✅ **${agentType.toUpperCase()} Agent** has completed work and moved this to review.`
+        : `✅ **${agentType.toUpperCase()} Agent** has completed this issue.`);
+
+    await gh.issues.createComment({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      body: comment,
+    });
+
+    // Close issue if done (not review)
+    if (!setToReview) {
+      await gh.issues.update({
+        owner,
+        repo,
+        issue_number: issueNumber,
+        state: 'closed',
+      });
+    }
+
+    logger.info({ issueNumber, agentType, setToReview }, 'Agent completed issue');
+
+    return true;
+  } catch (error) {
+    logger.error({ error, issueNumber, agentType }, 'Failed to complete issue');
+    return false;
+  }
+}
+
+/**
+ * Refresh the backlog cache in Redis after status changes
+ */
+async function refreshBacklogCache(): Promise<void> {
+  try {
+    const owner = process.env.GITHUB_ORG || 'Brunzendorf';
+    const repo = 'SHIBC-AITO';
+    const gh = getOctokit();
+
+    // Fetch all open issues
+    const issues = await gh.issues.listForRepo({
+      owner,
+      repo,
+      state: 'open',
+      per_page: 100,
+    });
+
+    const backlogData = {
+      issues: issues.data.map((issue) => ({
+        number: issue.number,
+        title: issue.title,
+        body: issue.body,
+        labels: issue.labels.map((l) => (typeof l === 'string' ? l : l.name || '')),
+        state: issue.state,
+        created_at: issue.created_at,
+        assignee: issue.assignee?.login,
+        html_url: issue.html_url,
+      })),
+      lastGroomed: new Date().toISOString(),
+    };
+
+    await redis.set('context:backlog', JSON.stringify(backlogData));
+    logger.debug({ issueCount: issues.data.length }, 'Refreshed backlog cache');
+  } catch (error) {
+    logger.warn({ error }, 'Failed to refresh backlog cache');
+  }
 }

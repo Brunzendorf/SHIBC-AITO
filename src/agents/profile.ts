@@ -1,12 +1,13 @@
 /**
  * Agent Profile Loader
- * Loads and parses agent profile markdown files
+ * Loads agent profiles from database first, with fallback to markdown files
  */
 
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { createLogger } from '../lib/logger.js';
+import { profileRepo } from '../lib/db.js';
 import type { AgentType } from '../lib/types.js';
 
 const logger = createLogger('profile');
@@ -174,12 +175,61 @@ async function loadBaseProfile(profileDir: string): Promise<string> {
 }
 
 /**
- * Load and parse an agent profile from markdown file
- * Automatically merges with base.md if present
+ * Load profile from database by agent type
+ * Returns null if not found in database
  */
-export async function loadProfile(profilePath: string, agentType: AgentType): Promise<AgentProfile> {
-  logger.info({ profilePath, agentType }, 'Loading agent profile');
+async function loadProfileFromDatabase(agentType: AgentType): Promise<AgentProfile | null> {
+  try {
+    const dbProfile = await profileRepo.getByAgentType(agentType);
 
+    if (!dbProfile) {
+      logger.debug({ agentType }, 'No profile found in database, will fallback to file');
+      return null;
+    }
+
+    const content = dbProfile.content;
+    const identity = dbProfile.identity as Record<string, string>;
+
+    const profile: AgentProfile = {
+      type: agentType,
+      name: identity.role || agentType.toUpperCase() + ' Agent',
+      codename: identity.codename || 'SHIBC-' + agentType.toUpperCase() + '-001',
+      department: identity.department || 'Unknown',
+      reportsTo: identity.reports_to || 'CEO Agent',
+      manages: identity.manages,
+      mission: extractSection(content, 'Mission Statement'),
+      responsibilities: extractBulletPoints(extractSection(content, 'Core Responsibilities')),
+      decisionAuthority: extractDecisionAuthority(content),
+      loopInterval: parseLoopInterval(content),
+      loopActions: extractBulletPoints(extractSection(content, 'Loop Schedule')),
+      metrics: extractBulletPoints(extractSection(content, 'Key Metrics')),
+      communicationStyle: {
+        internal: extractSection(content, 'Communication Style').substring(0, 500),
+      },
+      guidingPrinciples: extractBulletPoints(extractSection(content, 'Guiding Principles')),
+      startupPrompt: extractStartupPrompt(content),
+      rawContent: content,
+    };
+
+    logger.info({
+      agentType,
+      name: profile.name,
+      loopInterval: profile.loopInterval,
+      source: 'database',
+      version: dbProfile.version
+    }, 'Profile loaded from database');
+
+    return profile;
+  } catch (error) {
+    logger.warn({ error, agentType }, 'Failed to load profile from database, will fallback to file');
+    return null;
+  }
+}
+
+/**
+ * Load profile from markdown file (fallback)
+ */
+async function loadProfileFromFile(profilePath: string, agentType: AgentType): Promise<AgentProfile> {
   if (!existsSync(profilePath)) {
     throw new Error('Profile file not found: ' + profilePath);
   }
@@ -192,12 +242,11 @@ export async function loadProfile(profilePath: string, agentType: AgentType): Pr
   const individualContent = await readFile(profilePath, 'utf-8');
 
   // Merge: base first, then individual (individual can override)
-  // The individual profile should focus on role-specific content
   const mergedContent = baseContent
     ? `${baseContent}\n\n---\n\n# Role-Specific Profile\n\n${individualContent}`
     : individualContent;
 
-  const identity = extractIdentity(individualContent); // Identity comes from individual
+  const identity = extractIdentity(individualContent);
 
   const profile: AgentProfile = {
     type: agentType,
@@ -217,17 +266,35 @@ export async function loadProfile(profilePath: string, agentType: AgentType): Pr
     },
     guidingPrinciples: extractBulletPoints(extractSection(mergedContent, 'Guiding Principles')),
     startupPrompt: extractStartupPrompt(individualContent),
-    rawContent: mergedContent, // Claude gets the merged content!
+    rawContent: mergedContent,
   };
 
   logger.info({
     agentType,
     name: profile.name,
     loopInterval: profile.loopInterval,
+    source: 'file',
     hasBaseProfile: !!baseContent
-  }, 'Profile loaded');
+  }, 'Profile loaded from file');
 
   return profile;
+}
+
+/**
+ * Load and parse an agent profile
+ * Tries database first, then falls back to markdown file
+ */
+export async function loadProfile(profilePath: string, agentType: AgentType): Promise<AgentProfile> {
+  logger.info({ profilePath, agentType }, 'Loading agent profile');
+
+  // Try database first
+  const dbProfile = await loadProfileFromDatabase(agentType);
+  if (dbProfile) {
+    return dbProfile;
+  }
+
+  // Fallback to file
+  return loadProfileFromFile(profilePath, agentType);
 }
 
 

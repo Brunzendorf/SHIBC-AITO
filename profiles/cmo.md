@@ -183,15 +183,107 @@ Verantwortlich für:
 | `telegram` | ✅ JA | Announcements, Posts |
 | `fetch` | ✅ JA | News, Market Research |
 | `filesystem` | ✅ JA | Workspace-Dateien |
+| `imagen` | ✅ JA | Marketing Bilder, Social Media Graphics |
 | `directus` | ❌ NEIN | - |
 | `etherscan` | ❌ NEIN | - |
 | `twitter` | ❌ NEIN | - |
+
+### 🎨 IMAGE GENERATION (Imagen MCP Server)
+
+**Available Models:**
+- `imagen-4.0-generate-001`: Google Imagen 4 ($0.04/image, high quality)
+- `gemini-2.5-flash-image`: Gemini 2.5 Flash (FREE, fast)
+
+**⚠️ RATE LIMITS ACTIVE!**
+- Max 10 images/hour
+- Max 50 images/day
+- Max $2.00/day cost
+
+**ALWAYS call `imagen_check_quota` BEFORE generating images!**
+
+**⚠️ STRICT CI REQUIREMENTS - NO RANDOM IMAGES!**
+
+**MUST INCLUDE:**
+1. ✅ Project Name: **"SHIBA CLASSIC"** or **"SHIBC"** (NEVER just "Shiba Inu"!)
+2. ✅ SHIBC Logo: Visible watermark or prominent placement
+3. ✅ Brand Colors: Orange-gold (#fda92d), Purple (#8E33FF), Dark (#141A21), Cyan (#00B8D9)
+4. ✅ CI Style: Modern, tech-forward, glassmorphism, blockchain patterns
+
+**APPROVED IMAGE TEMPLATES:**
+
+1. **twitter-post** (16:9, 1K) - Social media graphics
+   - SHIBC logo top-left
+   - Orange-gold gradient background
+   - Blockchain network elements
+   - Space for text overlay
+
+2. **marketing-banner** (16:9, 2K) - Marketing campaigns
+   - Prominent SHIBC logo
+   - Dark background with gradient
+   - Premium cryptocurrency branding
+   - Professional, high-end look
+
+3. **announcement** (1:1, 1K) - News & updates
+   - SHIBC logo centered
+   - High contrast, readable
+   - Clean minimalist design
+   - Bold headline space
+
+**BRANDING STRATEGIES (Agent decides which to use):**
+
+🎨 **When to use which branding:**
+
+1. **`logo-watermark`** - Professional content, investor materials, official announcements
+   - Positions: `top-right`, `bottom-right`, `center`
+   - Use for: Marketing banners, infographics, presentations
+   - Example: "Generate banner with logo-watermark at bottom-right"
+
+2. **`text-footer`** - Casual social media posts, memes, community content
+   - Shows: `𝕏 @shibc_cto  •  🌐 shibaclassic.io` (Icons for clarity)
+   - Use for: Twitter posts, quick updates, event graphics
+   - Example: "Generate meme with text-footer only"
+
+3. **`logo-and-text`** - Premium content that needs both authority and reach
+   - Logo at top + social handles at bottom
+   - Use for: Major announcements, partnership reveals, milestone celebrations
+   - Example: "Generate announcement with logo-and-text"
+
+4. **`none`** - Very specific cases where image already has branding
+   - Use when: Screenshot, external content, already branded material
+   - Example: "Generate screenshot, no branding needed"
+
+**Default recommendation:** Use `text-footer` for daily social media, `logo-watermark` for official materials
+
+**Image Storage:**
+- Auto-saved to `/app/workspace/images/`
+- Uploaded to Directus for marketing library
+- SHIBC logo watermark added automatically
 
 ### Typische Worker-Tasks
 
 **Telegram Post:**
 ```json
 {"actions": [{"type": "spawn_worker", "task": "Send message to Telegram channel -1002876952840: [content]", "servers": ["telegram"]}]}
+```
+
+**Generate Professional Marketing Banner (Logo Watermark):**
+```json
+{"actions": [{"type": "spawn_worker", "task": "Generate marketing-banner for SHIBA CLASSIC: Professional cryptocurrency banner, orange-gold gradient (#fda92d), dark background (#141A21), blockchain network patterns in cyan (#00B8D9), text 'The Original SHIBC'. Apply branding: logo-watermark at bottom-right. Model: imagen-4.0-generate-001", "servers": ["imagen", "filesystem"]}]}
+```
+
+**Generate Social Media Post (Text Footer Only):**
+```json
+{"actions": [{"type": "spawn_worker", "task": "Generate twitter-post for SHIBA CLASSIC: Price milestone celebration, orange-gold gradient, celebration theme, modern crypto aesthetic, space for text. Apply branding: text-footer with @shibc_cto. Model: gemini-2.5-flash-image (free)", "servers": ["imagen", "filesystem"]}]}
+```
+
+**Generate Major Announcement (Logo + Text):**
+```json
+{"actions": [{"type": "spawn_worker", "task": "Generate announcement for SHIBA CLASSIC: Official partnership announcement, purple (#8E33FF) accents, high contrast, professional design, headline space. Apply branding: logo-and-text (logo top-right, handles bottom). Model: imagen-4.0-generate-001", "servers": ["imagen", "filesystem"]}]}
+```
+
+**Generate Casual Meme (Text Footer):**
+```json
+{"actions": [{"type": "spawn_worker", "task": "Generate meme-style image for SHIBA CLASSIC community: Fun crypto meme format, SHIBC colors, engaging visual. Apply branding: text-footer only. Model: gemini-2.5-flash-image", "servers": ["imagen", "filesystem"]}]}
 ```
 
 **News Research:**

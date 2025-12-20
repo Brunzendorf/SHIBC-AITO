@@ -4,6 +4,7 @@
  */
 
 import { spawn } from 'child_process';
+import { existsSync } from 'fs';
 import { createLogger } from '../lib/logger.js';
 import { redis } from '../lib/redis.js';
 import type { AgentProfile } from './profile.js';
@@ -122,6 +123,7 @@ export interface ClaudeSession {
   maxTokens?: number;
   timeout?: number; // ms
   maxRetries?: number; // Override default retries
+  enableTools?: boolean; // Enable CLI tools (Read, Write, Edit, Bash) - defaults to true
 }
 
 export interface ClaudeResult {
@@ -213,26 +215,31 @@ export async function executeClaudeCode(session: ClaudeSession): Promise<ClaudeR
   logger.info({ promptLength: session.prompt.length, timeout }, 'Executing Claude Code');
 
   return new Promise((resolve) => {
-    // Use --print for non-interactive mode with tools enabled
+    // Use --print for non-interactive mode
     // --tools default enables all tools (Bash, Edit, Read, Write, etc.)
     // --dangerously-skip-permissions bypasses permission dialogs (safe in sandbox)
-    const args = [
-      '--print',
-      '--tools', 'default',
-      '--dangerously-skip-permissions',
-      session.prompt
-    ];
+    const args = ['--print'];
+
+    // Add tools only if enabled (defaults to true)
+    if (session.enableTools !== false) {
+      args.push('--tools', 'default', '--dangerously-skip-permissions');
+    }
+
+    args.push(session.prompt);
 
     if (session.systemPrompt) {
       args.unshift('--system-prompt', session.systemPrompt);
     }
+
+    // Use /app/workspace if it exists (agents), otherwise use current directory (orchestrator)
+    const workingDir = existsSync('/app/workspace') ? '/app/workspace' : process.cwd();
 
     // Use shell: false to avoid escaping issues with multi-line prompts
     // stdin must be 'ignore' - otherwise Claude waits for input and hangs
     const proc = spawn('claude', args, {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: '/app/workspace', // Working directory for file operations
+      cwd: workingDir,
       env: {
         ...process.env,
         // Ensure non-interactive mode
@@ -790,10 +797,13 @@ export async function executeClaudeCodeWithMCP(session: ClaudeSessionWithMCP): P
 
     args.push(session.prompt);
 
+    // Use /app/workspace if it exists (agents), otherwise use current directory (orchestrator)
+    const workingDir = existsSync('/app/workspace') ? '/app/workspace' : process.cwd();
+
     const proc = spawn('claude', args, {
       shell: false,
       stdio: ['ignore', 'pipe', 'pipe'],
-      cwd: '/app/workspace',
+      cwd: workingDir,
       env: { ...process.env, CI: 'true' },
     });
 
@@ -842,7 +852,8 @@ export interface ClaudeAgentSession {
 export async function executeClaudeAgent(session: ClaudeAgentSession): Promise<ClaudeResult> {
   const startTime = Date.now();
   const timeout = session.timeout || 120000;
-  const cwd = session.cwd || '/app/workspace';
+  // Use /app/workspace if it exists (agents), otherwise use current directory (orchestrator)
+  const cwd = session.cwd || (existsSync('/app/workspace') ? '/app/workspace' : process.cwd());
 
   logger.info({ agent: session.agent, promptLength: session.prompt.length, timeout }, 'Executing Claude Agent');
 

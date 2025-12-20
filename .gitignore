@@ -60,5 +60,25 @@ tmp/
 temp/
 .tmp/
 
+# Test files (root level)
+test_*.js
+test_*.ts
+temp_*.ts
+temp_*.js
+create_*.ts
+run-*.ts
+
+# Generated images (test outputs)
+*.jpg
+*.png
+!assets/**/*.jpg
+!assets/**/*.png
+!public/**/*.jpg
+!public/**/*.png
+
+# Crash dumps
+*.stackdump
+nul
+
 # Workspace is a separate git repository
 workspace/

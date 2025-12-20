@@ -26,6 +26,16 @@ const configSchema = z.object({
   // AI (Ollama for local, Claude Code CLI for complex - NO API!)
   OLLAMA_URL: z.string().default('http://localhost:11434'),
 
+  // LLM Routing (Claude + Gemini)
+  LLM_ROUTING_STRATEGY: z.enum(['task-type', 'agent-role', 'load-balance', 'gemini-prefer', 'claude-only']).default('task-type'),
+  LLM_ENABLE_FALLBACK: z.string().default('true'),
+  LLM_PREFER_GEMINI: z.string().default('false'), // Cost optimization
+  GEMINI_DEFAULT_MODEL: z.string().default('gemini-2.0-flash-exp'),
+
+  // LLM Quota Limits (optional - for monitoring only)
+  CLAUDE_MONTHLY_QUOTA: z.string().optional(), // Estimated tokens per month
+  GEMINI_MONTHLY_QUOTA: z.string().optional(), // Estimated tokens per month
+
   // RAG / Vector DB
   QDRANT_URL: z.string().default('http://localhost:6333'),
 
@@ -45,6 +55,7 @@ const configSchema = z.object({
   WORKSPACE_AUTO_COMMIT: z.string().default('true'),  // Auto-commit on file changes
   WORKSPACE_USE_PR: z.string().default('true'),       // Use branch+PR workflow (quality gate)
   WORKSPACE_AUTO_MERGE: z.string().default('false'),  // Auto-merge PRs after RAG approval
+  WORKSPACE_SKIP_PR: z.string().default('false'),     // Bypass PR workflow - direct push (saves tokens)
 
   // Agent Defaults
   DEFAULT_LOOP_INTERVAL: z.string().default('3600'), // 1 hour
@@ -107,6 +118,7 @@ export const workspaceConfig = {
   autoCommit: config.WORKSPACE_AUTO_COMMIT === 'true',
   usePR: config.WORKSPACE_USE_PR === 'true',       // Branch+PR workflow
   autoMerge: config.WORKSPACE_AUTO_MERGE === 'true', // Auto-merge after approval
+  skipPR: config.WORKSPACE_SKIP_PR === 'true',     // Bypass PR workflow - direct push
   // Build authenticated URL if token available
   getAuthenticatedUrl: () => {
     if (!config.GITHUB_TOKEN) return config.WORKSPACE_REPO_URL;
@@ -121,45 +133,55 @@ export const workspaceConfig = {
 };
 
 // Agent configurations
+// Loop intervals adjusted for balanced activity without excessive API calls
+// Critical agents (CEO, CTO, COO) run more frequently for oversight
 export const agentConfigs = {
   ceo: {
     name: 'CEO Agent',
-    loopInterval: 3600, // 1 hour
+    loopInterval: 1800, // 30 min - frequent oversight
     tier: 'head' as const,
   },
   dao: {
     name: 'DAO Agent',
-    loopInterval: 21600, // 6 hours
+    loopInterval: 14400, // 4 hours - governance doesn't need constant polling
     tier: 'head' as const,
   },
   cmo: {
     name: 'CMO Agent',
-    loopInterval: 14400, // 4 hours
+    loopInterval: 7200, // 2 hours - marketing needs reactivity
     tier: 'clevel' as const,
     gitFilter: 'content/*',
   },
   cto: {
     name: 'CTO Agent',
-    loopInterval: 3600, // 1 hour
+    loopInterval: 3600, // 1 hour - tech oversight
     tier: 'clevel' as const,
     gitFilter: 'website/*',
   },
   cfo: {
     name: 'CFO Agent',
-    loopInterval: 21600, // 6 hours
+    loopInterval: 14400, // 4 hours - treasury monitoring
     tier: 'clevel' as const,
     gitFilter: 'treasury/*',
   },
   coo: {
     name: 'COO Agent',
-    loopInterval: 7200, // 2 hours
+    loopInterval: 3600, // 1 hour - operations need quick response
     tier: 'clevel' as const,
     gitFilter: 'community/*',
   },
   cco: {
     name: 'CCO Agent',
-    loopInterval: 86400, // 24 hours
+    loopInterval: 43200, // 12 hours - compliance less time-critical
     tier: 'clevel' as const,
     gitFilter: 'legal/*',
   },
+};
+
+// LLM Router configuration
+export const llmConfig = {
+  strategy: config.LLM_ROUTING_STRATEGY,
+  enableFallback: config.LLM_ENABLE_FALLBACK === 'true',
+  preferGemini: config.LLM_PREFER_GEMINI === 'true',
+  geminiDefaultModel: config.GEMINI_DEFAULT_MODEL,
 };

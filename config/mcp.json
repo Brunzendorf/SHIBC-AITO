@@ -1,0 +1,8 @@
+{
+  "imagen": {
+    "type": "http",
+    "url": "http://imagen-mcp-server:8008",
+    "description": "Provides access to Google's Imagen models. It's a structured API with multiple endpoints. Base URL is provided. Agent must append endpoints like /models (GET) to discover models, /prompt-guide (GET) for tips, and /generate (POST) to create images.",
+    "enabled": true
+  }
+}

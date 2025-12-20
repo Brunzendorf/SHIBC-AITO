@@ -430,6 +430,61 @@ export async function closePullRequest(prNumber: number, reason: string): Promis
 }
 
 /**
+ * Direct push to main branch (bypasses PR workflow)
+ * Used when WORKSPACE_SKIP_PR=true to save tokens
+ * Pulls latest, commits all changes, pushes directly
+ */
+export async function commitAndPushDirect(
+  agentType: string,
+  message: string
+): Promise<{ success: boolean; commitHash?: string; filesChanged?: number }> {
+  if (!workspaceConfig.autoCommit) {
+    logger.debug('Auto-commit disabled, skipping');
+    return { success: true };
+  }
+
+  try {
+    // Ensure we're on main branch
+    await execAsync(`cd ${WORKSPACE_PATH} && git checkout ${workspaceConfig.branch}`).catch(() => {});
+
+    // Pull latest changes first
+    await pullWorkspace();
+
+    // Check for changes after pull
+    const { stdout: status } = await execAsync(`cd ${WORKSPACE_PATH} && git status --porcelain`);
+
+    if (!status.trim()) {
+      logger.debug('No changes to commit');
+      return { success: true, filesChanged: 0 };
+    }
+
+    const filesChanged = status.trim().split('\n').length;
+    logger.info({ filesChanged, branch: workspaceConfig.branch }, 'Committing workspace changes (direct push, bypassing PR)...');
+
+    // Stage all changes
+    await execAsync(`cd ${WORKSPACE_PATH} && git add -A`);
+
+    // Commit with agent-specific message
+    const commitMessage = `[${agentType.toUpperCase()}] ${message}`;
+    await execAsync(`cd ${WORKSPACE_PATH} && git commit -m "${commitMessage.replace(/"/g, '\\"')}"`);
+
+    // Get commit hash
+    const { stdout: hash } = await execAsync(`cd ${WORKSPACE_PATH} && git rev-parse --short HEAD`);
+    const commitHash = hash.trim();
+
+    // Push directly to main
+    await execAsync(`cd ${WORKSPACE_PATH} && git push origin ${workspaceConfig.branch}`, { timeout: 30000 });
+    logger.info({ commitHash, filesChanged, branch: workspaceConfig.branch }, 'Workspace changes pushed directly (PR bypassed)');
+
+    return { success: true, commitHash, filesChanged };
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.error({ error: errMsg }, 'Failed to commit/push workspace directly');
+    return { success: false };
+  }
+}
+
+/**
  * Legacy: Commit and push directly to main (no PR)
  * Use commitAndCreatePR for quality gate workflow
  */
@@ -512,6 +567,7 @@ export const workspace = {
   pull: pullWorkspace,
   createBranch,
   commitAndPush,
+  commitAndPushDirect,
   commitAndCreatePR,
   mergePullRequest,
   closePullRequest,

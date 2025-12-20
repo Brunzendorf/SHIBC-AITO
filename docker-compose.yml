@@ -3,6 +3,29 @@
 
 version: '3.8'
 
+# ============================================
+# SHARED CONFIGURATION (YAML Anchors)
+# ============================================
+x-agent-base-env: &agent-base-env
+  POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
+  REDIS_URL: redis://redis:6379
+  OLLAMA_URL: http://ollama:11434
+  QDRANT_URL: http://qdrant:6333
+  DRY_RUN: ${DRY_RUN:-false}
+  # GitHub Workspace
+  GITHUB_TOKEN: ${GITHUB_TOKEN}
+  GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
+  WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
+  WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
+  WORKSPACE_SKIP_PR: ${WORKSPACE_SKIP_PR:-false}
+  # LLM Routing Configuration (claude-only until Gemini quota resets or subscription)
+  LLM_ROUTING_STRATEGY: ${LLM_ROUTING_STRATEGY:-claude-only}
+  LLM_ENABLE_FALLBACK: ${LLM_ENABLE_FALLBACK:-false}
+  LLM_PREFER_GEMINI: ${LLM_PREFER_GEMINI:-false}
+  GEMINI_API_KEY: ${GEMINI_API_KEY}
+  GEMINI_DEFAULT_MODEL: ${GEMINI_DEFAULT_MODEL:-gemini-2.0-flash-exp}
+  GEMINI_MONTHLY_QUOTA: ${GEMINI_MONTHLY_QUOTA:-10000000}
+
 services:
   # ============================================
   # TIER 1: INFRASTRUCTURE (Always Running)
@@ -152,6 +175,9 @@ services:
       dockerfile: docker/Dockerfile.orchestrator
       args:
         GIT_HASH: ${GIT_HASH:-unknown}
+        INSTALL_CLAUDE_CLI: ${INSTALL_CLAUDE_CLI:-true}
+        INSTALL_GEMINI_CLI: ${INSTALL_GEMINI_CLI:-true}
+        INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-false}
     container_name: aito-orchestrator
     restart: unless-stopped
     environment:
@@ -177,9 +203,21 @@ services:
       # GitHub (for backlog grooming)
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
+      # LLM API Keys for CLIs
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      # LLM Routing (from x-common-env)
+      LLM_ROUTING_STRATEGY: ${LLM_ROUTING_STRATEGY:-claude-only}
+      LLM_ENABLE_FALLBACK: ${LLM_ENABLE_FALLBACK:-false}
+      LLM_PREFER_GEMINI: ${LLM_PREFER_GEMINI:-false}
+      GEMINI_DEFAULT_MODEL: ${GEMINI_DEFAULT_MODEL:-gemini-2.5-flash}
     volumes:
       - ./profiles:/app/profiles:ro
       - orchestrator_logs:/app/logs
+      - shared_claude_config:/app/.claude
+      - shared_gemini_config:/app/.gemini
+      - shared_openai_config:/app/.openai
     ports:
       - "8080:8080"
     depends_on:
@@ -207,26 +245,24 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.agent
+      args:
+        INSTALL_CLAUDE_CLI: ${INSTALL_CLAUDE_CLI:-true}
+        INSTALL_GEMINI_CLI: ${INSTALL_GEMINI_CLI:-true}
+        INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-false}
     container_name: aito-ceo
     restart: unless-stopped
     environment:
+      <<: *agent-base-env
       AGENT_TYPE: ceo
       AGENT_PROFILE: /app/profiles/ceo.md
       LOOP_INTERVAL: 900
-      DRY_RUN: ${DRY_RUN:-false}
-      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
-      REDIS_URL: redis://redis:6379
-      OLLAMA_URL: http://ollama:11434
-      QDRANT_URL: http://qdrant:6333
-      GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
-      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
-      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - ceo_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - ceo_workspace:/app/workspace
+      - shared_gemini_config:/app/.gemini
+      - shared_openai_config:/app/.openai
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -239,28 +275,26 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.agent
+      args:
+        INSTALL_CLAUDE_CLI: ${INSTALL_CLAUDE_CLI:-true}
+        INSTALL_GEMINI_CLI: ${INSTALL_GEMINI_CLI:-true}
+        INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-false}
     container_name: aito-dao
     restart: unless-stopped
     environment:
+      <<: *agent-base-env
       AGENT_TYPE: dao
       AGENT_PROFILE: /app/profiles/dao.md
       LOOP_INTERVAL: 21600
-      DRY_RUN: ${DRY_RUN:-false}
-      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
-      REDIS_URL: redis://redis:6379
-      OLLAMA_URL: http://ollama:11434
-      QDRANT_URL: http://qdrant:6333
       SNAPSHOT_SPACE: ${SNAPSHOT_SPACE:-shibaclassic.eth}
       GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
-      GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
-      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
-      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - dao_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - dao_workspace:/app/workspace
+      - shared_gemini_config:/app/.gemini
+      - shared_openai_config:/app/.openai
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -277,18 +311,18 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.agent
+      args:
+        INSTALL_CLAUDE_CLI: ${INSTALL_CLAUDE_CLI:-true}
+        INSTALL_GEMINI_CLI: ${INSTALL_GEMINI_CLI:-true}
+        INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-false}
     container_name: aito-cmo
     restart: unless-stopped
     environment:
+      <<: *agent-base-env
       AGENT_TYPE: cmo
       AGENT_PROFILE: /app/profiles/cmo.md
       LOOP_INTERVAL: 14400
-      DRY_RUN: ${DRY_RUN:-false}
       GIT_FILTER: content/*
-      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
-      REDIS_URL: redis://redis:6379
-      OLLAMA_URL: http://ollama:11434
-      QDRANT_URL: http://qdrant:6333
       TWITTER_BEARER_TOKEN: ${TWITTER_BEARER_TOKEN}
       TWITTER_API_KEY: ${TWITTER_API_KEY}
       TWITTER_API_SECRET: ${TWITTER_API_SECRET}
@@ -299,18 +333,21 @@ services:
       DIRECTUS_URL: ${DIRECTUS_URL}
       DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
       DEEPL_API_KEY: ${DEEPL_API_KEY}
-      GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
-      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
-      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - cmo_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - cmo_workspace:/app/workspace
+      - shared_gemini_config:/app/.gemini
+      - shared_openai_config:/app/.openai
+      - ./workspace:/app/workspace
     depends_on:
-      orchestrator:
+      redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      # Orchestrator dependency commented out for standalone testing
+      # orchestrator:
+      #   condition: service_healthy
     networks:
       - aito-network
     profiles:
@@ -320,29 +357,27 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.agent
+      args:
+        INSTALL_CLAUDE_CLI: ${INSTALL_CLAUDE_CLI:-true}
+        INSTALL_GEMINI_CLI: ${INSTALL_GEMINI_CLI:-true}
+        INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-false}
     container_name: aito-cto
     restart: unless-stopped
     environment:
+      <<: *agent-base-env
       AGENT_TYPE: cto
       AGENT_PROFILE: /app/profiles/cto.md
       LOOP_INTERVAL: 3600
-      DRY_RUN: ${DRY_RUN:-false}
       GIT_FILTER: website/*
-      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
-      REDIS_URL: redis://redis:6379
-      OLLAMA_URL: http://ollama:11434
-      QDRANT_URL: http://qdrant:6333
-      GITHUB_TOKEN: ${GITHUB_TOKEN}
       DIRECTUS_URL: ${DIRECTUS_URL}
       DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
-      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
-      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - cto_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - cto_workspace:/app/workspace
+      - shared_gemini_config:/app/.gemini
+      - shared_openai_config:/app/.openai
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -355,31 +390,29 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.agent
+      args:
+        INSTALL_CLAUDE_CLI: ${INSTALL_CLAUDE_CLI:-true}
+        INSTALL_GEMINI_CLI: ${INSTALL_GEMINI_CLI:-true}
+        INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-false}
     container_name: aito-cfo
     restart: unless-stopped
     environment:
+      <<: *agent-base-env
       AGENT_TYPE: cfo
       AGENT_PROFILE: /app/profiles/cfo.md
       LOOP_INTERVAL: 21600
-      DRY_RUN: ${DRY_RUN:-false}
       GIT_FILTER: treasury/*
-      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
-      REDIS_URL: redis://redis:6379
-      OLLAMA_URL: http://ollama:11434
-      QDRANT_URL: http://qdrant:6333
       ETHERSCAN_API_KEY: ${ETHERSCAN_API_KEY}
       COINGECKO_API_KEY: ${COINGECKO_API_KEY}
       QUICKNODE_HTTP_URL: ${QUICKNODE_HTTP_URL}
       GNOSIS_SAFE_ADDRESS: ${GNOSIS_SAFE_ADDRESS}
-      GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
-      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
-      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - cfo_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - cfo_workspace:/app/workspace
+      - shared_gemini_config:/app/.gemini
+      - shared_openai_config:/app/.openai
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -392,30 +425,28 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.agent
+      args:
+        INSTALL_CLAUDE_CLI: ${INSTALL_CLAUDE_CLI:-true}
+        INSTALL_GEMINI_CLI: ${INSTALL_GEMINI_CLI:-true}
+        INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-false}
     container_name: aito-coo
     restart: unless-stopped
     environment:
+      <<: *agent-base-env
       AGENT_TYPE: coo
       AGENT_PROFILE: /app/profiles/coo.md
       LOOP_INTERVAL: 7200
-      DRY_RUN: ${DRY_RUN:-false}
       GIT_FILTER: community/*
-      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
-      REDIS_URL: redis://redis:6379
-      OLLAMA_URL: http://ollama:11434
-      QDRANT_URL: http://qdrant:6333
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID}
       # DISCORD_BOT_TOKEN removed - Discord does not exist
-      GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
-      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
-      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - coo_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - coo_workspace:/app/workspace
+      - shared_gemini_config:/app/.gemini
+      - shared_openai_config:/app/.openai
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -428,27 +459,25 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.agent
+      args:
+        INSTALL_CLAUDE_CLI: ${INSTALL_CLAUDE_CLI:-true}
+        INSTALL_GEMINI_CLI: ${INSTALL_GEMINI_CLI:-true}
+        INSTALL_CODEX_CLI: ${INSTALL_CODEX_CLI:-false}
     container_name: aito-cco
     restart: unless-stopped
     environment:
+      <<: *agent-base-env
       AGENT_TYPE: cco
       AGENT_PROFILE: /app/profiles/cco.md
       LOOP_INTERVAL: 86400
-      DRY_RUN: ${DRY_RUN:-false}
       GIT_FILTER: legal/*
-      POSTGRES_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
-      REDIS_URL: redis://redis:6379
-      OLLAMA_URL: http://ollama:11434
-      QDRANT_URL: http://qdrant:6333
-      GITHUB_TOKEN: ${GITHUB_TOKEN}
-      GITHUB_ORG: ${GITHUB_ORG:-Brunzendorf}
-      WORKSPACE_REPO_URL: ${WORKSPACE_REPO_URL:-https://github.com/Brunzendorf/shibc-workspace.git}
-      WORKSPACE_BRANCH: ${WORKSPACE_BRANCH:-main}
     volumes:
       - ./profiles:/app/profiles:ro
       - cco_memory:/app/memory
       - shared_claude_config:/app/.claude
-      - cco_workspace:/app/workspace
+      - shared_gemini_config:/app/.gemini
+      - shared_openai_config:/app/.openai
+      - ./workspace:/app/workspace
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -536,15 +565,15 @@ volumes:
   coo_memory:
   cco_memory:
 
-  # Agent Workspaces (Git cloned inside container)
-  ceo_workspace:
-  dao_workspace:
-  cmo_workspace:
-  cto_workspace:
-  cfo_workspace:
-  coo_workspace:
-  cco_workspace:
+  # Agent Workspaces: Now using shared bind mount ./workspace:/app/workspace
+  # (Named volumes removed - all agents share the same local workspace)
 
-  # Claude CLI Auth (Shared across all agents!)
+  # Claude CLI Auth (Shared across all agents + orchestrator!)
   shared_claude_config:
+
+  # Gemini CLI Auth (Shared across all agents + orchestrator!)
+  shared_gemini_config:
+
+  # OpenAI CLI Auth (Shared across all agents + orchestrator!)
+  shared_openai_config:
 

@@ -423,6 +423,168 @@ export async function getBacklogStats() {
   return fetchApi<BacklogStats>('/backlog/stats');
 }
 
+// LLM Benchmarks
+export interface BenchmarkTask {
+  id: string;
+  title: string;
+  category: string;
+  prompt: string;
+  expectedType: string;
+  difficultyLevel: number;
+}
+
+export interface BenchmarkModel {
+  provider: 'claude' | 'gemini' | 'openai';
+  model: string;
+  displayName: string;
+}
+
+export interface ModelResponse {
+  modelName: string;
+  provider: string;
+  model: string;
+  taskId: string;
+  response: string;
+  durationMs: number;
+  success: boolean;
+  error?: string;
+}
+
+export interface OpusEvaluation {
+  taskId: string;
+  modelName: string;
+  overallScore: number;
+  accuracy: number;
+  clarity: number;
+  completeness: number;
+  feedback: string;
+  strengths: string[];
+  weaknesses: string[];
+}
+
+export interface LeaderboardEntry {
+  modelName: string;
+  provider: string;
+  model: string;
+  averageScore: number;
+  totalDurationMs: number;
+  averageDurationMs: number;
+  categoryScores: Record<string, number>;
+}
+
+export interface BenchmarkResult {
+  runId: string;
+  timestamp: string;
+  models: BenchmarkModel[];
+  tasks: BenchmarkTask[];
+  responses: ModelResponse[];
+  evaluations: OpusEvaluation[];
+  leaderboard: LeaderboardEntry[];
+  summary: {
+    totalTests: number;
+    successRate: number;
+    avgDurationMs: number;
+    bestModel: string;
+    fastestModel: string;
+  };
+}
+
+export interface BenchmarkRunRequest {
+  models?: BenchmarkModel[];
+  tasks?: BenchmarkTask[];
+  description?: string;
+  enableTools?: boolean;
+}
+
+export async function getBenchmarkTasks() {
+  return fetchApi<BenchmarkTask[]>('/benchmarks/tasks');
+}
+
+export async function getBenchmarkRuns(limit = 20) {
+  return fetchApi<BenchmarkResult[]>(`/benchmarks/runs?limit=${limit}`);
+}
+
+export async function getBenchmarkRun(runId: string) {
+  return fetchApi<BenchmarkResult>(`/benchmarks/runs/${runId}`);
+}
+
+export async function getLatestBenchmark() {
+  return fetchApi<BenchmarkResult>('/benchmarks/latest');
+}
+
+export async function getBenchmarkLeaderboard() {
+  return fetchApi<LeaderboardEntry[]>('/benchmarks/leaderboard');
+}
+
+export async function runBenchmark(request?: BenchmarkRunRequest) {
+  return fetchApi<{ message: string; models: number; tasks: number; timestamp: string }>(
+    '/benchmarks/run',
+    {
+      method: 'POST',
+      body: request ? JSON.stringify(request) : undefined,
+    }
+  );
+}
+
+// System Settings
+export interface SettingValue {
+  value: unknown;
+  description: string | null;
+  isSecret: boolean;
+  updatedAt: string;
+}
+
+export type SettingsGroup = Record<string, SettingValue>;
+export type AllSettings = Record<string, SettingsGroup>;
+
+export async function getAllSettings() {
+  return fetchApi<AllSettings>('/settings');
+}
+
+export async function getSettingsByCategory(category: string) {
+  return fetchApi<SettingsGroup>(`/settings/${category}`);
+}
+
+export async function getSetting(category: string, key: string) {
+  return fetchApi<SettingValue>(`/settings/${category}/${key}`);
+}
+
+export async function updateSetting(category: string, key: string, value: unknown, description?: string) {
+  return fetchApi<SettingValue>(`/settings/${category}/${key}`, {
+    method: 'PUT',
+    body: JSON.stringify({ value, description }),
+  });
+}
+
+export async function updateSettingsCategory(category: string, updates: Record<string, unknown>) {
+  return fetchApi<Record<string, unknown>>(`/settings/${category}`, {
+    method: 'PUT',
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function getSettingsCategories() {
+  return fetchApi<string[]>('/settings-categories');
+}
+
+// Convenience settings endpoints
+export async function getQueueDelays() {
+  return fetchApi<Record<string, number>>('/settings/queue/delays');
+}
+
+export async function getAgentIntervals() {
+  return fetchApi<Record<string, number>>('/settings/agents/intervals');
+}
+
+export async function getLLMConfig() {
+  return fetchApi<{
+    routingStrategy: string;
+    enableFallback: boolean;
+    preferGemini: boolean;
+    geminiDefaultModel: string;
+  }>('/settings/llm/config');
+}
+
 // API object wrapper for convenience
 export const api = {
   get: async <T>(endpoint: string) => fetchApi<T>(endpoint),

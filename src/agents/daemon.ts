@@ -12,21 +12,21 @@ import {
   setAgentStatus,
   redis,
 } from '../lib/redis.js';
-import { agentRepo, historyRepo, eventRepo, decisionRepo } from '../lib/db.js';
+import { agentRepo, historyRepo, eventRepo, decisionRepo, settingsRepo } from '../lib/db.js';
 import { rag } from '../lib/rag.js';
+import { workspaceConfig } from '../lib/config.js';
 import { workspace } from './workspace.js';
 import { loadProfile, generateSystemPrompt, type AgentProfile } from './profile.js';
 import { createStateManager, StateKeys, type StateManager } from './state.js';
 import {
-  executeClaudeCodeWithRetry,
   executeOllamaFallback,
-  isClaudeAvailable,
   buildLoopPrompt,
   parseClaudeOutput,
   getKanbanIssuesForAgent,
   executeClaudeAgent,
   type PendingDecision,
 } from './claude.js';
+import { llmRouter, type TaskContext } from '../lib/llm/index.js';
 import type { AgentType, AgentMessage, EventType } from '../lib/types.js';
 import { spawnWorkerAsync } from '../workers/spawner.js';
 import { queueForArchive } from '../workers/archive-worker.js';
@@ -39,6 +39,61 @@ import {
 } from './initiative.js';
 
 const logger = createLogger('daemon');
+
+/**
+ * Priority-based queue delays (in milliseconds)
+ * Higher priority tasks are processed faster
+ * Defaults used until DB settings are loaded
+ */
+let QUEUE_DELAYS: Record<string, number> = {
+  critical: 0,           // Immediate
+  urgent: 5_000,         // 5 seconds
+  high: 30_000,          // 30 seconds
+  normal: 120_000,       // 2 minutes
+  low: 300_000,          // 5 minutes
+  operational: 600_000,  // 10 minutes (batch operational tasks)
+};
+
+/**
+ * Task limits - loaded from database
+ */
+let MAX_CONCURRENT_TASKS = 2;
+
+/**
+ * Load settings from database
+ */
+async function loadSettingsFromDB(): Promise<void> {
+  try {
+    // Load queue delays
+    const queueDelays = await settingsRepo.getQueueDelays();
+    if (Object.keys(queueDelays).length > 0) {
+      QUEUE_DELAYS = { ...QUEUE_DELAYS, ...queueDelays };
+      logger.info({ delays: QUEUE_DELAYS }, 'Loaded queue delays from database');
+    }
+
+    // Load task settings
+    const taskSettings = await settingsRepo.getTaskSettings();
+    MAX_CONCURRENT_TASKS = taskSettings.maxConcurrentPerAgent;
+    logger.info({ maxConcurrent: MAX_CONCURRENT_TASKS }, 'Loaded task settings from database');
+  } catch (error) {
+    logger.warn({ error }, 'Failed to load settings from DB, using defaults');
+  }
+}
+
+/**
+ * Get delay based on highest priority task in queue
+ */
+function getQueueDelay(tasks: Array<{ priority?: string }>): number {
+  if (tasks.length === 0) return QUEUE_DELAYS.normal;
+
+  const priorities = ['critical', 'urgent', 'high', 'normal', 'low', 'operational'];
+  for (const priority of priorities) {
+    if (tasks.some(t => t.priority === priority)) {
+      return QUEUE_DELAYS[priority] || QUEUE_DELAYS.normal;
+    }
+  }
+  return QUEUE_DELAYS.normal;
+}
 
 export interface DaemonConfig {
   agentType: AgentType;
@@ -91,13 +146,17 @@ export class AgentDaemon {
       this.state = createStateManager(this.config.agentId, this.config.agentType);
       logger.info('State manager initialized');
 
-      // 2.5. Initialize workspace (git clone)
+      // 2.5. Load settings from database (queue delays, task limits, etc.)
+      await loadSettingsFromDB();
+
+      // 2.6. Initialize workspace (git clone)
       const workspaceInitialized = await workspace.initialize(this.config.agentType);
       logger.info({ success: workspaceInitialized }, 'Workspace initialized');
 
-      // 3. Check Claude availability
-      this.claudeAvailable = await isClaudeAvailable();
-      logger.info({ claudeAvailable: this.claudeAvailable }, 'Claude availability checked');
+      // 3. Check LLM provider availability
+      const availability = await llmRouter.checkAvailability();
+      this.claudeAvailable = availability.claude || availability.gemini; // Keep old flag for backward compat
+      logger.info({ availability }, 'LLM provider availability checked');
 
       // 4. Subscribe to Redis events
       await this.subscribeToEvents();
@@ -561,6 +620,26 @@ export class AgentDaemon {
         logger.warn({ error: errMsg }, 'Failed to fetch Kanban issues, continuing without');
       }
 
+      // TASK LIMIT: Max concurrent in-progress tasks per agent (loaded from DB)
+      const currentInProgress = kanbanIssues?.inProgress?.length || 0;
+      if (currentInProgress >= MAX_CONCURRENT_TASKS) {
+        logger.info({
+          agentType: this.config.agentType,
+          currentInProgress,
+          maxAllowed: MAX_CONCURRENT_TASKS,
+        }, 'Agent at max capacity - clearing pending tasks to focus on current work');
+        // Clear pending tasks - agent should focus on completing current work
+        pendingTasks = [];
+      }
+
+      // PRIORITY SORTING: Sort pending tasks by priority (critical first)
+      const priorityOrder: Record<string, number> = { critical: 0, urgent: 1, high: 2, normal: 3, low: 4, operational: 5 };
+      pendingTasks.sort((a, b) => {
+        const pa = priorityOrder[a.priority] ?? 3;
+        const pb = priorityOrder[b.priority] ?? 3;
+        return pa - pb;
+      });
+
       // Build prompt
       const systemPrompt = generateSystemPrompt(this.profile);
       let loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data }, pendingDecisions, ragContext, pendingTasks, kanbanIssues);
@@ -577,17 +656,38 @@ export class AgentDaemon {
 
       logger.debug({ systemPromptLength: systemPrompt.length, loopPromptLength: loopPrompt.length }, 'Prompt lengths');
 
-      // Execute AI with retry on transient errors (overload, rate limit)
+      // Execute AI with intelligent routing (Claude vs Gemini)
       let result;
       if (this.claudeAvailable) {
-        result = await executeClaudeCodeWithRetry({
+        // Build task context for routing decision
+        const taskContext: TaskContext = {
+          taskType: 'loop',
+          agentType: this.config.agentType,
+          estimatedComplexity: pendingDecisions && pendingDecisions.length > 0 ? 'complex' : 'medium',
+          priority: pendingTasks && pendingTasks.some(t => t.priority === 'critical') ? 'critical' : 'normal',
+        };
+
+        // Get MCP servers for this agent type
+        const mcpServersForAgent = {
+          ceo: ['filesystem', 'fetch'],
+          dao: ['filesystem', 'etherscan'],
+          cmo: ['telegram', 'fetch', 'filesystem'],
+          cto: ['directus', 'filesystem', 'fetch'],
+          cfo: ['etherscan', 'filesystem'],
+          coo: ['telegram', 'filesystem'],
+          cco: ['filesystem', 'fetch'],
+        };
+
+        result = await llmRouter.execute({
           prompt: loopPrompt,
           systemPrompt,
           timeout: 300000, // 5 minutes
           maxRetries: 3,
-        });
+          mcpConfigPath: process.env.MCP_CONFIG_PATH || '/app/.claude/mcp_servers.json', // For Claude
+          mcpServers: mcpServersForAgent[this.config.agentType as keyof typeof mcpServersForAgent] || [], // For Gemini
+        }, taskContext);
       } else {
-        logger.warn('Claude unavailable, using Ollama fallback');
+        logger.warn('No LLM providers available, using Ollama fallback');
         result = await executeOllamaFallback(systemPrompt + '\n\n' + loopPrompt);
       }
 
@@ -650,77 +750,109 @@ export class AgentDaemon {
             }
           }
 
-          // Commit workspace changes to git (with PR if enabled)
+          // Commit workspace changes to git
           if (await workspace.hasUncommittedChanges()) {
-            // Detect PR category based on summary content
-            // Status updates (routine reports, metrics) → auto-merge, no RAG
-            // Content (marketing, community content) → clevel review
-            // Strategic (partnerships, major changes) → CEO review
-            const summaryLower = (parsed.summary || '').toLowerCase();
-            let prCategory: 'status' | 'content' | 'strategic' = 'content';
-            if (summaryLower.includes('status update') ||
-                summaryLower.includes('routine') ||
-                summaryLower.includes('metrics') ||
-                summaryLower.includes('loop') ||
-                summaryLower.includes('daily report')) {
-              prCategory = 'status';
-            } else if (summaryLower.includes('strategy') ||
-                       summaryLower.includes('partnership') ||
-                       summaryLower.includes('major') ||
-                       summaryLower.includes('critical')) {
-              prCategory = 'strategic';
-            }
+            // Check if PR workflow is bypassed (WORKSPACE_SKIP_PR=true)
+            if (workspaceConfig.skipPR) {
+              // Direct push mode - bypass PR workflow entirely
+              const directResult = await workspace.commitAndPushDirect(
+                this.config.agentType,
+                parsed.summary || `Loop ${loopCount + 1} completed`
+              );
+              if (directResult.success && directResult.filesChanged) {
+                logger.info({
+                  filesChanged: directResult.filesChanged,
+                  commitHash: directResult.commitHash,
+                  mode: 'direct_push_bypass',
+                }, 'Workspace changes pushed directly (PR bypassed)');
 
-            const commitResult = await workspace.commitAndCreatePR(
-              this.config.agentType,
-              parsed.summary || `Loop ${loopCount + 1} completed`,
-              loopCount + 1,
-              prCategory
-            );
-            if (commitResult.success && commitResult.filesChanged) {
-              logger.info({
-                filesChanged: commitResult.filesChanged,
-                commitHash: commitResult.commitHash,
-                prNumber: commitResult.prNumber,
-                prUrl: commitResult.prUrl,
-                category: prCategory,
-              }, 'Workspace changes committed');
-
-              // If PR was created, request RAG quality review
-              if (commitResult.prNumber) {
+                // Publish workspace update event for dashboard (no RAG review)
                 await publisher.publish(channels.orchestrator, JSON.stringify({
                   id: crypto.randomUUID(),
-                  type: 'pr_review_requested',
+                  type: 'workspace_update',
                   from: this.config.agentId,
                   to: 'orchestrator',
                   payload: {
                     agentType: this.config.agentType,
-                    prNumber: commitResult.prNumber,
-                    prUrl: commitResult.prUrl,
-                    branchName: commitResult.branchName,
-                    commitHash: commitResult.commitHash,
-                    filesChanged: await workspace.getChangedFiles(),
+                    commitHash: directResult.commitHash,
+                    filesChanged: directResult.filesChanged,
                     summary: parsed.summary,
-                    category: prCategory,
+                    mode: 'direct_push',
                   },
                 }));
-                logger.info({ prNumber: commitResult.prNumber, category: prCategory }, 'PR review requested');
-              } else {
-                // No PR (direct push) - just index the files
-                const changedFiles = await workspace.getChangedFiles();
-                if (changedFiles.length > 0) {
+              }
+            } else {
+              // Standard PR workflow with quality gate
+              // Detect PR category based on summary content
+              // Status updates (routine reports, metrics) → auto-merge, no RAG
+              // Content (marketing, community content) → clevel review
+              // Strategic (partnerships, major changes) → CEO review
+              const summaryLower = (parsed.summary || '').toLowerCase();
+              let prCategory: 'status' | 'content' | 'strategic' = 'content';
+              if (summaryLower.includes('status update') ||
+                  summaryLower.includes('routine') ||
+                  summaryLower.includes('metrics') ||
+                  summaryLower.includes('loop') ||
+                  summaryLower.includes('daily report')) {
+                prCategory = 'status';
+              } else if (summaryLower.includes('strategy') ||
+                         summaryLower.includes('partnership') ||
+                         summaryLower.includes('major') ||
+                         summaryLower.includes('critical')) {
+                prCategory = 'strategic';
+              }
+
+              const commitResult = await workspace.commitAndCreatePR(
+                this.config.agentType,
+                parsed.summary || `Loop ${loopCount + 1} completed`,
+                loopCount + 1,
+                prCategory
+              );
+              if (commitResult.success && commitResult.filesChanged) {
+                logger.info({
+                  filesChanged: commitResult.filesChanged,
+                  commitHash: commitResult.commitHash,
+                  prNumber: commitResult.prNumber,
+                  prUrl: commitResult.prUrl,
+                  category: prCategory,
+                }, 'Workspace changes committed');
+
+                // If PR was created, request RAG quality review
+                if (commitResult.prNumber) {
                   await publisher.publish(channels.orchestrator, JSON.stringify({
                     id: crypto.randomUUID(),
-                    type: 'workspace_update',
+                    type: 'pr_review_requested',
                     from: this.config.agentId,
                     to: 'orchestrator',
                     payload: {
                       agentType: this.config.agentType,
+                      prNumber: commitResult.prNumber,
+                      prUrl: commitResult.prUrl,
+                      branchName: commitResult.branchName,
                       commitHash: commitResult.commitHash,
-                      filesChanged: changedFiles,
+                      filesChanged: await workspace.getChangedFiles(),
                       summary: parsed.summary,
+                      category: prCategory,
                     },
                   }));
+                  logger.info({ prNumber: commitResult.prNumber, category: prCategory }, 'PR review requested');
+                } else {
+                  // No PR (direct push) - just index the files
+                  const changedFiles = await workspace.getChangedFiles();
+                  if (changedFiles.length > 0) {
+                    await publisher.publish(channels.orchestrator, JSON.stringify({
+                      id: crypto.randomUUID(),
+                      type: 'workspace_update',
+                      from: this.config.agentId,
+                      to: 'orchestrator',
+                      payload: {
+                        agentType: this.config.agentType,
+                        commitHash: commitResult.commitHash,
+                        filesChanged: changedFiles,
+                        summary: parsed.summary,
+                      },
+                    }));
+                  }
                 }
               }
             }
@@ -761,50 +893,71 @@ export class AgentDaemon {
       const duration = Date.now() - loopStart;
       logger.info({ trigger, duration, success: result.success }, 'Loop completed');
 
-      // EVENT-DRIVEN: Check if more tasks in queue → continue immediately
+      // EVENT-DRIVEN: Check if more tasks in queue
       if (result.success) {
-        const remainingTasks = await redis.llen(`queue:tasks:${this.config.agentType}`);
-        if (remainingTasks > 0) {
-          logger.info({ remainingTasks, agentType: this.config.agentType }, 'More tasks in queue, continuing immediately');
-          // Small delay to prevent tight loop, then continue
-          setTimeout(() => this.runLoop('queue_continuation'), 2000);
-        } else {
-          // INITIATIVE PHASE: No tasks in queue, be proactive!
-          logger.info({ agentType: this.config.agentType }, 'Task queue empty, running initiative phase');
-          try {
-            const initiativeResult = await runInitiativePhase(this.config.agentType as InitiativeAgentType);
-            if (initiativeResult.created && initiativeResult.initiative) {
-              logger.info({
-                title: initiativeResult.initiative.title,
-                issueUrl: initiativeResult.issueUrl,
-                revenueImpact: initiativeResult.initiative.revenueImpact,
-              }, 'Initiative created - agent generated own work!');
+        const taskQueueKey = `queue:tasks:${this.config.agentType}`;
+        const rawTasks = await redis.lrange(taskQueueKey, 0, 9);
 
-              // Log initiative as event (include all fields for dashboard)
-              await eventRepo.log({
-                eventType: 'initiative_created' as EventType,
-                sourceAgent: this.config.agentId,
-                payload: {
+        if (rawTasks.length > 0) {
+          // Parse tasks to get priority
+          const parsedTasks = rawTasks.map(t => {
+            try { return JSON.parse(t); } catch { return { priority: 'normal' }; }
+          });
+
+          // Calculate delay based on highest priority task
+          const delay = getQueueDelay(parsedTasks);
+          const highestPriority = parsedTasks[0]?.priority || 'normal';
+
+          logger.info({
+            remainingTasks: rawTasks.length,
+            highestPriority,
+            delayMs: delay,
+            agentType: this.config.agentType
+          }, 'More tasks in queue, scheduling continuation with priority-based delay');
+
+          // Priority-based delay before next loop
+          setTimeout(() => this.runLoop('queue_continuation'), delay);
+        } else {
+          // Queue empty - WAIT for scheduled loop, don't immediately run initiative
+          // Initiative phase only runs during scheduled loops to prevent excessive API calls
+          logger.info({
+            agentType: this.config.agentType,
+            nextScheduledLoop: this.config.loopInterval
+          }, 'Task queue empty, waiting for scheduled loop');
+
+          // Only run initiative phase if this was a SCHEDULED loop (not a task reaction)
+          if (trigger === 'scheduled') {
+            try {
+              const initiativeResult = await runInitiativePhase(this.config.agentType as InitiativeAgentType);
+              if (initiativeResult.created && initiativeResult.initiative) {
+                logger.info({
                   title: initiativeResult.initiative.title,
-                  description: initiativeResult.initiative.description,
-                  priority: initiativeResult.initiative.priority,
-                  revenueImpact: initiativeResult.initiative.revenueImpact,
-                  effort: initiativeResult.initiative.effort,
-                  tags: initiativeResult.initiative.tags,
-                  suggestedAssignee: initiativeResult.initiative.suggestedAssignee,
                   issueUrl: initiativeResult.issueUrl,
-                },
-              });
-            } else if (initiativeResult.needsAIGeneration) {
-              // No bootstrap initiatives left - run Claude Code to generate new ideas
-              logger.info({ agentType: this.config.agentType }, 'Running AI-driven initiative generation');
-              await this.runAIInitiativeGeneration();
-            } else {
-              logger.debug({ agentType: this.config.agentType }, 'No new initiatives to create (cooldown active)');
+                  revenueImpact: initiativeResult.initiative.revenueImpact,
+                }, 'Initiative created during scheduled loop');
+
+                await eventRepo.log({
+                  eventType: 'initiative_created' as EventType,
+                  sourceAgent: this.config.agentId,
+                  payload: {
+                    title: initiativeResult.initiative.title,
+                    description: initiativeResult.initiative.description,
+                    priority: initiativeResult.initiative.priority,
+                    revenueImpact: initiativeResult.initiative.revenueImpact,
+                    effort: initiativeResult.initiative.effort,
+                    tags: initiativeResult.initiative.tags,
+                    suggestedAssignee: initiativeResult.initiative.suggestedAssignee,
+                    issueUrl: initiativeResult.issueUrl,
+                  },
+                });
+              } else if (initiativeResult.needsAIGeneration) {
+                logger.info({ agentType: this.config.agentType }, 'Running AI-driven initiative generation');
+                await this.runAIInitiativeGeneration();
+              }
+            } catch (initError) {
+              const errMsg = initError instanceof Error ? initError.message : String(initError);
+              logger.warn({ error: errMsg }, 'Initiative phase failed');
             }
-          } catch (initError) {
-            const errMsg = initError instanceof Error ? initError.message : String(initError);
-            logger.warn({ error: errMsg }, 'Initiative phase failed, continuing normally');
           }
         }
       }
@@ -842,22 +995,42 @@ export class AgentDaemon {
         return;
       }
 
-      // Check if Claude is available
-      if (!await isClaudeAvailable()) {
-        logger.warn('Claude not available for AI initiative generation');
+      // Check if any LLM provider is available
+      const availability = await llmRouter.checkAvailability();
+      if (!availability.claude && !availability.gemini) {
+        logger.warn('No LLM providers available for AI initiative generation');
         return;
       }
 
       // Generate system prompt
       const systemPrompt = await generateSystemPrompt(this.profile);
 
-      // Execute Claude Code to generate initiative
-      logger.info({ agentType: this.config.agentType }, 'Calling Claude Code for initiative generation');
-      const result = await executeClaudeCodeWithRetry({
+      // Execute with LLM routing (initiative generation uses reasoning, so Claude preferred)
+      logger.info({ agentType: this.config.agentType }, 'Calling LLM for initiative generation');
+      const taskContext: TaskContext = {
+        taskType: 'loop',
+        agentType: this.config.agentType,
+        requiresReasoning: true, // Force Claude for initiative generation
+        priority: 'high',
+      };
+      // Get MCP servers for this agent type
+      const mcpServersForAgent = {
+        ceo: ['filesystem', 'fetch'],
+        dao: ['filesystem', 'etherscan'],
+        cmo: ['telegram', 'fetch', 'filesystem'],
+        cto: ['directus', 'filesystem', 'fetch'],
+        cfo: ['etherscan', 'filesystem'],
+        coo: ['telegram', 'filesystem'],
+        cco: ['filesystem', 'fetch'],
+      };
+
+      const result = await llmRouter.execute({
         prompt: initiativePrompt,
         systemPrompt,
         timeout: 60000,
-      });
+        mcpConfigPath: process.env.MCP_CONFIG_PATH || '/app/.claude/mcp_servers.json', // For Claude
+        mcpServers: mcpServersForAgent[this.config.agentType as keyof typeof mcpServersForAgent] || [], // For Gemini
+      }, taskContext);
 
       if (!result.success || !result.output) {
         logger.warn({ error: result.error }, 'Claude initiative generation failed');
@@ -1374,6 +1547,85 @@ export class AgentDaemon {
           }
         } catch (updateErr) {
           logger.warn({ error: updateErr, issueNumber: update.issueNumber }, 'Failed to update issue');
+        }
+        break;
+      }
+
+      case 'claim_issue': {
+        // Agent claims a GitHub issue - sets status to in-progress
+        const claim = actionData as {
+          issueNumber?: number;
+        };
+
+        if (!claim?.issueNumber) {
+          logger.warn({ claim }, 'Invalid claim_issue: missing issueNumber');
+          break;
+        }
+
+        try {
+          const { claimIssue } = await import('./initiative.js');
+          const success = await claimIssue(claim.issueNumber, this.config.agentType);
+
+          if (success) {
+            logger.info({ issueNumber: claim.issueNumber }, 'Agent claimed issue');
+
+            // Log as event
+            await eventRepo.log({
+              eventType: 'issue_claimed' as EventType,
+              sourceAgent: this.config.agentId,
+              payload: {
+                issueNumber: claim.issueNumber,
+                agentType: this.config.agentType,
+              },
+            });
+          }
+        } catch (claimErr) {
+          logger.warn({ error: claimErr, issueNumber: claim.issueNumber }, 'Failed to claim issue');
+        }
+        break;
+      }
+
+      case 'complete_issue': {
+        // Agent completes a GitHub issue - sets status to done or review
+        const complete = actionData as {
+          issueNumber?: number;
+          setToReview?: boolean;
+          comment?: string;
+        };
+
+        if (!complete?.issueNumber) {
+          logger.warn({ complete }, 'Invalid complete_issue: missing issueNumber');
+          break;
+        }
+
+        try {
+          const { completeIssue } = await import('./initiative.js');
+          const success = await completeIssue(
+            complete.issueNumber,
+            this.config.agentType,
+            complete.setToReview || false,
+            complete.comment
+          );
+
+          if (success) {
+            logger.info({
+              issueNumber: complete.issueNumber,
+              setToReview: complete.setToReview,
+            }, 'Agent completed issue');
+
+            // Log as event
+            await eventRepo.log({
+              eventType: 'issue_completed' as EventType,
+              sourceAgent: this.config.agentId,
+              payload: {
+                issueNumber: complete.issueNumber,
+                agentType: this.config.agentType,
+                setToReview: complete.setToReview,
+              },
+            });
+          }
+        } catch (completeErr) {
+          logger.warn({ error: completeErr, issueNumber: complete.issueNumber }, 'Failed to complete issue');
         }
         break;
       }

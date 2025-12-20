@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { createLogger } from '../lib/logger.js';
 import { numericConfig } from '../lib/config.js';
-import { agentRepo, eventRepo, taskRepo, decisionRepo, escalationRepo, historyRepo, domainApprovalRepo, domainWhitelistRepo } from '../lib/db.js';
+import { agentRepo, eventRepo, taskRepo, decisionRepo, escalationRepo, historyRepo, domainApprovalRepo, domainWhitelistRepo, settingsRepo } from '../lib/db.js';
 import { publisher, channels, redis } from '../lib/redis.js';
 import { startAgent, stopAgent, restartAgent, getAgentContainerStatus, listManagedContainers } from './container.js';
 import { getScheduledJobs, pauseJob, resumeJob } from './scheduler.js';
@@ -9,6 +9,8 @@ import { getSystemHealth, isAlive, isReady, getAgentHealth } from './health.js';
 import { triggerEscalation } from './events.js';
 import type { AgentType, AgentMessage, ApiResponse, DecisionStatus } from '../lib/types.js';
 import crypto from 'crypto';
+import { benchmarkRunner, BENCHMARK_TASKS } from '../lib/llm/benchmark.js';
+import type { BenchmarkTest } from '../lib/llm/benchmark.js';
 
 const logger = createLogger('api');
 
@@ -958,7 +960,302 @@ app.post('/backlog/refresh', asyncHandler(async (_req, res) => {
   sendResponse(res, { message: 'Backlog grooming started', timestamp: new Date().toISOString() });
 }));
 
+// === LLM Benchmark Endpoints ===
+
+// Get all benchmark tasks (available test suite)
+app.get('/benchmarks/tasks', asyncHandler(async (_req, res) => {
+  sendResponse(res, BENCHMARK_TASKS);
+}));
+
+// List all benchmark runs (from Redis)
+app.get('/benchmarks/runs', asyncHandler(async (req, res) => {
+  const limit = parseInt(req.query.limit as string) || 20;
+
+  try {
+    const keys = await redis.keys('benchmark:run:*');
+
+    if (keys.length === 0) {
+      return sendResponse(res, []);
+    }
+
+    // Get all runs and sort by timestamp
+    const runs = await Promise.all(
+      keys.slice(0, limit).map(async (key) => {
+        const data = await redis.get(key);
+        return data ? JSON.parse(data) : null;
+      })
+    );
+
+    const validRuns = runs.filter(r => r !== null).sort((a, b) =>
+      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    );
+
+    sendResponse(res, validRuns);
+  } catch (err) {
+    logger.error({ err }, 'Failed to fetch benchmark runs');
+    sendError(res, 'Failed to fetch benchmark runs', 500);
+  }
+}));
+
+// Get specific benchmark run by ID
+app.get('/benchmarks/runs/:runId', asyncHandler(async (req, res) => {
+  const { runId } = req.params;
+
+  try {
+    const data = await redis.get(`benchmark:run:${runId}`);
+
+    if (!data) {
+      return sendError(res, 'Benchmark run not found', 404);
+    }
+
+    const benchmarkRun = JSON.parse(data);
+    sendResponse(res, benchmarkRun);
+  } catch (err) {
+    logger.error({ err, runId }, 'Failed to fetch benchmark run');
+    sendError(res, 'Failed to fetch benchmark run', 500);
+  }
+}));
+
+// Get latest benchmark run
+app.get('/benchmarks/latest', asyncHandler(async (_req, res) => {
+  try {
+    const keys = await redis.keys('benchmark:run:*');
+
+    if (keys.length === 0) {
+      return sendResponse(res, null);
+    }
+
+    // Get all runs and find latest
+    const runs = await Promise.all(
+      keys.map(async (key) => {
+        const data = await redis.get(key);
+        return data ? JSON.parse(data) : null;
+      })
+    );
+
+    const validRuns = runs.filter(r => r !== null);
+    const latest = validRuns.sort((a, b) =>
+      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    )[0];
+
+    if (!latest) {
+      return sendResponse(res, null);
+    }
+
+    sendResponse(res, latest);
+  } catch (err) {
+    logger.error({ err }, 'Failed to fetch latest benchmark');
+    sendError(res, 'Failed to fetch latest benchmark', 500);
+  }
+}));
+
+// Run new benchmark (async, returns immediately)
+app.post('/benchmarks/run', asyncHandler(async (req, res) => {
+  const { models, tasks, description, enableTools } = req.body as {
+    models?: BenchmarkTest['models'];
+    tasks?: typeof BENCHMARK_TASKS;
+    description?: string;
+    enableTools?: boolean;
+  };
+
+  // Default models if not specified (Claude-only until Gemini quota restored)
+  // TODO: Re-add when quotas available:
+  //   { provider: 'gemini', model: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash' },
+  //   { provider: 'openai', model: 'gpt-5-codex', displayName: 'OpenAI Codex' },
+  const defaultModels: BenchmarkTest['models'] = [
+    { provider: 'claude', model: 'claude-sonnet-4-5', displayName: 'Claude Sonnet 4.5' },
+  ];
+
+  const modelsToTest = models || defaultModels;
+  const tasksToRun = tasks || BENCHMARK_TASKS;
+  const toolsEnabled = enableTools !== undefined ? enableTools : true; // Default to true
+
+  logger.info({
+    modelCount: modelsToTest.length,
+    taskCount: tasksToRun.length,
+    description,
+    enableTools: toolsEnabled
+  }, 'Starting benchmark run');
+
+  // Run benchmark async (don't block request)
+  benchmarkRunner.runBenchmark(modelsToTest, tasksToRun, toolsEnabled).then((result) => {
+    logger.info({ runId: result.runId }, 'Benchmark completed successfully');
+  }).catch((err) => {
+    logger.error({ err }, 'Benchmark run failed');
+  });
+
+  sendResponse(res, {
+    message: 'Benchmark started',
+    description,
+    models: modelsToTest.length,
+    tasks: tasksToRun.length,
+    timestamp: new Date().toISOString(),
+  }, 202); // 202 Accepted
+}));
+
+// Get benchmark leaderboard (current rankings)
+app.get('/benchmarks/leaderboard', asyncHandler(async (_req, res) => {
+  try {
+    const keys = await redis.keys('benchmark:run:*');
+
+    if (keys.length === 0) {
+      return sendResponse(res, []);
+    }
+
+    // Get latest run
+    const runs = await Promise.all(
+      keys.map(async (key) => {
+        const data = await redis.get(key);
+        return data ? JSON.parse(data) : null;
+      })
+    );
+
+    const validRuns = runs.filter(r => r !== null);
+    const latest = validRuns.sort((a, b) =>
+      new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+    )[0];
+
+    if (!latest || !latest.leaderboard) {
+      return sendResponse(res, []);
+    }
+
+    sendResponse(res, latest.leaderboard);
+  } catch (err) {
+    logger.error({ err }, 'Failed to fetch leaderboard');
+    sendError(res, 'Failed to fetch leaderboard', 500);
+  }
+}));
+
 // Error handling middleware
+// === System Settings Endpoints ===
+
+// Get all settings
+app.get('/settings', asyncHandler(async (_req, res) => {
+  const settings = await settingsRepo.getAll();
+  // Group by category for easier frontend consumption
+  const grouped: Record<string, Record<string, unknown>> = {};
+  for (const s of settings) {
+    if (!grouped[s.category]) grouped[s.category] = {};
+    grouped[s.category][s.settingKey] = {
+      value: s.settingValue,
+      description: s.description,
+      isSecret: s.isSecret,
+      updatedAt: s.updatedAt,
+    };
+  }
+  sendResponse(res, grouped);
+}));
+
+// Get settings by category
+app.get('/settings/:category', asyncHandler(async (req, res) => {
+  const { category } = req.params;
+  const settings = await settingsRepo.getByCategory(category);
+  const result: Record<string, unknown> = {};
+  for (const s of settings) {
+    result[s.settingKey] = {
+      value: s.settingValue,
+      description: s.description,
+      isSecret: s.isSecret,
+      updatedAt: s.updatedAt,
+    };
+  }
+  sendResponse(res, result);
+}));
+
+// Get single setting
+app.get('/settings/:category/:key', asyncHandler(async (req, res) => {
+  const { category, key } = req.params;
+  const setting = await settingsRepo.get(category, key);
+  if (!setting) {
+    return sendError(res, 'Setting not found', 404);
+  }
+  sendResponse(res, {
+    value: setting.settingValue,
+    description: setting.description,
+    isSecret: setting.isSecret,
+    updatedAt: setting.updatedAt,
+  });
+}));
+
+// Update setting
+app.put('/settings/:category/:key', asyncHandler(async (req, res) => {
+  const { category, key } = req.params;
+  const { value, description } = req.body;
+
+  if (value === undefined) {
+    return sendError(res, 'Value is required', 400);
+  }
+
+  const setting = await settingsRepo.set(category, key, value, description);
+  logger.info({ category, key, value }, 'Setting updated');
+
+  // Notify agents if relevant settings changed
+  if (category === 'queue' || category === 'agents' || category === 'llm') {
+    await publisher.publish(channels.broadcast, JSON.stringify({
+      type: 'settings_updated',
+      category,
+      key,
+      timestamp: new Date().toISOString(),
+    }));
+  }
+
+  sendResponse(res, {
+    value: setting.settingValue,
+    description: setting.description,
+    updatedAt: setting.updatedAt,
+  });
+}));
+
+// Bulk update settings
+app.put('/settings/:category', asyncHandler(async (req, res) => {
+  const { category } = req.params;
+  const updates = req.body as Record<string, unknown>;
+
+  if (!updates || typeof updates !== 'object') {
+    return sendError(res, 'Request body must be an object', 400);
+  }
+
+  const results: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(updates)) {
+    const setting = await settingsRepo.set(category, key, value);
+    results[key] = setting.settingValue;
+  }
+
+  logger.info({ category, keyCount: Object.keys(updates).length }, 'Bulk settings updated');
+
+  // Notify agents
+  await publisher.publish(channels.broadcast, JSON.stringify({
+    type: 'settings_updated',
+    category,
+    timestamp: new Date().toISOString(),
+  }));
+
+  sendResponse(res, results);
+}));
+
+// Get available categories
+app.get('/settings-categories', asyncHandler(async (_req, res) => {
+  const categories = await settingsRepo.getCategories();
+  sendResponse(res, categories);
+}));
+
+// Convenience endpoints for specific setting groups
+app.get('/settings/queue/delays', asyncHandler(async (_req, res) => {
+  const delays = await settingsRepo.getQueueDelays();
+  sendResponse(res, delays);
+}));
+
+app.get('/settings/agents/intervals', asyncHandler(async (_req, res) => {
+  const intervals = await settingsRepo.getAgentLoopIntervals();
+  sendResponse(res, intervals);
+}));
+
+app.get('/settings/llm/config', asyncHandler(async (_req, res) => {
+  const config = await settingsRepo.getLLMSettings();
+  sendResponse(res, config);
+}));
+
+// Error handler
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
   logger.error({ err }, 'API error');
   sendError(res, err.message, 500);

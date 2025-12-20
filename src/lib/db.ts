@@ -747,6 +747,563 @@ export const domainApprovalRepo = {
   },
 };
 
+// Agent Profile Repository
+export interface AgentProfile {
+  id: string;
+  agentId: string;
+  version: number;
+  content: string;
+  identity: Record<string, unknown>;
+  mcpServers: Record<string, unknown>;
+  capabilities: unknown[];
+  constraints: unknown[];
+  loopActions: unknown[];
+  decisionAuthority: Record<string, unknown>;
+  isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  createdBy: string;
+}
+
+export const profileRepo = {
+  async getActive(agentId: string): Promise<AgentProfile | null> {
+    return queryOne<AgentProfile>(
+      `SELECT id, agent_id as "agentId", version, content,
+              identity, mcp_servers as "mcpServers", capabilities, constraints,
+              loop_actions as "loopActions", decision_authority as "decisionAuthority",
+              is_active as "isActive", created_at as "createdAt",
+              updated_at as "updatedAt", created_by as "createdBy"
+       FROM agent_profiles WHERE agent_id = $1 AND is_active = true`,
+      [agentId]
+    );
+  },
+
+  async getByAgentType(agentType: AgentType): Promise<AgentProfile | null> {
+    return queryOne<AgentProfile>(
+      `SELECT p.id, p.agent_id as "agentId", p.version, p.content,
+              p.identity, p.mcp_servers as "mcpServers", p.capabilities, p.constraints,
+              p.loop_actions as "loopActions", p.decision_authority as "decisionAuthority",
+              p.is_active as "isActive", p.created_at as "createdAt",
+              p.updated_at as "updatedAt", p.created_by as "createdBy"
+       FROM agent_profiles p
+       JOIN agents a ON p.agent_id = a.id
+       WHERE a.type = $1 AND p.is_active = true`,
+      [agentType]
+    );
+  },
+
+  async create(profile: Omit<AgentProfile, 'id' | 'version' | 'createdAt' | 'updatedAt'>): Promise<AgentProfile> {
+    const [result] = await query<AgentProfile>(
+      `INSERT INTO agent_profiles (agent_id, content, identity, mcp_servers, capabilities,
+                                   constraints, loop_actions, decision_authority, is_active, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING id, agent_id as "agentId", version, content,
+                 identity, mcp_servers as "mcpServers", capabilities, constraints,
+                 loop_actions as "loopActions", decision_authority as "decisionAuthority",
+                 is_active as "isActive", created_at as "createdAt",
+                 updated_at as "updatedAt", created_by as "createdBy"`,
+      [
+        profile.agentId, profile.content, JSON.stringify(profile.identity),
+        JSON.stringify(profile.mcpServers), JSON.stringify(profile.capabilities),
+        JSON.stringify(profile.constraints), JSON.stringify(profile.loopActions),
+        JSON.stringify(profile.decisionAuthority), profile.isActive, profile.createdBy
+      ]
+    );
+    return result;
+  },
+
+  async update(id: string, updates: Partial<Pick<AgentProfile, 'content' | 'identity' | 'mcpServers' | 'capabilities' | 'constraints' | 'loopActions' | 'decisionAuthority'>>): Promise<AgentProfile | null> {
+    const setClause: string[] = [];
+    const values: unknown[] = [];
+    let paramIndex = 1;
+
+    if (updates.content !== undefined) {
+      setClause.push(`content = $${paramIndex++}`);
+      values.push(updates.content);
+    }
+    if (updates.identity !== undefined) {
+      setClause.push(`identity = $${paramIndex++}`);
+      values.push(JSON.stringify(updates.identity));
+    }
+    if (updates.mcpServers !== undefined) {
+      setClause.push(`mcp_servers = $${paramIndex++}`);
+      values.push(JSON.stringify(updates.mcpServers));
+    }
+    if (updates.capabilities !== undefined) {
+      setClause.push(`capabilities = $${paramIndex++}`);
+      values.push(JSON.stringify(updates.capabilities));
+    }
+    if (updates.constraints !== undefined) {
+      setClause.push(`constraints = $${paramIndex++}`);
+      values.push(JSON.stringify(updates.constraints));
+    }
+    if (updates.loopActions !== undefined) {
+      setClause.push(`loop_actions = $${paramIndex++}`);
+      values.push(JSON.stringify(updates.loopActions));
+    }
+    if (updates.decisionAuthority !== undefined) {
+      setClause.push(`decision_authority = $${paramIndex++}`);
+      values.push(JSON.stringify(updates.decisionAuthority));
+    }
+
+    if (setClause.length === 0) return this.getActive(id);
+
+    values.push(id);
+    const [result] = await query<AgentProfile>(
+      `UPDATE agent_profiles SET ${setClause.join(', ')}, updated_at = NOW()
+       WHERE id = $${paramIndex}
+       RETURNING id, agent_id as "agentId", version, content,
+                 identity, mcp_servers as "mcpServers", capabilities, constraints,
+                 loop_actions as "loopActions", decision_authority as "decisionAuthority",
+                 is_active as "isActive", created_at as "createdAt",
+                 updated_at as "updatedAt", created_by as "createdBy"`,
+      values
+    );
+    return result;
+  },
+
+  async getVersionHistory(agentId: string): Promise<AgentProfile[]> {
+    return query<AgentProfile>(
+      `SELECT id, agent_id as "agentId", version, content,
+              identity, mcp_servers as "mcpServers", capabilities, constraints,
+              loop_actions as "loopActions", decision_authority as "decisionAuthority",
+              is_active as "isActive", created_at as "createdAt",
+              updated_at as "updatedAt", created_by as "createdBy"
+       FROM agent_profiles WHERE agent_id = $1
+       ORDER BY version DESC`,
+      [agentId]
+    );
+  },
+};
+
+// LLM Usage Repository
+export interface LLMUsageRecord {
+  id: string;
+  provider: string;
+  model: string | null;
+  agentId: string | null;
+  agentType: string | null;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  costCents: number;
+  durationMs: number | null;
+  requestType: string | null;
+  success: boolean;
+  errorMessage: string | null;
+  createdAt: Date;
+}
+
+export const llmUsageRepo = {
+  async log(usage: Omit<LLMUsageRecord, 'id' | 'totalTokens' | 'createdAt'>): Promise<LLMUsageRecord> {
+    const [result] = await query<LLMUsageRecord>(
+      `INSERT INTO llm_usage (provider, model, agent_id, agent_type, prompt_tokens,
+                              completion_tokens, cost_cents, duration_ms, request_type, success, error_message)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING id, provider, model, agent_id as "agentId", agent_type as "agentType",
+                 prompt_tokens as "promptTokens", completion_tokens as "completionTokens",
+                 total_tokens as "totalTokens", cost_cents as "costCents",
+                 duration_ms as "durationMs", request_type as "requestType",
+                 success, error_message as "errorMessage", created_at as "createdAt"`,
+      [
+        usage.provider, usage.model, usage.agentId, usage.agentType,
+        usage.promptTokens, usage.completionTokens, usage.costCents,
+        usage.durationMs, usage.requestType, usage.success, usage.errorMessage
+      ]
+    );
+    return result;
+  },
+
+  async getMonthlyStats(provider: string, year: number, month: number): Promise<{
+    totalRequests: number;
+    successfulRequests: number;
+    totalTokens: number;
+    totalCostCents: number;
+    avgDurationMs: number;
+  }> {
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 1);
+
+    const [result] = await query<{
+      totalRequests: string;
+      successfulRequests: string;
+      totalTokens: string;
+      totalCostCents: string;
+      avgDurationMs: string;
+    }>(
+      `SELECT
+         COUNT(*)::text as "totalRequests",
+         SUM(CASE WHEN success THEN 1 ELSE 0 END)::text as "successfulRequests",
+         COALESCE(SUM(total_tokens), 0)::text as "totalTokens",
+         COALESCE(SUM(cost_cents), 0)::text as "totalCostCents",
+         COALESCE(AVG(duration_ms), 0)::text as "avgDurationMs"
+       FROM llm_usage
+       WHERE provider = $1 AND created_at >= $2 AND created_at < $3`,
+      [provider, startDate, endDate]
+    );
+
+    return {
+      totalRequests: parseInt(result?.totalRequests || '0', 10),
+      successfulRequests: parseInt(result?.successfulRequests || '0', 10),
+      totalTokens: parseInt(result?.totalTokens || '0', 10),
+      totalCostCents: parseInt(result?.totalCostCents || '0', 10),
+      avgDurationMs: Math.round(parseFloat(result?.avgDurationMs || '0')),
+    };
+  },
+
+  async getByAgent(agentId: string, limit = 100): Promise<LLMUsageRecord[]> {
+    return query<LLMUsageRecord>(
+      `SELECT id, provider, model, agent_id as "agentId", agent_type as "agentType",
+              prompt_tokens as "promptTokens", completion_tokens as "completionTokens",
+              total_tokens as "totalTokens", cost_cents as "costCents",
+              duration_ms as "durationMs", request_type as "requestType",
+              success, error_message as "errorMessage", created_at as "createdAt"
+       FROM llm_usage WHERE agent_id = $1
+       ORDER BY created_at DESC LIMIT $2`,
+      [agentId, limit]
+    );
+  },
+};
+
+// Worker Execution Repository
+export interface WorkerExecution {
+  id: string;
+  workerId: string | null;
+  agentId: string | null;
+  agentType: string | null;
+  task: string;
+  mcpServers: string[];
+  output: string | null;
+  success: boolean;
+  errorMessage: string | null;
+  durationMs: number | null;
+  tokenCount: number | null;
+  correlationId: string | null;
+  createdAt: Date;
+}
+
+export const workerExecutionRepo = {
+  async log(execution: Omit<WorkerExecution, 'id' | 'createdAt'>): Promise<WorkerExecution> {
+    const [result] = await query<WorkerExecution>(
+      `INSERT INTO worker_executions (worker_id, agent_id, agent_type, task, mcp_servers,
+                                       output, success, error_message, duration_ms, token_count, correlation_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING id, worker_id as "workerId", agent_id as "agentId", agent_type as "agentType",
+                 task, mcp_servers as "mcpServers", output, success, error_message as "errorMessage",
+                 duration_ms as "durationMs", token_count as "tokenCount",
+                 correlation_id as "correlationId", created_at as "createdAt"`,
+      [
+        execution.workerId, execution.agentId, execution.agentType, execution.task,
+        execution.mcpServers, execution.output, execution.success, execution.errorMessage,
+        execution.durationMs, execution.tokenCount, execution.correlationId
+      ]
+    );
+    return result;
+  },
+
+  async getByAgent(agentId: string, limit = 50): Promise<WorkerExecution[]> {
+    return query<WorkerExecution>(
+      `SELECT id, worker_id as "workerId", agent_id as "agentId", agent_type as "agentType",
+              task, mcp_servers as "mcpServers", output, success, error_message as "errorMessage",
+              duration_ms as "durationMs", token_count as "tokenCount",
+              correlation_id as "correlationId", created_at as "createdAt"
+       FROM worker_executions WHERE agent_id = $1
+       ORDER BY created_at DESC LIMIT $2`,
+      [agentId, limit]
+    );
+  },
+
+  async getRecent(limit = 100): Promise<WorkerExecution[]> {
+    return query<WorkerExecution>(
+      `SELECT id, worker_id as "workerId", agent_id as "agentId", agent_type as "agentType",
+              task, mcp_servers as "mcpServers", output, success, error_message as "errorMessage",
+              duration_ms as "durationMs", token_count as "tokenCount",
+              correlation_id as "correlationId", created_at as "createdAt"
+       FROM worker_executions
+       ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
+  },
+};
+
+// Benchmark Repository
+export interface BenchmarkRun {
+  id: string;
+  runId: string;
+  models: unknown[];
+  tasks: unknown[];
+  enableTools: boolean;
+  results: Record<string, unknown>;
+  evaluations: Record<string, unknown>;
+  leaderboard: unknown[];
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  startedAt: Date | null;
+  completedAt: Date | null;
+  durationMs: number | null;
+  totalCostCents: number;
+  createdAt: Date;
+  updatedAt: Date;
+  createdBy: string;
+}
+
+export const benchmarkRepo = {
+  async create(benchmark: Pick<BenchmarkRun, 'runId' | 'models' | 'tasks' | 'enableTools' | 'createdBy'>): Promise<BenchmarkRun> {
+    const [result] = await query<BenchmarkRun>(
+      `INSERT INTO benchmark_runs (run_id, models, tasks, enable_tools, created_by)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, run_id as "runId", models, tasks, enable_tools as "enableTools",
+                 results, evaluations, leaderboard, status, started_at as "startedAt",
+                 completed_at as "completedAt", duration_ms as "durationMs",
+                 total_cost_cents as "totalCostCents", created_at as "createdAt",
+                 updated_at as "updatedAt", created_by as "createdBy"`,
+      [benchmark.runId, JSON.stringify(benchmark.models), JSON.stringify(benchmark.tasks),
+       benchmark.enableTools, benchmark.createdBy]
+    );
+    return result;
+  },
+
+  async getByRunId(runId: string): Promise<BenchmarkRun | null> {
+    return queryOne<BenchmarkRun>(
+      `SELECT id, run_id as "runId", models, tasks, enable_tools as "enableTools",
+              results, evaluations, leaderboard, status, started_at as "startedAt",
+              completed_at as "completedAt", duration_ms as "durationMs",
+              total_cost_cents as "totalCostCents", created_at as "createdAt",
+              updated_at as "updatedAt", created_by as "createdBy"
+       FROM benchmark_runs WHERE run_id = $1`,
+      [runId]
+    );
+  },
+
+  async updateResults(runId: string, results: Record<string, unknown>, evaluations?: Record<string, unknown>, leaderboard?: unknown[]): Promise<void> {
+    await query(
+      `UPDATE benchmark_runs
+       SET results = $2, evaluations = COALESCE($3, evaluations), leaderboard = COALESCE($4, leaderboard),
+           updated_at = NOW()
+       WHERE run_id = $1`,
+      [runId, JSON.stringify(results), evaluations ? JSON.stringify(evaluations) : null,
+       leaderboard ? JSON.stringify(leaderboard) : null]
+    );
+  },
+
+  async setStatus(runId: string, status: BenchmarkRun['status'], durationMs?: number, totalCostCents?: number): Promise<void> {
+    const completedAt = status === 'completed' || status === 'failed' ? new Date() : null;
+    const startedAt = status === 'running' ? new Date() : null;
+
+    await query(
+      `UPDATE benchmark_runs
+       SET status = $2, started_at = COALESCE($3, started_at), completed_at = COALESCE($4, completed_at),
+           duration_ms = COALESCE($5, duration_ms), total_cost_cents = COALESCE($6, total_cost_cents),
+           updated_at = NOW()
+       WHERE run_id = $1`,
+      [runId, status, startedAt, completedAt, durationMs, totalCostCents]
+    );
+  },
+
+  async getRecent(limit = 20): Promise<BenchmarkRun[]> {
+    return query<BenchmarkRun>(
+      `SELECT id, run_id as "runId", models, tasks, enable_tools as "enableTools",
+              results, evaluations, leaderboard, status, started_at as "startedAt",
+              completed_at as "completedAt", duration_ms as "durationMs",
+              total_cost_cents as "totalCostCents", created_at as "createdAt",
+              updated_at as "updatedAt", created_by as "createdBy"
+       FROM benchmark_runs
+       ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
+  },
+};
+
+// System Settings Repository
+export interface SystemSetting {
+  id: string;
+  category: string;
+  settingKey: string;
+  settingValue: unknown;
+  description: string | null;
+  isSecret: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export const settingsRepo = {
+  async getAll(): Promise<SystemSetting[]> {
+    return query<SystemSetting>(
+      `SELECT id, category, setting_key as "settingKey", setting_value as "settingValue",
+              description, is_secret as "isSecret", created_at as "createdAt", updated_at as "updatedAt"
+       FROM system_settings
+       ORDER BY category, setting_key`
+    );
+  },
+
+  async getByCategory(category: string): Promise<SystemSetting[]> {
+    return query<SystemSetting>(
+      `SELECT id, category, setting_key as "settingKey", setting_value as "settingValue",
+              description, is_secret as "isSecret", created_at as "createdAt", updated_at as "updatedAt"
+       FROM system_settings WHERE category = $1
+       ORDER BY setting_key`,
+      [category]
+    );
+  },
+
+  async get(category: string, key: string): Promise<SystemSetting | null> {
+    return queryOne<SystemSetting>(
+      `SELECT id, category, setting_key as "settingKey", setting_value as "settingValue",
+              description, is_secret as "isSecret", created_at as "createdAt", updated_at as "updatedAt"
+       FROM system_settings WHERE category = $1 AND setting_key = $2`,
+      [category, key]
+    );
+  },
+
+  async getValue<T = unknown>(category: string, key: string, defaultValue?: T): Promise<T> {
+    const setting = await this.get(category, key);
+    if (!setting) return defaultValue as T;
+    return setting.settingValue as T;
+  },
+
+  async set(category: string, key: string, value: unknown, description?: string): Promise<SystemSetting> {
+    const [result] = await query<SystemSetting>(
+      `INSERT INTO system_settings (category, setting_key, setting_value, description)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (category, setting_key) DO UPDATE SET setting_value = $3, updated_at = NOW()
+       RETURNING id, category, setting_key as "settingKey", setting_value as "settingValue",
+                 description, is_secret as "isSecret", created_at as "createdAt", updated_at as "updatedAt"`,
+      [category, key, JSON.stringify(value), description]
+    );
+    return result;
+  },
+
+  async delete(category: string, key: string): Promise<void> {
+    await query(`DELETE FROM system_settings WHERE category = $1 AND setting_key = $2`, [category, key]);
+  },
+
+  async getCategories(): Promise<string[]> {
+    const rows = await query<{ category: string }>(
+      `SELECT DISTINCT category FROM system_settings ORDER BY category`
+    );
+    return rows.map(r => r.category);
+  },
+
+  // Convenience methods for common settings
+  async getQueueDelays(): Promise<Record<string, number>> {
+    const settings = await this.getByCategory('queue');
+    const delays: Record<string, number> = {};
+    for (const s of settings) {
+      const priority = s.settingKey.replace('delay_', '');
+      delays[priority] = typeof s.settingValue === 'number' ? s.settingValue : parseInt(String(s.settingValue), 10);
+    }
+    return delays;
+  },
+
+  async getAgentLoopIntervals(): Promise<Record<string, number>> {
+    const settings = await this.getByCategory('agents');
+    const intervals: Record<string, number> = {};
+    for (const s of settings) {
+      if (s.settingKey.startsWith('loop_interval_')) {
+        const agent = s.settingKey.replace('loop_interval_', '');
+        intervals[agent] = typeof s.settingValue === 'number' ? s.settingValue : parseInt(String(s.settingValue), 10);
+      }
+    }
+    return intervals;
+  },
+
+  async getLLMSettings(): Promise<{
+    routingStrategy: string;
+    enableFallback: boolean;
+    preferGemini: boolean;
+    geminiDefaultModel: string;
+  }> {
+    const settings = await this.getByCategory('llm');
+    const map = new Map(settings.map(s => [s.settingKey, s.settingValue]));
+    return {
+      routingStrategy: (map.get('routing_strategy') as string) || 'claude-only',
+      enableFallback: map.get('enable_fallback') === true,
+      preferGemini: map.get('prefer_gemini') === true,
+      geminiDefaultModel: (map.get('gemini_default_model') as string) || 'gemini-2.5-flash',
+    };
+  },
+
+  async getDecisionTimeouts(): Promise<{
+    minor: number;
+    major: number;
+    critical: number;
+  }> {
+    const settings = await this.getByCategory('decisions');
+    const map = new Map(settings.map(s => [s.settingKey, s.settingValue]));
+    return {
+      minor: Number(map.get('timeout_minor')) || 14400000,    // 4 hours
+      major: Number(map.get('timeout_major')) || 86400000,    // 24 hours
+      critical: Number(map.get('timeout_critical')) || 172800000, // 48 hours
+    };
+  },
+
+  async getEscalationTimeouts(): Promise<{
+    critical: number;
+    high: number;
+    normal: number;
+  }> {
+    const settings = await this.getByCategory('escalation');
+    const map = new Map(settings.map(s => [s.settingKey, s.settingValue]));
+    return {
+      critical: Number(map.get('timeout_critical')) || 14400, // 4 hours
+      high: Number(map.get('timeout_high')) || 43200,         // 12 hours
+      normal: Number(map.get('timeout_normal')) || 86400,     // 24 hours
+    };
+  },
+
+  async getTaskSettings(): Promise<{
+    maxConcurrentPerAgent: number;
+  }> {
+    const value = await this.getValue<number>('tasks', 'max_concurrent_per_agent', 2);
+    return {
+      maxConcurrentPerAgent: Number(value) || 2,
+    };
+  },
+
+  async getWorkspaceSettings(): Promise<{
+    autoCommit: boolean;
+    usePR: boolean;
+    autoMerge: boolean;
+    skipPR: boolean;
+  }> {
+    const settings = await this.getByCategory('workspace');
+    const map = new Map(settings.map(s => [s.settingKey, s.settingValue]));
+    return {
+      autoCommit: map.get('auto_commit') === true || map.get('auto_commit') === 'true',
+      usePR: map.get('use_pr') === true || map.get('use_pr') === 'true',
+      autoMerge: map.get('auto_merge') === true || map.get('auto_merge') === 'true',
+      skipPR: map.get('skip_pr') === true || map.get('skip_pr') === 'true',
+    };
+  },
+
+  async getFeedbackSettings(): Promise<{
+    operationalNotifyCeo: boolean;
+    broadcastDecisions: boolean;
+    targetedFeedback: boolean;
+  }> {
+    const settings = await this.getByCategory('feedback');
+    const map = new Map(settings.map(s => [s.settingKey, s.settingValue]));
+    return {
+      operationalNotifyCeo: map.get('operational_notify_ceo') !== false && map.get('operational_notify_ceo') !== 'false',
+      broadcastDecisions: map.get('broadcast_decisions') !== false && map.get('broadcast_decisions') !== 'false',
+      targetedFeedback: map.get('targeted_feedback') !== false && map.get('targeted_feedback') !== 'false',
+    };
+  },
+
+  async getInitiativeSettings(): Promise<{
+    cooldownHours: number;
+    maxPerDay: number;
+    onlyOnScheduled: boolean;
+  }> {
+    const settings = await this.getByCategory('initiative');
+    const map = new Map(settings.map(s => [s.settingKey, s.settingValue]));
+    return {
+      cooldownHours: Number(map.get('cooldown_hours')) || 4,
+      maxPerDay: Number(map.get('max_per_day')) || 3,
+      onlyOnScheduled: map.get('only_on_scheduled') !== false && map.get('only_on_scheduled') !== 'false',
+    };
+  },
+};
+
 // Health check
 export async function checkConnection(): Promise<boolean> {
   try {

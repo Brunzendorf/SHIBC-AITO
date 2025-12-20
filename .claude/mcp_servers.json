@@ -1,55 +1,37 @@
 {
   "mcpServers": {
-    "time": {
-      "command": "npx",
-      "args": ["-y", "@dandeliongold/mcp-time"],
-      "description": "Current date/time in ISO format (YYYY-MM-DD HH:mm:ss)"
-    },
-    "twitter": {
-      "command": "npx",
-      "args": ["-y", "@enescinar/twitter-mcp"],
-      "env": {
-        "TWITTER_API_KEY": "${TWITTER_API_KEY}",
-        "TWITTER_API_SECRET": "${TWITTER_API_SECRET}",
-        "TWITTER_ACCESS_TOKEN": "${TWITTER_ACCESS_TOKEN}",
-        "TWITTER_ACCESS_TOKEN_SECRET": "${TWITTER_ACCESS_TOKEN_SECRET}"
-      },
-      "description": "Twitter/X API - post tweets, search, interact (requires OAuth credentials)"
-    },
     "telegram": {
       "command": "npx",
-      "args": ["-y", "@iqai/mcp-telegram"],
-      "env": {
-        "TELEGRAM_BOT_TOKEN": "${TELEGRAM_BOT_TOKEN}"
-      },
-      "description": "Telegram Bot API - send messages, manage channels (bot token only)"
+      "args": ["-y", "@chaindead/telegram-mcp"],
+      "description": "Telegram API for messages and channels"
     },
     "etherscan": {
       "command": "npx",
       "args": ["-y", "etherscan-mcp"],
-      "env": {
-        "ETHERSCAN_API_KEY": "${ETHERSCAN_API_KEY}"
-      },
-      "description": "Ethereum blockchain data via Etherscan API"
+      "description": "Ethereum blockchain data"
     },
     "directus": {
       "command": "npx",
       "args": ["@directus/content-mcp@latest"],
-      "env": {
-        "DIRECTUS_URL": "https://directus.shibaclassic.io",
-        "DIRECTUS_TOKEN": "${DIRECTUS_TOKEN}"
-      },
-      "description": "Directus CMS via official @directus/content-mcp package"
+      "description": "Directus CMS via official @directus/content-mcp"
     },
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@anthropic-ai/mcp-server-filesystem", "/app/workspace", "/app/profiles"],
-      "description": "Local filesystem access for workspace and profiles"
+      "args": ["-y", "@anthropic-ai/mcp-server-filesystem", "/app/workspace"],
+      "description": "Local filesystem access"
     },
     "fetch": {
       "command": "npx",
       "args": ["-y", "@anthropic-ai/mcp-server-fetch"],
       "description": "Web content fetching"
+    },
+    "imagen": {
+      "command": "node",
+      "args": ["/app/mcp-servers/imagen-mcp/dist/index.js"],
+      "description": "Provides tools for Google Imagen to list models and generate images via GenAI API.",
+      "env": {
+        "GEMINI_API_KEY": "${GEMINI_API_KEY}"
+      }
     }
   }
 }

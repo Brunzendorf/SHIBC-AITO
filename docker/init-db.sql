@@ -300,6 +300,82 @@ INSERT INTO domain_whitelist (domain, category, description) VALUES
     ('cyberscope.io', 'audit', 'Cyberscope - Security audits');
 
 -- ============================================
+-- SYSTEM SETTINGS
+-- ============================================
+-- Key-value store for system configuration that can be changed at runtime
+
+CREATE TABLE system_settings (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    category VARCHAR(50) NOT NULL,
+    setting_key VARCHAR(100) NOT NULL,
+    setting_value JSONB NOT NULL,
+    description TEXT,
+    is_secret BOOLEAN DEFAULT false,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW(),
+    UNIQUE(category, setting_key)
+);
+
+CREATE INDEX idx_settings_category ON system_settings(category);
+CREATE INDEX idx_settings_key ON system_settings(setting_key);
+
+-- Note: Trigger created after function definition below
+
+-- SEED: Default System Settings
+INSERT INTO system_settings (category, setting_key, setting_value, description) VALUES
+    -- Queue Delays (milliseconds)
+    ('queue', 'delay_critical', '0', 'Delay for critical priority tasks (immediate)'),
+    ('queue', 'delay_urgent', '5000', 'Delay for urgent priority tasks (5 seconds)'),
+    ('queue', 'delay_high', '30000', 'Delay for high priority tasks (30 seconds)'),
+    ('queue', 'delay_normal', '120000', 'Delay for normal priority tasks (2 minutes)'),
+    ('queue', 'delay_low', '300000', 'Delay for low priority tasks (5 minutes)'),
+    ('queue', 'delay_operational', '600000', 'Delay for operational tasks (10 minutes)'),
+
+    -- Agent Loop Intervals (seconds)
+    ('agents', 'loop_interval_ceo', '1800', 'CEO loop interval (30 minutes)'),
+    ('agents', 'loop_interval_dao', '14400', 'DAO loop interval (4 hours)'),
+    ('agents', 'loop_interval_cmo', '7200', 'CMO loop interval (2 hours)'),
+    ('agents', 'loop_interval_cto', '3600', 'CTO loop interval (1 hour)'),
+    ('agents', 'loop_interval_cfo', '14400', 'CFO loop interval (4 hours)'),
+    ('agents', 'loop_interval_coo', '3600', 'COO loop interval (1 hour)'),
+    ('agents', 'loop_interval_cco', '43200', 'CCO loop interval (12 hours)'),
+
+    -- LLM Routing
+    ('llm', 'routing_strategy', '"claude-only"', 'LLM routing strategy: claude-only, task-type, agent-role, gemini-prefer'),
+    ('llm', 'enable_fallback', 'false', 'Enable fallback to alternative LLM if primary fails'),
+    ('llm', 'prefer_gemini', 'false', 'Prefer Gemini for cost optimization'),
+    ('llm', 'gemini_default_model', '"gemini-2.5-flash"', 'Default Gemini model'),
+
+    -- Feedback Routing
+    ('feedback', 'operational_notify_ceo', 'true', 'Notify CEO on operational task completion'),
+    ('feedback', 'broadcast_decisions', 'true', 'Broadcast decision results to all agents'),
+    ('feedback', 'targeted_feedback', 'true', 'Use targeted feedback instead of broadcast'),
+
+    -- Initiative Settings
+    ('initiative', 'cooldown_hours', '4', 'Hours between initiative generation'),
+    ('initiative', 'max_per_day', '3', 'Maximum initiatives per agent per day'),
+    ('initiative', 'only_on_scheduled', 'true', 'Only generate initiatives during scheduled loops'),
+
+    -- Decision Timeouts (milliseconds)
+    ('decisions', 'timeout_minor', '14400000', 'Minor decision timeout - 4 hours (auto-approve)'),
+    ('decisions', 'timeout_major', '86400000', 'Major decision timeout - 24 hours (escalate)'),
+    ('decisions', 'timeout_critical', '172800000', 'Critical decision timeout - 48 hours (escalate)'),
+
+    -- Escalation Timeouts (seconds)
+    ('escalation', 'timeout_critical', '14400', 'Critical escalation timeout - 4 hours'),
+    ('escalation', 'timeout_high', '43200', 'High escalation timeout - 12 hours'),
+    ('escalation', 'timeout_normal', '86400', 'Normal escalation timeout - 24 hours'),
+
+    -- Task Limits
+    ('tasks', 'max_concurrent_per_agent', '2', 'Maximum concurrent in-progress tasks per agent'),
+
+    -- Workspace Settings
+    ('workspace', 'auto_commit', 'true', 'Auto-commit on file changes'),
+    ('workspace', 'use_pr', 'true', 'Use branch+PR workflow for quality gate'),
+    ('workspace', 'auto_merge', 'false', 'Auto-merge PRs after RAG approval'),
+    ('workspace', 'skip_pr', 'false', 'Bypass PR workflow - direct push');
+
+-- ============================================
 -- FUNCTIONS
 -- ============================================
 
@@ -318,6 +394,10 @@ CREATE TRIGGER update_agents_updated_at
 
 CREATE TRIGGER update_agent_state_updated_at
     BEFORE UPDATE ON agent_state
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_settings_updated_at
+    BEFORE UPDATE ON system_settings
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Clean up expired cache entries (run periodically)

@@ -42,6 +42,8 @@ import {
   Hub as NetworkIcon,
   Security as SecurityIcon,
   ViewColumn as KanbanIcon,
+  Assessment as BenchmarkIcon,
+  Settings as SettingsIcon,
 } from '@mui/icons-material';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -92,6 +94,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     { label: 'Agents', href: '/agents', icon: <AgentIcon /> },
     { label: 'Messages', href: '/messages', icon: <ChatIcon /> },
     { label: 'Workers', href: '/workers', icon: <WorkerIcon /> },
+    { label: 'Benchmarks', href: '/benchmarks', icon: <BenchmarkIcon /> },
     {
       label: 'Domains',
       href: '/domains',
@@ -111,6 +114,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       badge: pendingEscalationCount,
     },
     { label: 'Events', href: '/events', icon: <EventIcon /> },
+    { label: 'Settings', href: '/settings', icon: <SettingsIcon /> },
   ];
 
   const handleDrawerToggle = () => {

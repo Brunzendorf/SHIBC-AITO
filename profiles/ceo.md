@@ -184,12 +184,25 @@ Als CEO bin ich für die finale Genehmigung von Agent-Outputs verantwortlich.
 |--------|---------|------------|
 | `fetch` | ✅ JA | Web content, API-Aufrufe |
 | `filesystem` | ✅ JA | Workspace-Dateien, Reports |
+| `imagen` | ✅ JA | Infographics, Presentations |
 | `telegram` | ❌ NEIN | - |
 | `directus` | ❌ NEIN | - |
 | `etherscan` | ❌ NEIN | - |
 | `twitter` | ❌ NEIN | - |
 
+### 🎨 IMAGE GENERATION (Imagen MCP Server)
+
+**Models:** `imagen-4.0-generate-001` ($0.04), `gemini-2.5-flash-image` (FREE)
+**Rate Limits:** 10/hour, 50/day, $2.00/day max - **call `imagen_check_quota` first!**
+**Storage:** `/app/workspace/images/` → Directus → GitHub
+**Use Cases:** Executive presentations, investor materials, strategic visualizations
+
 ### Typische Worker-Tasks
+
+**Generate Investor Presentation Visual:**
+```json
+{"actions": [{"type": "spawn_worker", "task": "Create a professional infographic showing SHIBC ecosystem growth metrics, modern business style, use imagen-4.0-generate-001", "servers": ["imagen", "filesystem"]}]}
+```
 
 **Marktdaten:**
 ```json

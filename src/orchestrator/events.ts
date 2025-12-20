@@ -129,22 +129,26 @@ registerHandler('decision', async (message) => {
       });
     }
 
-    // Broadcast completion immediately
-    await publish(channels.broadcast, {
-      id: uuid(),
-      type: 'broadcast',
-      from: 'orchestrator',
-      to: 'all',
-      payload: {
-        eventType: 'operational_completed',
-        title: payload.title,
-        executedBy: message.from,
-        tier: 'operational',
-      },
-      priority: 'low',
-      timestamp: new Date(),
-      requiresResponse: false,
-    } as AgentMessage);
+    // TARGETED: Only notify CEO (oversight) - NOT broadcast to all agents
+    // This prevents cascade loops where all agents react to every operational task
+    const ceoAgent = await agentRepo.findByType('ceo');
+    if (ceoAgent && message.from !== ceoAgent.id) {
+      await publish(channels.agent(ceoAgent.id), {
+        id: uuid(),
+        type: 'status_response', // Not decision - just FYI
+        from: 'orchestrator',
+        to: ceoAgent.id,
+        payload: {
+          eventType: 'operational_completed',
+          title: payload.title,
+          executedBy: message.from,
+          tier: 'operational',
+        },
+        priority: 'low',
+        timestamp: new Date(),
+        requiresResponse: false, // CEO doesn't need to respond
+      } as AgentMessage);
+    }
 
     return;
   }

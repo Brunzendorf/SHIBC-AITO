@@ -12,7 +12,8 @@ RUN apt-get update && apt-get install -y \
     git \
     jq \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/dash /bin/sh
 
 # Install GitHub CLI (gh) for PR workflow
 RUN curl -fsSL https://github.com/cli/cli/releases/download/v2.63.2/gh_2.63.2_linux_amd64.tar.gz | tar xz \
@@ -51,6 +52,9 @@ else\n\
     exit 1\n\
 fi\n' > /usr/local/bin/claude && chmod +x /usr/local/bin/claude)
 
+# Install Gemini CLI (for parallel LLM usage)
+RUN npm install -g @google/gemini-cli@latest || echo "Gemini CLI installation failed (non-critical)"
+
 WORKDIR /app
 
 # Copy package files
@@ -69,6 +73,11 @@ RUN npm run build
 # Production stage
 FROM node:20-slim AS production
 
+# Build args for CLI feature flags
+ARG INSTALL_CLAUDE_CLI=true
+ARG INSTALL_GEMINI_CLI=true
+ARG INSTALL_CODEX_CLI=false
+
 # Install runtime tools
 RUN apt-get update && apt-get install -y \
     procps \
@@ -77,11 +86,25 @@ RUN apt-get update && apt-get install -y \
     git \
     jq \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/dash /bin/sh
 
-# Copy Claude CLI from base
+# Install CLI tools based on feature flags
+RUN if [ "$INSTALL_CLAUDE_CLI" = "true" ]; then \
+        echo "Installing Claude CLI..." && \
+        npm install -g @anthropic-ai/claude-code@latest || true; \
+    fi && \
+    if [ "$INSTALL_GEMINI_CLI" = "true" ]; then \
+        echo "Installing Gemini CLI..." && \
+        npm install -g @google/gemini-cli@latest || true; \
+    fi && \
+    if [ "$INSTALL_CODEX_CLI" = "true" ]; then \
+        echo "Installing Codex CLI..." && \
+        npm install -g @openai/codex@latest || true; \
+    fi
+
+# Copy Claude CLI from base (fallback if npm failed)
 COPY --from=base /usr/local/bin/claude /usr/local/bin/claude
-COPY --from=base /usr/local/lib/node_modules/@anthropic-ai /usr/local/lib/node_modules/@anthropic-ai
 
 # Copy GitHub CLI from base
 COPY --from=base /usr/local/bin/gh /usr/local/bin/gh
@@ -107,6 +130,7 @@ COPY .claude ./claude-base
 # Create directories for agent
 RUN mkdir -p \
     /app/.claude \
+    /app/.gemini \
     /app/logs \
     /app/memory \
     /app/workspace && \
@@ -119,6 +143,9 @@ ENV HOME=/app
 
 # Claude config directory (for persistent auth)
 ENV CLAUDE_CONFIG_DIR=/app/.claude
+
+# Gemini config directory (for persistent auth)
+ENV GEMINI_CONFIG_DIR=/app/.gemini
 
 # Switch to non-root user
 USER agent

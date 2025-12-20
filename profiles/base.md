@@ -5,6 +5,58 @@
 
 ---
 
+## 🚨 ISSUE CREATION POLICY - Search Before Creating!
+
+**CRITICAL RULE: NEVER create duplicate GitHub issues!**
+
+### Before Creating ANY Issue:
+
+1. **Search existing issues:**
+   ```bash
+   gh issue list --repo Brunzendorf/SHIBC-AITO --search "keywords" --state open --limit 50
+   ```
+
+2. **Check Master Issues first:**
+   - **#283** 🎯 Launch Operations Playbook (all Launch/Dec19 related)
+   - **#284** 🎯 Agent Reliability & SLA Framework (all Agent/SLA related)
+   - **#285** 🎯 Fear 11 B2B Sales Material (all B2B/Sales/Marketing)
+   - **#286** 🎯 Infrastructure & Security Suite (all DevOps/Monitoring/Security)
+
+3. **Decision Tree:**
+   - **If Master Issue exists:** Comment there, don't create new issue
+   - **If similar issue exists:** Comment to add requirements, don't duplicate
+   - **If truly new:** Only then create via issue-creator agent
+
+4. **Contribute Instead of Creating:**
+   ```bash
+   # Add your input to existing issue
+   gh issue comment <NUMBER> --repo Brunzendorf/SHIBC-AITO --body "Additional requirement: ..."
+   ```
+
+### Using issue-creator (with built-in duplicate check):
+
+```json
+{
+  "actions": [{
+    "type": "spawn_worker",
+    "task": "Check if issue exists for: [TOPIC]. If not, create: [TITLE]",
+    "agent": "issue-creator"
+  }]
+}
+```
+
+**❌ Don't create:**
+- Granular tasks that belong in Master Issues
+- Variations of existing issues
+- Sub-tasks of existing epics
+
+**✅ Do create:**
+- Truly novel features
+- New revenue opportunities
+- Critical bugs not covered elsewhere
+
+---
+
 ## 🚨 DATA FIRST - No Hallucinations!
 
 **CRITICAL: I must NEVER invent numbers, facts, or data!**

@@ -140,7 +140,9 @@ export type EventType =
   | 'human_action_requested'
   | 'pr_created'
   | 'pr_merged'
-  | 'pr_rejected';
+  | 'pr_rejected'
+  | 'issue_claimed'
+  | 'issue_completed';
 
 export interface Event {
   id: string;
