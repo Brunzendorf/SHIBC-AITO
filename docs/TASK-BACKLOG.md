@@ -667,28 +667,24 @@ export function useWebSocket() {
 
 ---
 
-#### TASK-032: Kein Circuit Breaker für externe APIs
-**Status:** 🔧 IMPROVEMENT
+#### TASK-032: Kein Circuit Breaker für externe APIs ✅ DONE
+**Status:** 🔧 IMPROVEMENT → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 8h
-**Datei:** `src/workers/worker.ts`, `src/agents/initiative.ts`
 
 **Problem:**
 - Wenn GitHub API down → daemon hängt
 - Kein Fallback oder Timeout
 - Cascading failures möglich
 
-**Fix:**
-```typescript
-import CircuitBreaker from 'opossum';
-
-const githubBreaker = new CircuitBreaker(githubApiCall, {
-  timeout: 10000,
-  errorThresholdPercentage: 50,
-  resetTimeout: 30000
-});
-
-githubBreaker.fallback(() => ({ items: [], cached: true }));
-```
+**Lösung:**
+- `src/lib/circuit-breaker.ts`: Generisches Circuit Breaker Modul mit opossum
+- `src/agents/initiative.ts`: GitHub API Calls geschützt mit Circuit Breaker
+  - `searchIssuesBreaker` für GitHub Search
+  - `listIssuesBreaker` für Issue-Listen
+  - `createIssueBreaker` für Issue-Erstellung
+- Fallback: Leere Arrays bei offenem Circuit
+- Logging für Open/Close/HalfOpen States
+- Stats-API für Monitoring: `getCircuitBreakerStats()`
 
 ---
 
@@ -828,7 +824,7 @@ logger.error(sanitize({ error: e }));
 **Sprint 2 (Stability):**
 - ~~TASK-012: Git Merge Conflicts~~ ✅ PullResult Interface + Auto-Abort
 - TASK-016: Redis Streams Migration
-- TASK-032: Circuit Breaker
+- ~~TASK-032: Circuit Breaker~~ ✅ opossum + GitHub API geschützt
 - TASK-027: Dashboard Error Handling
 
 **Sprint 3 (Quality):**

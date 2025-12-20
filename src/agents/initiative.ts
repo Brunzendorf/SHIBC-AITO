@@ -12,6 +12,7 @@ import { redis, publisher, channels } from '../lib/redis.js';
 import { agentRepo } from '../lib/db.js';
 import { Octokit } from '@octokit/rest';
 import { buildDataContext } from '../lib/data-fetcher.js';
+import { createCircuitBreaker, GITHUB_OPTIONS, isCircuitOpen } from '../lib/circuit-breaker.js';
 
 const logger = createLogger('initiative');
 
@@ -27,6 +28,135 @@ function getOctokit(): Octokit {
     octokit = new Octokit({ auth: token });
   }
   return octokit;
+}
+
+// === CIRCUIT BREAKER WRAPPED GITHUB API CALLS ===
+// These wrappers prevent cascading failures when GitHub is down
+
+/**
+ * Search GitHub issues with circuit breaker protection
+ */
+const searchIssuesBreaker = createCircuitBreaker(
+  'github-search-issues',
+  async (query: string, owner: string, repo: string, perPage: number) => {
+    const gh = getOctokit();
+    const result = await gh.search.issuesAndPullRequests({
+      q: `${query} repo:${owner}/${repo} is:issue`,
+      per_page: perPage,
+    });
+    return result.data.items;
+  },
+  GITHUB_OPTIONS,
+  // Fallback: return empty array when circuit is open
+  () => {
+    logger.warn('GitHub search circuit open - returning empty results');
+    return [];
+  }
+);
+
+/**
+ * List GitHub issues with circuit breaker protection
+ */
+const listIssuesBreaker = createCircuitBreaker(
+  'github-list-issues',
+  async (owner: string, repo: string, state: 'open' | 'closed' | 'all', perPage: number) => {
+    const gh = getOctokit();
+    const result = await gh.issues.listForRepo({
+      owner,
+      repo,
+      state,
+      per_page: perPage,
+      sort: 'updated',
+      direction: 'desc',
+    });
+    return result.data;
+  },
+  GITHUB_OPTIONS,
+  // Fallback: return empty array
+  () => {
+    logger.warn('GitHub list issues circuit open - returning empty results');
+    return [];
+  }
+);
+
+/**
+ * Create GitHub issue with circuit breaker protection
+ */
+const createIssueBreaker = createCircuitBreaker(
+  'github-create-issue',
+  async (owner: string, repo: string, title: string, body: string, labels: string[], assignee?: string) => {
+    const gh = getOctokit();
+    const result = await gh.issues.create({
+      owner,
+      repo,
+      title,
+      body,
+      labels,
+      assignees: assignee ? [assignee] : undefined,
+    });
+    return result.data;
+  },
+  GITHUB_OPTIONS,
+  // Fallback: return null (issue not created)
+  () => {
+    logger.error('GitHub create issue circuit open - issue NOT created');
+    return null;
+  }
+);
+
+/**
+ * Add comment to GitHub issue with circuit breaker protection
+ */
+const _addCommentBreaker = createCircuitBreaker(
+  'github-add-comment',
+  async (owner: string, repo: string, issueNumber: number, body: string) => {
+    const gh = getOctokit();
+    const result = await gh.issues.createComment({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      body,
+    });
+    return result.data;
+  },
+  GITHUB_OPTIONS,
+  // Fallback: return null
+  () => {
+    logger.warn('GitHub add comment circuit open - comment NOT added');
+    return null;
+  }
+);
+
+/**
+ * Update GitHub issue labels with circuit breaker protection
+ */
+const _updateIssueLabelsBreaker = createCircuitBreaker(
+  'github-update-labels',
+  async (owner: string, repo: string, issueNumber: number, labels: string[]) => {
+    const gh = getOctokit();
+    const result = await gh.issues.setLabels({
+      owner,
+      repo,
+      issue_number: issueNumber,
+      labels,
+    });
+    return result.data;
+  },
+  GITHUB_OPTIONS,
+  // Fallback: return null
+  () => {
+    logger.warn('GitHub update labels circuit open - labels NOT updated');
+    return null;
+  }
+);
+
+/**
+ * Check if GitHub API is available (circuit is closed)
+ */
+export function isGitHubAvailable(): boolean {
+  return !isCircuitOpen('github-search-issues') &&
+         !isCircuitOpen('github-list-issues') &&
+         !isCircuitOpen('github-create-issue');
 }
 
 // Agent types
@@ -321,8 +451,8 @@ async function wasInitiativeCreated(title: string): Promise<boolean> {
   }
 
   // Second, check GitHub for similar issues (slow path, but accurate)
+  // Uses circuit breaker to prevent cascading failures when GitHub is down
   try {
-    const gh = getOctokit();
     const owner = process.env.GITHUB_ORG || 'Brunzendorf';
     const repo = 'SHIBC-AITO';
 
@@ -337,16 +467,12 @@ async function wasInitiativeCreated(title: string): Promise<boolean> {
 
     if (!keywords) return false;
 
-    // Search both open and closed issues (30 results is enough for duplicate detection)
-    const searchQuery = `repo:${owner}/${repo} is:issue ${keywords}`;
-    const searchResult = await gh.search.issuesAndPullRequests({
-      q: searchQuery,
-      per_page: 30,
-    });
+    // Search using circuit breaker (returns empty array if circuit is open)
+    const searchResults = await searchIssuesBreaker.fire(keywords, owner, repo, 30);
 
     // Check for similar titles using fuzzy matching
     const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9]/g, '');
-    for (const issue of searchResult.data.items) {
+    for (const issue of searchResults) {
       const issueTitle = issue.title.toLowerCase().replace(/[^a-z0-9]/g, '');
 
       // Check for exact match
@@ -433,37 +559,25 @@ async function scanRAG(topics: string[]): Promise<string[]> {
 
 /**
  * Fetch open GitHub issues for context
+ * Uses circuit breaker to prevent cascading failures
  */
 async function fetchGitHubIssues(): Promise<{ open: string[]; recent: string[] }> {
   try {
-    const gh = getOctokit();
     const owner = process.env.GITHUB_ORG || 'Brunzendorf';
     const repo = 'SHIBC-AITO';
 
-    // Get open issues
-    const openIssues = await gh.issues.listForRepo({
-      owner,
-      repo,
-      state: 'open',
-      per_page: 15,
-    });
-
-    // Get recently closed issues
-    const closedIssues = await gh.issues.listForRepo({
-      owner,
-      repo,
-      state: 'closed',
-      per_page: 10,
-      sort: 'updated',
-      direction: 'desc',
-    });
+    // Get open and closed issues using circuit breaker
+    const [openIssues, closedIssues] = await Promise.all([
+      listIssuesBreaker.fire(owner, repo, 'open', 15),
+      listIssuesBreaker.fire(owner, repo, 'closed', 10),
+    ]);
 
     return {
-      open: openIssues.data.map(i => {
+      open: openIssues.map(i => {
         const labelNames = i.labels.map(l => typeof l === 'string' ? l : l.name).filter(Boolean);
         return `#${i.number}: ${i.title} [${labelNames.join(', ')}]`;
       }),
-      recent: closedIssues.data.map(i => `#${i.number}: ${i.title} (closed)`),
+      recent: closedIssues.map(i => `#${i.number}: ${i.title} (closed)`),
     };
   } catch (error) {
     logger.debug({ error }, 'Failed to fetch GitHub issues');
@@ -770,8 +884,6 @@ export async function createGitHubIssue(initiative: Initiative): Promise<string 
   const repo = 'SHIBC-AITO';
 
   try {
-    const gh = getOctokit();
-
     // Map priority to labels
     const priorityLabel = `priority:${initiative.priority}`;
     const labels = [
@@ -804,23 +916,24 @@ Auto-generated by AITO Initiative System from: ${initiative.source}
 ---
 *Created by AITO autonomous initiative system*`;
 
-    const response = await gh.issues.create({
-      owner,
-      repo,
-      title: initiative.title,
-      body,
-      labels,
-    });
+    // Use circuit breaker for issue creation
+    const response = await createIssueBreaker.fire(owner, repo, initiative.title, body, labels);
+
+    if (!response) {
+      // Circuit breaker returned fallback (null)
+      logger.warn({ title: initiative.title }, 'GitHub issue creation skipped - circuit open');
+      return null;
+    }
 
     // Mark as created
     await markInitiativeCreated(initiative.title);
 
     logger.info({
-      issueNumber: response.data.number,
+      issueNumber: response.number,
       title: initiative.title,
     }, 'Created GitHub issue');
 
-    return response.data.html_url;
+    return response.html_url;
   } catch (error) {
     logger.error({ error, initiative: initiative.title }, 'Failed to create GitHub issue');
     return null;
