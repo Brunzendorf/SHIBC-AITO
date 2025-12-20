@@ -750,22 +750,32 @@ logger.error(sanitize({ error: e }));
 
 ### 🟠 HOCH
 
-#### TASK-036: Test Coverage zu niedrig
-**Status:** 🔧 IMPROVEMENT
-**Aufwand:** 40h
+#### TASK-036: Test Coverage zu niedrig 🔧 IN PROGRESS
+**Status:** 🔧 IMPROVEMENT → 🚧 Teilweise erledigt (2025-12-20)
+**Aufwand:** 40h (8h Phase 1 erledigt)
 
-**Aktueller Stand:**
-- daemon.test.ts - existiert, incomplete
-- initiative.test.ts - existiert
-- workspace.test.ts - existiert
-- API tests - FEHLEN
-- Integration tests - FEHLEN
+**Aktueller Stand (Phase 1 Done):**
+- ✅ scheduler.test.ts - 23 Tests fixed (mock config erweitert)
+- ✅ container.test.ts - 29 Tests fixed (isDryRun, workspaceConfig, graceful error handling)
+- ✅ api.test.ts - 45 Tests fixed (auth mock, llmConfig, agentConfigs)
+- ✅ tracing.test.ts - 18 Tests NEU (TASK-033)
+- 🔴 daemon.test.ts - 7 fehlende Config-Mocks
+- 🔴 profile.test.ts - 9 fehlende Config-Mocks
+- 🔴 workspace.test.ts - 3 fehlende Config-Mocks
+- 🔴 claude.test.ts - 4 fehlende Config-Mocks
+- 🔴 config.test.ts - 6 Tests erwarten andere Werte
+- 🔴 rag.test.ts - 2 Tests mit falscher Mock-Erwartung
+
+**Statistik:**
+- Tests gesamt: 615 (inkl. 54 skipped)
+- Tests bestanden: 530 (von 485 → +45)
+- Tests fehlgeschlagen: 31 (von 105 → -74)
 
 **Ziel:** 70%+ Coverage
 
-**Prioritäten:**
-1. API Endpoint Tests
-2. Daemon Action Tests
+**Verbleibende Prioritäten:**
+1. ~~API Endpoint Tests~~ ✅ Done
+2. Agent Tests (daemon, claude, profile)
 3. Integration: Daemon + DB + Redis
 4. E2E: Dashboard → API → Agent
 
@@ -827,7 +837,7 @@ logger.error(sanitize({ error: e }));
 - ~~TASK-027: Dashboard Error Handling~~ ✅ ErrorBoundary + Retry Logic
 
 **Sprint 3 (Quality):** 🚀 AKTUELL
-- TASK-036: Test Coverage (8h)
+- TASK-036: Test Coverage 🔧 Phase 1 done (74 Tests repariert, 31 verbleibend)
 - ~~TASK-033: Distributed Tracing~~ ✅ Erledigt
 - ~~TASK-028: WebSocket Connection~~ ✅ Bereits implementiert
 - ~~TASK-026: Missing Endpoints~~ ✅ Erledigt
