@@ -55,8 +55,23 @@ vi.mock('../lib/redis.js', () => ({
   },
 }));
 
-// Mock config
+// Mock config - must include all exports that transitively imported modules need
 vi.mock('../lib/config.js', () => ({
+  config: {
+    PORT: '8080',
+    NODE_ENV: 'test',
+    POSTGRES_URL: 'postgres://test',
+    REDIS_URL: 'redis://localhost:6379',
+    OLLAMA_URL: 'http://localhost:11434',
+    QDRANT_URL: 'http://localhost:6333',
+    GITHUB_TOKEN: 'test-token',
+    GITHUB_ORG: 'test-org',
+    GITHUB_REPO: 'test-repo',
+    DRY_RUN: 'false',
+    LLM_ROUTING_STRATEGY: 'task-type',
+    LLM_ENABLE_FALLBACK: 'true',
+    LLM_PREFER_GEMINI: 'false',
+  },
   agentConfigs: {
     ceo: { name: 'CEO Agent', loopInterval: 3600, tier: 'head' },
     dao: { name: 'DAO Agent', loopInterval: 21600, tier: 'head' },
@@ -69,6 +84,10 @@ vi.mock('../lib/config.js', () => ({
   numericConfig: {
     healthCheckInterval: 30,
     maxVetoRounds: 3,
+  },
+  workspaceConfig: {
+    repoUrl: 'https://github.com/test/repo.git',
+    baseDir: '/tmp/workspace',
   },
 }));
 

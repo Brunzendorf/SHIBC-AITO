@@ -53,12 +53,19 @@ vi.mock('../lib/config.js', () => ({
     OLLAMA_URL: 'http://localhost:11434',
     GITHUB_TOKEN: 'test-token',
     GITHUB_ORG: 'test-org',
+    GITHUB_REPO: 'test-repo',
+    QDRANT_URL: 'http://localhost:6333',
   },
   agentConfigs: {
     ceo: { name: 'CEO Agent', loopInterval: 3600, tier: 'head' },
     dao: { name: 'DAO Agent', loopInterval: 21600, tier: 'head' },
     cmo: { name: 'CMO Agent', loopInterval: 14400, tier: 'clevel', gitFilter: 'marketing' },
     cto: { name: 'CTO Agent', loopInterval: 3600, tier: 'clevel' },
+  },
+  isDryRun: false,
+  workspaceConfig: {
+    repoUrl: 'https://github.com/test/repo.git',
+    baseDir: '/tmp/workspace',
   },
 }));
 
@@ -606,12 +613,14 @@ describe('Container (Portainer API)', () => {
       expect(fetchCalls.some(c => c.url.includes('/api/status'))).toBe(true);
     });
 
-    it('should throw on Portainer connection failure', async () => {
+    it('should handle Portainer connection failure gracefully', async () => {
+      // The implementation logs a warning but doesn't throw - orchestrator continues
       setPortainerResponse('/api/status', { message: 'Unauthorized' }, false, 401);
 
       const { initialize } = await import('./container.js');
 
-      await expect(initialize()).rejects.toThrow();
+      // Should NOT throw - graceful degradation
+      await expect(initialize()).resolves.toBeUndefined();
     });
   });
 

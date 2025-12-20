@@ -11,10 +11,48 @@ vi.mock('../lib/logger.js', () => ({
   }),
 }));
 
-// Mock config
+// Mock auth middleware - allow all requests to pass through in tests
+vi.mock('./auth.js', () => ({
+  authMiddleware: (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
+
+// Mock config - must include all exports needed by transitively imported modules
 vi.mock('../lib/config.js', () => ({
+  config: {
+    PORT: '8080',
+    NODE_ENV: 'test',
+    POSTGRES_URL: 'postgres://test',
+    REDIS_URL: 'redis://localhost:6379',
+    OLLAMA_URL: 'http://localhost:11434',
+    QDRANT_URL: 'http://localhost:6333',
+    GITHUB_TOKEN: 'test-token',
+    GITHUB_ORG: 'test-org',
+    GITHUB_REPO: 'test-repo',
+    DRY_RUN: 'false',
+    LLM_ROUTING_STRATEGY: 'task-type',
+    LLM_ENABLE_FALLBACK: 'true',
+    LLM_PREFER_GEMINI: 'false',
+  },
   numericConfig: {
     port: 3000,
+  },
+  llmConfig: {
+    strategy: 'task-type',
+    enableFallback: true,
+    preferGemini: false,
+  },
+  workspaceConfig: {
+    repoUrl: 'https://github.com/test/repo.git',
+    baseDir: '/tmp/workspace',
+  },
+  agentConfigs: {
+    ceo: { name: 'CEO Agent', loopInterval: 3600, tier: 'head' },
+    dao: { name: 'DAO Agent', loopInterval: 21600, tier: 'head' },
+    cmo: { name: 'CMO Agent', loopInterval: 14400, tier: 'clevel' },
+    cto: { name: 'CTO Agent', loopInterval: 3600, tier: 'clevel' },
+    cfo: { name: 'CFO Agent', loopInterval: 21600, tier: 'clevel' },
+    coo: { name: 'COO Agent', loopInterval: 7200, tier: 'clevel' },
+    cco: { name: 'CCO Agent', loopInterval: 86400, tier: 'clevel' },
   },
 }));
 
