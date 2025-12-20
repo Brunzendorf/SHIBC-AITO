@@ -12,6 +12,7 @@ import type { AgentType, AgentMessage, ApiResponse, DecisionStatus } from '../li
 import crypto from 'crypto';
 import { benchmarkRunner, BENCHMARK_TASKS } from '../lib/llm/benchmark.js';
 import type { BenchmarkTest } from '../lib/llm/benchmark.js';
+import { withTraceAsync, generateTraceId, getTraceId, TRACE_HEADER, SPAN_HEADER } from '../lib/tracing.js';
 
 const logger = createLogger('api');
 
@@ -24,14 +25,37 @@ app.use(express.json());
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Headers', `Content-Type, Authorization, ${TRACE_HEADER}, ${SPAN_HEADER}`);
   if (req.method === 'OPTIONS') {
     res.sendStatus(200); return;
   }
   next();
 });
 
-// Request logging
+// Distributed tracing middleware (TASK-033)
+// Wraps each request in a trace context for end-to-end tracking
+app.use((req, res, next) => {
+  // Use incoming trace ID from header or generate new one
+  const incomingTraceId = req.headers[TRACE_HEADER.toLowerCase()] as string | undefined;
+  const traceId = incomingTraceId || generateTraceId();
+
+  // Add trace ID to response headers for client correlation
+  res.setHeader(TRACE_HEADER, traceId);
+
+  // Run request handler within trace context
+  withTraceAsync(async () => {
+    next();
+  }, {
+    traceId,
+    metadata: {
+      method: req.method,
+      path: req.path,
+      userAgent: req.headers['user-agent'],
+    },
+  }).catch(next);
+});
+
+// Request logging (now includes trace IDs automatically via logger mixin)
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {

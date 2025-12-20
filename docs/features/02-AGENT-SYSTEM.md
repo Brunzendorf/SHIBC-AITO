@@ -179,6 +179,77 @@ await acknowledgeMessages(streamKey, groupName, messageIds);
 
 ---
 
+#### Distributed Tracing (TASK-033)
+
+**Problem:** Request-Flow durch das System nicht nachvollziehbar, Debugging schwierig.
+
+**Lösung:** Trace ID Propagation mit AsyncLocalStorage.
+
+**Neue Datei: `src/lib/tracing.ts`**
+
+```typescript
+import { withTraceAsync, getTraceId, TRACE_HEADER } from '../lib/tracing.js';
+
+// API-Requests automatisch getraced
+app.use((req, res, next) => {
+  const traceId = req.headers[TRACE_HEADER.toLowerCase()] || generateTraceId();
+  res.setHeader(TRACE_HEADER, traceId);
+  withTraceAsync(() => next(), { traceId }).catch(next);
+});
+
+// Logger-Mixin fügt Trace IDs automatisch hinzu
+const baseLogger = pino({
+  mixin() {
+    return getTraceInfo(); // { traceId, spanId, parentSpanId }
+  },
+});
+
+// Agent-Messages mit correlationId
+const message: AgentMessage = {
+  ...
+  correlationId: getTraceId(), // Automatisch aus Context
+};
+
+// Message-Handler mit Trace Context
+await withTraceAsync(
+  () => this.handleMessage(parsed, channel),
+  { traceId: parsed.correlationId }
+);
+```
+
+**Verfügbare Funktionen:**
+| Funktion | Beschreibung |
+|----------|--------------|
+| `generateTraceId()` | Generiert 16-Zeichen Trace ID |
+| `generateSpanId()` | Generiert 8-Zeichen Span ID |
+| `withTrace()` / `withTraceAsync()` | Führt Code in Trace Context aus |
+| `createChildSpan()` / `createChildSpanAsync()` | Erstellt Child Span |
+| `getTraceId()` / `getSpanId()` | Holt aktuelle IDs |
+| `getTraceContext()` | Holt vollen Context |
+| `getTraceInfo()` | Logging-freundliches Format |
+| `getSpanDuration()` | Berechnet Span-Dauer |
+
+**HTTP Headers für Propagation:**
+- `X-Trace-Id` - Request Trace ID
+- `X-Span-Id` - Current Span ID
+- `X-Parent-Span-Id` - Parent Span ID
+
+**Log-Output mit Trace:**
+```json
+{
+  "level": 30,
+  "component": "api",
+  "traceId": "abc123def4567890",
+  "spanId": "12345678",
+  "method": "GET",
+  "path": "/agents"
+}
+```
+
+**Status:** ✅ TASK-033 erledigt (2025-12-20)
+
+---
+
 #### `subscribeToEvents(): Promise<void>`
 Abonniert Redis-Channels für den Agent.
 

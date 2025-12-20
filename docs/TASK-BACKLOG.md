@@ -682,19 +682,22 @@ export function useWebSocket() {
 
 ### 🟠 HOCH
 
-#### TASK-033: Kein Distributed Tracing
-**Status:** ✨ FEATURE
-**Aufwand:** 12h
+#### TASK-033: Kein Distributed Tracing ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-20)
+**Aufwand:** 6h (statt 12h - leichtgewichtige Lösung)
 
 **Problem:**
 - Kann nicht sehen wie Request durch System fließt
 - Debugging schwierig
 - Performance bottlenecks unklar
 
-**Fix:**
-1. OpenTelemetry Integration
-2. Jaeger oder Datadog
-3. Trace IDs in allen Logs
+**Lösung:** Trace ID Propagation mit AsyncLocalStorage
+- Neue Datei: `src/lib/tracing.ts` mit TraceContext Management
+- Logger-Mixin fügt automatisch traceId/spanId zu Logs hinzu
+- Express-Middleware für API-Request Tracing
+- Agent-Messages mit correlationId für Request-Chain Tracking
+- HTTP Headers (X-Trace-Id, X-Span-Id) für Propagation
+- 18 Unit-Tests in `tracing.test.ts`
 
 ---
 
@@ -825,9 +828,9 @@ logger.error(sanitize({ error: e }));
 
 **Sprint 3 (Quality):** 🚀 AKTUELL
 - TASK-036: Test Coverage (8h)
-- TASK-033: Distributed Tracing (6h)
+- ~~TASK-033: Distributed Tracing~~ ✅ Erledigt
 - ~~TASK-028: WebSocket Connection~~ ✅ Bereits implementiert
-- TASK-026: Missing Endpoints (3h)
+- ~~TASK-026: Missing Endpoints~~ ✅ Erledigt
 
 ---
 

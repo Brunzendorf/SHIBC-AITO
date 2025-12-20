@@ -34,6 +34,7 @@ import { llmRouter, type TaskContext } from '../lib/llm/index.js';
 import type { AgentType, AgentMessage, EventType } from '../lib/types.js';
 import { spawnWorkerAsync } from '../workers/spawner.js';
 import { queueForArchive } from '../workers/archive-worker.js';
+import { getTraceId, withTraceAsync } from '../lib/tracing.js';
 import {
   runInitiativePhase,
   getInitiativePromptContext,
@@ -263,10 +264,22 @@ export class AgentDaemon {
     await subscriber.subscribe(channels.broadcast);
 
     // Handle incoming messages
+    // TASK-033: Wrap in trace context for distributed tracing
     subscriber.on('message', async (channel: string, message: string) => {
       try {
         const parsed = JSON.parse(message) as AgentMessage;
-        await this.handleMessage(parsed, channel);
+        // Use incoming correlationId as trace ID or generate new one
+        await withTraceAsync(
+          () => this.handleMessage(parsed, channel),
+          {
+            traceId: parsed.correlationId,
+            metadata: {
+              messageType: parsed.type,
+              from: parsed.from,
+              channel,
+            },
+          }
+        );
       } catch (error) {
         logger.error({ channel, error }, 'Failed to handle message');
       }
@@ -1077,6 +1090,7 @@ export class AgentDaemon {
 
   /**
    * Send a message to another agent
+   * TASK-033: Includes trace ID as correlationId for distributed tracing
    */
   private async sendMessage(to: string, content: string): Promise<void> {
     const message: AgentMessage = {
@@ -1088,6 +1102,7 @@ export class AgentDaemon {
       priority: 'normal',
       timestamp: new Date(),
       requiresResponse: false,
+      correlationId: getTraceId(), // TASK-033: Propagate trace ID
     };
 
     const channel = to === 'all' ? channels.broadcast :
