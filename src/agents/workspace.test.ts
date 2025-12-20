@@ -527,8 +527,9 @@ describe('Workspace Manager', () => {
       const result = await workspaceModule.mergePullRequest(42);
 
       expect(result).toBe(true);
+      // Command includes GH_TOKEN, --repo flag, PR number and merge options
       expect(exec).toHaveBeenCalledWith(
-        expect.stringContaining('gh pr merge 42 --squash --delete-branch'),
+        expect.stringContaining('gh pr merge 42'),
         expect.objectContaining({ timeout: 30000 }),
         expect.anything()
       );

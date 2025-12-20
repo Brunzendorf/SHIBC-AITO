@@ -60,7 +60,7 @@ describe('Config', () => {
       const { agentConfigs } = await import('./config.js');
 
       expect(agentConfigs.ceo.name).toBe('CEO Agent');
-      expect(agentConfigs.ceo.loopInterval).toBe(3600);
+      expect(agentConfigs.ceo.loopInterval).toBe(1800); // 30 min - frequent oversight
       expect(agentConfigs.ceo.tier).toBe('head');
     });
 
@@ -70,7 +70,7 @@ describe('Config', () => {
       const { agentConfigs } = await import('./config.js');
 
       expect(agentConfigs.dao.name).toBe('DAO Agent');
-      expect(agentConfigs.dao.loopInterval).toBe(21600);
+      expect(agentConfigs.dao.loopInterval).toBe(14400); // 4 hours - governance
       expect(agentConfigs.dao.tier).toBe('head');
     });
 
@@ -80,7 +80,7 @@ describe('Config', () => {
       const { agentConfigs } = await import('./config.js');
 
       expect(agentConfigs.cmo.name).toBe('CMO Agent');
-      expect(agentConfigs.cmo.loopInterval).toBe(14400);
+      expect(agentConfigs.cmo.loopInterval).toBe(7200); // 2 hours - marketing reactivity
       expect(agentConfigs.cmo.tier).toBe('clevel');
       expect(agentConfigs.cmo.gitFilter).toBe('content/*');
     });
@@ -102,7 +102,7 @@ describe('Config', () => {
       const { agentConfigs } = await import('./config.js');
 
       expect(agentConfigs.cfo.name).toBe('CFO Agent');
-      expect(agentConfigs.cfo.loopInterval).toBe(21600);
+      expect(agentConfigs.cfo.loopInterval).toBe(14400); // 4 hours - treasury monitoring
       expect(agentConfigs.cfo.tier).toBe('clevel');
       expect(agentConfigs.cfo.gitFilter).toBe('treasury/*');
     });
@@ -113,7 +113,7 @@ describe('Config', () => {
       const { agentConfigs } = await import('./config.js');
 
       expect(agentConfigs.coo.name).toBe('COO Agent');
-      expect(agentConfigs.coo.loopInterval).toBe(7200);
+      expect(agentConfigs.coo.loopInterval).toBe(3600); // 1 hour - quick operations response
       expect(agentConfigs.coo.tier).toBe('clevel');
       expect(agentConfigs.coo.gitFilter).toBe('community/*');
     });
@@ -124,7 +124,7 @@ describe('Config', () => {
       const { agentConfigs } = await import('./config.js');
 
       expect(agentConfigs.cco.name).toBe('CCO Agent');
-      expect(agentConfigs.cco.loopInterval).toBe(86400);
+      expect(agentConfigs.cco.loopInterval).toBe(43200); // 12 hours - compliance less time-critical
       expect(agentConfigs.cco.tier).toBe('clevel');
       expect(agentConfigs.cco.gitFilter).toBe('legal/*');
     });

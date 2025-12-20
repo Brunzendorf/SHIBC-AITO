@@ -82,6 +82,11 @@ const mockParseClaudeOutput = vi.fn<any, any>();
 
 const mockSpawnWorkerAsync = vi.fn<any, any>();
 
+const mockLlmRouter = {
+  route: vi.fn<any, any>(),
+  checkAvailability: vi.fn<any, any>(),
+};
+
 const mockCronSchedule = vi.fn<any, any>();
 const mockCronJob = {
   stop: vi.fn<any, any>(),
@@ -103,6 +108,14 @@ vi.mock('../lib/redis.js', () => ({
   publisher: mockPublisher,
   channels: mockChannels,
   setAgentStatus: mockSetAgentStatus,
+  redis: {
+    quit: vi.fn(),
+    llen: vi.fn(() => Promise.resolve(0)),
+  },
+  claimTasks: vi.fn(() => Promise.resolve([])),
+  acknowledgeTasks: vi.fn(() => Promise.resolve()),
+  recoverOrphanedTasks: vi.fn(() => Promise.resolve(0)),
+  getTaskCount: vi.fn(() => Promise.resolve(0)),
 }));
 
 vi.mock('../lib/db.js', () => ({
@@ -154,6 +167,61 @@ vi.mock('../workers/spawner.js', () => ({
   spawnWorkerAsync: mockSpawnWorkerAsync,
 }));
 
+// Mock config with all needed exports
+vi.mock('../lib/config.js', () => ({
+  config: {
+    PORT: '8080',
+    NODE_ENV: 'test',
+    POSTGRES_URL: 'postgres://test',
+    REDIS_URL: 'redis://localhost:6379',
+    OLLAMA_URL: 'http://localhost:11434',
+    QDRANT_URL: 'http://localhost:6333',
+    GITHUB_TOKEN: 'test-token',
+    GITHUB_ORG: 'test-org',
+    GITHUB_REPO: 'test-repo',
+    DRY_RUN: 'false',
+  },
+  workspaceConfig: {
+    repoUrl: 'https://github.com/test/repo.git',
+    baseDir: '/tmp/workspace',
+  },
+  agentConfigs: {
+    ceo: { name: 'CEO Agent', loopInterval: 3600, tier: 'head' },
+    dao: { name: 'DAO Agent', loopInterval: 21600, tier: 'head' },
+    cmo: { name: 'CMO Agent', loopInterval: 14400, tier: 'clevel' },
+    cto: { name: 'CTO Agent', loopInterval: 3600, tier: 'clevel' },
+  },
+  llmConfig: {
+    strategy: 'task-type',
+    enableFallback: true,
+    preferGemini: false,
+  },
+}));
+
+// Mock tracing
+vi.mock('../lib/tracing.js', () => ({
+  getTraceId: vi.fn(() => 'test-trace-id'),
+  withTraceAsync: vi.fn((fn: () => Promise<unknown>) => fn()),
+}));
+
+// Mock initiative module
+vi.mock('./initiative.js', () => ({
+  runInitiativePhase: vi.fn(() => Promise.resolve({ created: false })),
+  getInitiativePromptContext: vi.fn(() => Promise.resolve('')),
+  createInitiativeFromProposal: vi.fn(() => Promise.resolve(null)),
+  buildInitiativeGenerationPrompt: vi.fn(() => ''),
+}));
+
+// Mock archive worker
+vi.mock('../workers/archive-worker.js', () => ({
+  queueForArchive: vi.fn(),
+}));
+
+// Mock LLM router
+vi.mock('../lib/llm/index.js', () => ({
+  llmRouter: mockLlmRouter,
+}));
+
 describe('AgentDaemon', () => {
   let AgentDaemon: any;
   let createDaemonConfigFromEnv: any;
@@ -161,6 +229,8 @@ describe('AgentDaemon', () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     mockCronSchedule.mockReturnValue(mockCronJob);
+    mockLlmRouter.checkAvailability.mockResolvedValue({ claude: true, gemini: false, ollama: false });
+    mockLlmRouter.route.mockResolvedValue({ success: true, output: 'test' });
 
     const module = await import('./daemon.js');
     AgentDaemon = module.AgentDaemon;
