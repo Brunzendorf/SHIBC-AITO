@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { createLogger } from '../lib/logger.js';
 import { numericConfig } from '../lib/config.js';
-import { agentRepo, eventRepo, taskRepo, decisionRepo, escalationRepo, historyRepo, domainApprovalRepo, domainWhitelistRepo, settingsRepo } from '../lib/db.js';
+import { agentRepo, eventRepo, taskRepo, decisionRepo, escalationRepo, historyRepo, domainApprovalRepo, domainWhitelistRepo, settingsRepo, stateRepo } from '../lib/db.js';
 import { publisher, channels, redis } from '../lib/redis.js';
 import { startAgent, stopAgent, restartAgent, getAgentContainerStatus, listManagedContainers } from './container.js';
 import { getScheduledJobs, pauseJob, resumeJob } from './scheduler.js';
@@ -186,6 +186,26 @@ app.get('/agents/:type/health', asyncHandler(async (req, res) => {
   }
 
   sendResponse(res, health);
+}));
+
+// Get agent state (TASK-026)
+app.get('/agents/:type/state', asyncHandler(async (req, res) => {
+  const agentType = req.params.type as AgentType;
+  const agent = await agentRepo.findByType(agentType);
+
+  if (!agent) {
+    return sendError(res, 'Agent not found', 404);
+  }
+
+  // Get all state for this agent
+  const state = await stateRepo.getAll(agent.id);
+
+  sendResponse(res, {
+    agentId: agent.id,
+    agentType: agent.type,
+    state,
+    retrievedAt: new Date().toISOString(),
+  });
 }));
 
 // === Container Endpoints ===
