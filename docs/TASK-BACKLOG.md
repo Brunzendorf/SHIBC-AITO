@@ -508,27 +508,11 @@ app.use('/api', authMiddleware);
 
 ---
 
-#### TASK-023: Kein Rate Limiting
-**Status:** ⚠️ SECURITY
+#### TASK-023: Kein Rate Limiting ⏭️ ÜBERSPRUNGEN
+**Status:** ⚠️ SECURITY → ⏭️ NICHT BENÖTIGT
 **Aufwand:** 2h
-**Datei:** `src/orchestrator/api.ts`
 
-**Problem:**
-- Alle Endpoints können gespammt werden
-- DoS möglich
-
-**Fix:**
-```typescript
-import rateLimit from 'express-rate-limit';
-
-const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // limit each IP to 100 requests per windowMs
-  message: 'Too many requests'
-});
-
-app.use('/api', limiter);
-```
+**Grund:** Dashboard + Agents haben 1-1 Beziehung (Whitelabel-Lösung). Kein Multi-Tenant System, daher kein Rate Limiting nötig.
 
 ---
 
@@ -844,20 +828,22 @@ logger.error(sanitize({ error: e }));
 
 | Priorität | Anzahl Tasks | Offen | Geschätzter Aufwand |
 |-----------|--------------|-------|---------------------|
-| 🔴 KRITISCH | 8 | 7 (-1 TASK-003) | ~51h |
-| 🟠 HOCH | 14 | 11 (-3) | ~60h |
-| 🟡 MITTEL | 10 | 9 (-1 TASK-010) | ~34h |
+| 🔴 KRITISCH | 8 | 6 | ~49h |
+| 🟠 HOCH | 14 | 11 | ~60h |
+| 🟡 MITTEL | 10 | 9 | ~34h |
 | 🟢 NIEDRIG | 4 | 4 | ~12h |
-| **GESAMT** | **36** | **31 offen** | **~157h** |
+| **GESAMT** | **36** | **30 offen** | **~155h** |
 
-> **Update 2025-12-20:** 4 Quick Wins erledigt (TASK-003, TASK-010, TASK-014, TASK-020)
+> **Update 2025-12-20:**
+> - 4 Quick Wins erledigt (TASK-003, TASK-010, TASK-014, TASK-020)
+> - TASK-023 übersprungen (Rate Limiting nicht benötigt bei 1-1 Whitelabel)
 
 ### Nach Kategorie
 
 | Kategorie | Anzahl | Offen |
 |-----------|--------|-------|
 | 🐛 BUG | 15 | 12 |
-| ⚠️ SECURITY | 6 | 5 |
+| ⚠️ SECURITY | 6 | 4 |
 | 🔧 IMPROVEMENT | 10 | 10 |
 | ✨ FEATURE | 5 | 5 |
 
@@ -872,7 +858,7 @@ logger.error(sanitize({ error: e }));
 
 **Sprint 1 (Security & Critical Bugs):**
 - TASK-022: API Authentication
-- TASK-023: Rate Limiting
+- ~~TASK-023: Rate Limiting~~ ⏭️ Nicht benötigt (1-1 Whitelabel)
 - TASK-018: Domain Whitelist Enforcement
 - TASK-001: Task Queue Race Condition
 
