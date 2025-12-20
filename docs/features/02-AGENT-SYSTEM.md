@@ -135,6 +135,50 @@ Graceful Shutdown des Daemons.
 
 ### Message Handling
 
+#### Redis Streams Infrastructure (TASK-016)
+
+**Problem:** Pub/Sub ist fire-and-forget - wenn Agent nicht verbunden, geht Message verloren.
+
+**Lösung:** Redis Streams mit Consumer Groups für guaranteed delivery.
+
+**Neue Funktionen in `src/lib/redis.ts`:**
+
+```typescript
+// Stream Key Patterns (parallel zu Pub/Sub Channels)
+export const streams = {
+  broadcast: 'stream:broadcast',
+  head: 'stream:head',
+  clevel: 'stream:clevel',
+  agent: (id: string) => `stream:agent:${id}`,
+};
+
+// Publish mit Guarantee
+await publishToStream(streams.agent(agentId), message);
+
+// Consumer Group erstellen
+await createConsumerGroup(streamKey, groupName, '$');
+
+// Blocking Read mit ACK
+const messages = await readFromStream(streamKey, groupName, consumerName);
+await acknowledgeMessages(streamKey, groupName, messageIds);
+```
+
+**Verfügbare Stream-Funktionen:**
+| Funktion | Beschreibung |
+|----------|--------------|
+| `publishToStream()` | XADD mit MAXLEN |
+| `createConsumerGroup()` | XGROUP CREATE mit MKSTREAM |
+| `readFromStream()` | XREADGROUP BLOCK |
+| `acknowledgeMessages()` | XACK |
+| `getPendingMessages()` | XPENDING für Recovery |
+| `claimPendingMessages()` | XCLAIM für Dead Consumer |
+| `publishWithGuarantee()` | Hybrid: Pub/Sub + Stream |
+
+**Status:** ✅ TASK-016 Phase 1 erledigt (2025-12-20)
+**TODO:** Phase 2 - Daemon-Migration zu Consumer Groups
+
+---
+
 #### `subscribeToEvents(): Promise<void>`
 Abonniert Redis-Channels für den Agent.
 
@@ -1172,8 +1216,31 @@ Erstellt Branch, Commit, Push und PR.
 **Datei:** `workspace.ts:137-250`
 **Status:** ✅ Vollständig implementiert
 
+---
+
+#### `workspace.pullWorkspace(): Promise<PullResult>`
+Zieht Änderungen vom Remote mit Konflikt-Erkennung.
+
+**Rückgabe:**
+```typescript
+interface PullResult {
+  success: boolean;
+  error?: string;
+  conflicted?: boolean;  // Merge-Konflikt erkannt
+  aborted?: boolean;     // Rebase/Merge abgebrochen
+}
+```
+
+**TASK-012 Fix:**
+- Erkennt Merge-Konflikte via Error-Message
+- Führt automatisch `git rebase --abort` aus
+- Fallback zu `git merge --abort`
+- Gibt strukturiertes Ergebnis zurück
+
+**Datei:** `workspace.ts:85-140`
+**Status:** ✅ TASK-012 erledigt (2025-12-20)
+
 **Bekannte Probleme:**
-- ⚠️ Git Merge Conflicts nicht behandelt (TASK-012)
 - ⚠️ Stash-Logik unsicher (TASK-013)
 
 ---
@@ -1216,6 +1283,36 @@ gh pr close ${prNumber} --comment "${reason}"
 
 ### Zweck
 Ermöglicht Agents, proaktiv Initiativen vorzuschlagen.
+
+### Circuit Breaker Protection (TASK-032)
+
+GitHub API-Aufrufe sind mit Circuit Breaker geschützt:
+
+```typescript
+import { createCircuitBreaker, GITHUB_OPTIONS } from '../lib/circuit-breaker.js';
+
+const searchIssuesBreaker = createCircuitBreaker(
+  'github-search-issues',
+  async (query, owner, repo) => {
+    const result = await gh.search.issuesAndPullRequests({ q: query });
+    return result.data.items;
+  },
+  GITHUB_OPTIONS,
+  () => []  // Fallback: leeres Array
+);
+```
+
+**Geschützte Funktionen:**
+- `searchIssuesBreaker` - GitHub Issue-Suche
+- `listIssuesBreaker` - Issue-Listen abrufen
+- `createIssueBreaker` - Issues erstellen
+
+**Verhalten bei offenem Circuit:**
+- Fallback: Leere Arrays zurückgeben
+- Logging: "Circuit breaker call rejected (circuit open)"
+- Reset nach 60 Sekunden (GITHUB_OPTIONS.resetTimeout)
+
+**Status:** ✅ TASK-032 erledigt (2025-12-20)
 
 ### Funktionen
 
@@ -1342,14 +1439,15 @@ Agent schließt Issue ab.
 
 | ID | Modul | Problem | Priorität |
 |----|-------|---------|-----------|
-| TASK-001 | daemon.ts | Task-Queue Race Condition | 🔴 Kritisch |
+| ~~TASK-001~~ | daemon.ts | ~~Task-Queue Race Condition~~ | ✅ Erledigt |
 | TASK-002 | daemon.ts | loopInProgress unvollständig | 🔴 Kritisch |
-| TASK-003 | daemon.ts | Parser null-check fehlt | 🟠 Hoch |
+| ~~TASK-003~~ | daemon.ts | ~~Parser null-check fehlt~~ | ✅ Erledigt |
 | TASK-008 | initiative.ts | Hash-Kollision bei Duplikaten | 🟠 Hoch |
 | TASK-009 | initiative.ts | GitHub API Error zu permissiv | 🟠 Hoch |
-| TASK-012 | workspace.ts | Git Merge Conflicts | 🔴 Kritisch |
+| ~~TASK-012~~ | workspace.ts | ~~Git Merge Conflicts~~ | ✅ Erledigt |
 | TASK-013 | workspace.ts | Stash-Logik unsicher | 🟠 Hoch |
 | TASK-014 | workspace.ts | Token in URL exposed | ⚠️ Security |
+| ~~TASK-032~~ | initiative.ts | ~~Circuit Breaker fehlt~~ | ✅ Erledigt |
 
 ---
 

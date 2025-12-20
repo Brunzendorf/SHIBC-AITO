@@ -66,12 +66,31 @@ async function fetchApi<T>(
 ): Promise<ApiResponse<T>>
 ```
 
-Generische Fetch-Funktion mit Error-Handling.
+Generische Fetch-Funktion mit Error-Handling und **Retry-Logic (TASK-027)**.
 
 **Besonderheiten:**
 - Unwrapped Orchestrator Response-Format: `{success: true, data: T}`
 - Automatische JSON Content-Type Header
 - Error-Text aus Response bei Fehler
+
+**Retry-Konfiguration (TASK-027):**
+```typescript
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  baseDelayMs: 1000,
+  maxDelayMs: 10000,
+  retryableStatuses: [408, 429, 500, 502, 503, 504],
+};
+```
+
+**Retry-Logik:**
+- Exponential Backoff mit Jitter (bis 25%)
+- Network Errors werden immer retried
+- POST/PUT/DELETE nur bei 5xx Errors (idempotenz)
+- 401/403 werden nicht retried (Auth-Errors)
+- `retried` Counter in Response für Debugging
+
+**Status:** ✅ TASK-027 erledigt (2025-12-20)
 
 ---
 
@@ -668,9 +687,51 @@ Zentrierter CircularProgress Spinner.
 function ErrorDisplay({ error }: { error: string }): JSX.Element
 ```
 
-Alert mit Error-Message.
+Alert mit Error-Message und optionalem Retry-Button.
 
 **Status:** ✅ Vollständig implementiert
+
+---
+
+### ErrorBoundary (TASK-027)
+
+```typescript
+class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState>
+```
+
+React Error Boundary um Component-Errors abzufangen.
+
+**Props:**
+```typescript
+interface ErrorBoundaryProps {
+  children: ReactNode;
+  fallback?: ReactNode;       // Custom Fallback-UI
+  onError?: (error, info) => void;  // Error-Callback
+}
+```
+
+**Features:**
+- Fängt JavaScript-Errors in Child-Components
+- Zeigt Retry-Button zum Reset
+- Zeigt Error-Details im Development-Mode
+- Collapsible Stack-Trace Anzeige
+- HOC verfügbar: `withErrorBoundary(Component)`
+
+**Integration:**
+- Umschließt `children` in `DashboardLayout.tsx`
+- Verhindert dass ein Error die ganze Page crasht
+
+**Beispiel:**
+```tsx
+<ErrorBoundary fallback={<CustomError />}>
+  <RiskyComponent />
+</ErrorBoundary>
+
+// Oder als HOC:
+const SafeComponent = withErrorBoundary(RiskyComponent);
+```
+
+**Status:** ✅ TASK-027 erledigt (2025-12-20)
 
 ---
 
