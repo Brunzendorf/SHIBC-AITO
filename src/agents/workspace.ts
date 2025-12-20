@@ -45,7 +45,29 @@ export async function initializeWorkspace(agentType: string): Promise<boolean> {
       // Configure authentication for existing workspace
       await configureRemoteAuth();
       await configureGitUser(agentType);
-      await pullWorkspace();
+
+      // Pull with conflict handling
+      const pullResult = await pullWorkspace();
+      if (!pullResult.success) {
+        if (pullResult.conflicted) {
+          logger.warn({ error: pullResult.error, aborted: pullResult.aborted },
+            'Workspace pull had conflicts - starting fresh from remote');
+          // Reset to remote state if conflicts couldn't be resolved
+          try {
+            await execAsync(`cd ${WORKSPACE_PATH} && git fetch origin`);
+            await execAsync(`cd ${WORKSPACE_PATH} && git reset --hard origin/${workspaceConfig.branch}`);
+            logger.info('Workspace reset to remote state after conflict');
+          } catch (resetError) {
+            const errMsg = resetError instanceof Error ? resetError.message : String(resetError);
+            logger.error({ error: maskSensitiveData(errMsg) }, 'Failed to reset workspace after conflict');
+            return false;
+          }
+        } else {
+          logger.warn({ error: pullResult.error }, 'Workspace pull failed - continuing with existing state');
+          // Non-conflict failures (network, etc.) - continue with existing state
+        }
+      }
+
       // Always switch back to main branch on init
       await execAsync(`cd ${WORKSPACE_PATH} && git checkout ${workspaceConfig.branch}`).catch(() => {});
       return true;
@@ -138,18 +160,84 @@ async function configureRemoteAuth(): Promise<void> {
 }
 
 /**
- * Pull latest changes from remote
+ * Result of a pull operation
  */
-export async function pullWorkspace(): Promise<boolean> {
+export interface PullResult {
+  success: boolean;
+  error?: string;
+  conflicted?: boolean;
+  aborted?: boolean;
+}
+
+/**
+ * Pull latest changes from remote
+ * Properly handles conflicts by aborting and returning structured result
+ */
+export async function pullWorkspace(): Promise<PullResult> {
   try {
     await execAsync(`cd ${WORKSPACE_PATH} && git fetch origin`, { timeout: 30000 });
     await execAsync(`cd ${WORKSPACE_PATH} && git pull --rebase origin ${workspaceConfig.branch}`, { timeout: 30000 });
     logger.debug('Workspace pull completed');
-    return true;
+    return { success: true };
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.warn({ error: maskSensitiveData(errMsg) }, 'Failed to pull workspace');
-    return false;
+    const maskedError = maskSensitiveData(errMsg);
+
+    // Check for conflict indicators
+    const isConflict = errMsg.includes('CONFLICT') ||
+                       errMsg.includes('conflict') ||
+                       errMsg.includes('Merge conflict') ||
+                       errMsg.includes('could not apply') ||
+                       errMsg.includes('Failed to merge');
+
+    // Check for rebase in progress
+    const isRebaseConflict = errMsg.includes('rebase') ||
+                             errMsg.includes('Cannot pull with rebase');
+
+    if (isConflict || isRebaseConflict) {
+      logger.warn({ error: maskedError }, 'Pull conflict detected, aborting...');
+
+      // Try to abort rebase first (since we use --rebase)
+      try {
+        await execAsync(`cd ${WORKSPACE_PATH} && git rebase --abort`);
+        logger.info('Rebase aborted successfully');
+        return {
+          success: false,
+          error: 'Merge conflict detected - rebase aborted',
+          conflicted: true,
+          aborted: true
+        };
+      } catch {
+        // Rebase abort failed, try merge abort
+        try {
+          await execAsync(`cd ${WORKSPACE_PATH} && git merge --abort`);
+          logger.info('Merge aborted successfully');
+          return {
+            success: false,
+            error: 'Merge conflict detected - merge aborted',
+            conflicted: true,
+            aborted: true
+          };
+        } catch {
+          // Neither worked, might not be in conflict state
+          logger.warn('Could not abort rebase or merge - may need manual intervention');
+          return {
+            success: false,
+            error: 'Conflict detected but could not abort automatically',
+            conflicted: true,
+            aborted: false
+          };
+        }
+      }
+    }
+
+    // Non-conflict error (network, auth, etc.)
+    logger.warn({ error: maskedError }, 'Failed to pull workspace');
+    return {
+      success: false,
+      error: maskedError,
+      conflicted: false
+    };
   }
 }
 
@@ -193,7 +281,17 @@ export async function createBranch(agentType: string, loopNumber: number): Promi
       logger.warn('Could not checkout main, continuing on current branch');
     }
 
-    await pullWorkspace();
+    // Pull with conflict handling
+    const pullResult = await pullWorkspace();
+    if (!pullResult.success) {
+      if (pullResult.conflicted) {
+        logger.error({ error: pullResult.error, aborted: pullResult.aborted },
+          'Cannot create branch - workspace has conflicts');
+        throw new Error(`Pull conflict before branch creation: ${pullResult.error}`);
+      }
+      // Non-conflict error - log warning but continue (might be network issue)
+      logger.warn({ error: pullResult.error }, 'Pull failed before branch creation, continuing with current state');
+    }
 
     // Create and checkout new branch
     await execAsync(`cd ${WORKSPACE_PATH} && git checkout -b ${branchName}`);
@@ -464,8 +562,17 @@ export async function commitAndPushDirect(
     // Ensure we're on main branch
     await execAsync(`cd ${WORKSPACE_PATH} && git checkout ${workspaceConfig.branch}`).catch(() => {});
 
-    // Pull latest changes first
-    await pullWorkspace();
+    // Pull latest changes first with conflict handling
+    const pullResult = await pullWorkspace();
+    if (!pullResult.success) {
+      if (pullResult.conflicted) {
+        logger.error({ error: pullResult.error, aborted: pullResult.aborted },
+          'Cannot commit - workspace has conflicts after pull');
+        return { success: false };
+      }
+      // Non-conflict error - log warning but try to continue
+      logger.warn({ error: pullResult.error }, 'Pull failed before direct commit, continuing with local state');
+    }
 
     // Check for changes after pull
     const { stdout: status } = await execAsync(`cd ${WORKSPACE_PATH} && git status --porcelain`);

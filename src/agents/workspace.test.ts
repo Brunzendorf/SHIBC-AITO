@@ -181,7 +181,8 @@ describe('Workspace Manager', () => {
     it('should fetch and pull with rebase', async () => {
       const result = await workspaceModule.pullWorkspace();
 
-      expect(result).toBe(true);
+      expect(result.success).toBe(true);
+      expect(result.conflicted).toBeUndefined();
       expect(exec).toHaveBeenCalledWith(
         expect.stringContaining('git fetch origin'),
         expect.objectContaining({ timeout: 30000 }),
@@ -194,7 +195,7 @@ describe('Workspace Manager', () => {
       );
     });
 
-    it('should return false on pull failure', async () => {
+    it('should return failure on pull error', async () => {
       exec.mockImplementation((cmd: string, options: any, callback: any) => {
         const cb = typeof options === 'function' ? options : callback;
         if (cmd.includes('git pull')) {
@@ -206,7 +207,32 @@ describe('Workspace Manager', () => {
 
       const result = await workspaceModule.pullWorkspace();
 
-      expect(result).toBe(false);
+      expect(result.success).toBe(false);
+      expect(result.conflicted).toBe(false);
+      expect(result.error).toBeDefined();
+    });
+
+    it('should detect and abort conflicts', async () => {
+      exec.mockImplementation((cmd: string, options: any, callback: any) => {
+        const cb = typeof options === 'function' ? options : callback;
+        if (cmd.includes('git pull')) {
+          process.nextTick(() => cb(new Error('CONFLICT (content): Merge conflict in file.ts'), null));
+        } else if (cmd.includes('git rebase --abort')) {
+          process.nextTick(() => cb(null, { stdout: '', stderr: '' }));
+        } else {
+          process.nextTick(() => cb(null, { stdout: '', stderr: '' }));
+        }
+      });
+
+      const result = await workspaceModule.pullWorkspace();
+
+      expect(result.success).toBe(false);
+      expect(result.conflicted).toBe(true);
+      expect(result.aborted).toBe(true);
+      expect(exec).toHaveBeenCalledWith(
+        expect.stringContaining('git rebase --abort'),
+        expect.anything()
+      );
     });
   });
 
@@ -908,7 +934,7 @@ describe('Workspace Manager', () => {
 
       const result = await workspaceModule.pullWorkspace();
 
-      expect(result).toBe(false);
+      expect(result.success).toBe(false);
     });
 
     it('should handle non-Error exceptions', async () => {
@@ -919,7 +945,7 @@ describe('Workspace Manager', () => {
 
       const result = await workspaceModule.pullWorkspace();
 
-      expect(result).toBe(false);
+      expect(result.success).toBe(false);
     });
 
     it('should handle very long commit messages', async () => {

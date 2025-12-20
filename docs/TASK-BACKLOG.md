@@ -240,33 +240,20 @@ Promise.all([fetchGitHubIssues, getTeamStatus, buildDataContext])
 
 ### 🔴 KRITISCH
 
-#### TASK-012: Git Merge Conflicts nicht behandelt
-**Status:** 🐛 BUG
+#### TASK-012: Git Merge Conflicts nicht behandelt ✅ DONE
+**Status:** 🐛 BUG → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 4h
-**Datei:** `src/agents/workspace.ts:179`
 
-**Problem:**
-```typescript
-await pullWorkspace()
-// Wenn pull fehlschlägt (conflicts), wird ignoriert!
-```
+**Problem:** Pull-Fehler wurden ignoriert, Agent arbeitete auf falschem Stand
 
-**Folge:**
-- Agent commitet auf falscher branch
-- Merge conflicts können entstehen
-- PRs können nicht merged werden
-
-**Fix:**
-```typescript
-const pullResult = await pullWorkspace();
-if (!pullResult.success) {
-  if (pullResult.error?.includes('CONFLICT')) {
-    await git.merge(['--abort']);
-    throw new Error('Merge conflict detected - aborting');
-  }
-  throw new Error(`Pull failed: ${pullResult.error}`);
-}
-```
+**Lösung:** `pullWorkspace()` komplett überarbeitet:
+- Neues `PullResult` Interface: `{ success, error?, conflicted?, aborted? }`
+- Automatische Conflict-Erkennung (CONFLICT, rebase, merge)
+- Automatisches `git rebase --abort` / `git merge --abort`
+- Alle Aufrufstellen (`initializeWorkspace`, `createBranch`, `commitAndPushDirect`) prüfen jetzt das Ergebnis
+- Bei Conflicts in `initializeWorkspace`: Reset auf remote state
+- Bei Conflicts in `createBranch`: Throw mit klarer Fehlermeldung
+- Tests erweitert für Conflict-Szenarios
 
 ---
 
@@ -799,11 +786,11 @@ logger.error(sanitize({ error: e }));
 
 | Priorität | Anzahl Tasks | Offen | Geschätzter Aufwand |
 |-----------|--------------|-------|---------------------|
-| 🔴 KRITISCH | 8 | 3 | ~31h |
+| 🔴 KRITISCH | 8 | 2 | ~27h |
 | 🟠 HOCH | 14 | 11 | ~60h |
 | 🟡 MITTEL | 10 | 9 | ~34h |
 | 🟢 NIEDRIG | 4 | 4 | ~12h |
-| **GESAMT** | **36** | **27 offen** | **~137h** |
+| **GESAMT** | **36** | **26 offen** | **~133h** |
 
 > **Update 2025-12-20:**
 > - 4 Quick Wins erledigt (TASK-003, TASK-010, TASK-014, TASK-020)
@@ -812,12 +799,13 @@ logger.error(sanitize({ error: e }));
 > - TASK-018 erledigt (fetch-validated MCP Server)
 > - TASK-001 erledigt (Atomic Queue Pattern mit RPOPLPUSH)
 > - **Sprint 1 komplett!** Alle Security & Critical Bugs erledigt
+> - TASK-012 erledigt (Git Merge Conflict Handling)
 
 ### Nach Kategorie
 
 | Kategorie | Anzahl | Offen |
 |-----------|--------|-------|
-| 🐛 BUG | 15 | 11 |
+| 🐛 BUG | 15 | 10 |
 | ⚠️ SECURITY | 6 | 2 |
 | 🔧 IMPROVEMENT | 10 | 10 |
 | ✨ FEATURE | 5 | 5 |
@@ -838,7 +826,7 @@ logger.error(sanitize({ error: e }));
 - ~~TASK-001: Task Queue Race Condition~~ ✅ Atomic RPOPLPUSH Pattern
 
 **Sprint 2 (Stability):**
-- TASK-012: Git Merge Conflicts
+- ~~TASK-012: Git Merge Conflicts~~ ✅ PullResult Interface + Auto-Abort
 - TASK-016: Redis Streams Migration
 - TASK-032: Circuit Breaker
 - TASK-027: Dashboard Error Handling
