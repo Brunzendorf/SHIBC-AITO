@@ -321,28 +321,30 @@ try {
 
 ### 🟠 HOCH
 
-#### TASK-016: Pub/Sub keine Message Garantie
-**Status:** 🔧 IMPROVEMENT
-**Aufwand:** 6h
-**Datei:** `src/lib/redis.ts`
+#### TASK-016: Pub/Sub keine Message Garantie ✅ PARTIAL
+**Status:** 🔧 IMPROVEMENT → ✅ INFRASTRUKTUR ERLEDIGT (2025-12-20)
+**Aufwand:** 6h (Phase 1: 3h erledigt)
 
 **Problem:**
 - Pub/Sub ist fire-and-forget
 - Wenn subscriber nicht verbunden → Message verloren
 - Kritische decisions/tasks können verloren gehen
 
-**Fix:**
-Migriere zu Redis Streams:
-```typescript
-// Statt publish:
-await redis.xadd('stream:agent:ceo', '*', 'message', JSON.stringify(msg));
+**Lösung (Phase 1 - Infrastruktur):**
+`src/lib/redis.ts` - Redis Streams Funktionen implementiert:
+- `streams` - Stream Key Patterns parallel zu channels
+- `publishToStream()` - XADD mit MAXLEN
+- `createConsumerGroup()` - XGROUP CREATE mit MKSTREAM
+- `readFromStream()` - XREADGROUP BLOCK für Consumer Groups
+- `acknowledgeMessages()` - XACK für guaranteed delivery
+- `getPendingMessages()` - XPENDING für Crash Recovery
+- `claimPendingMessages()` - XCLAIM für Dead Consumer Recovery
+- `publishWithGuarantee()` - Hybrid Pub/Sub + Stream
 
-// Statt subscribe:
-await redis.xread('BLOCK', '0', 'STREAMS', 'stream:agent:ceo', '$');
-
-// Consumer groups für guaranteed delivery:
-await redis.xgroup('CREATE', 'stream:agent:ceo', 'ceo-consumers', '$');
-```
+**TODO (Phase 2 - Daemon Migration):**
+- Daemon auf Consumer Groups umstellen
+- Recovery-Loop für pending Messages
+- Events.ts auf Streams migrieren
 
 ---
 
@@ -823,7 +825,7 @@ logger.error(sanitize({ error: e }));
 
 **Sprint 2 (Stability):**
 - ~~TASK-012: Git Merge Conflicts~~ ✅ PullResult Interface + Auto-Abort
-- TASK-016: Redis Streams Migration
+- ~~TASK-016: Redis Streams~~ ✅ PARTIAL - Infrastruktur implementiert
 - ~~TASK-032: Circuit Breaker~~ ✅ opossum + GitHub API geschützt
 - TASK-027: Dashboard Error Handling
 
