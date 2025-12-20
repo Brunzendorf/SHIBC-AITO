@@ -6,6 +6,7 @@
  * GitHub issues or self-assigns work.
  */
 
+import crypto from 'crypto';
 import { createLogger } from '../lib/logger.js';
 import { search } from '../lib/rag.js';
 import { redis, publisher, channels } from '../lib/redis.js';
@@ -362,6 +363,17 @@ const INITIATIVE_CREATED_KEY = 'initiatives:created';
 const INITIATIVE_COOLDOWN_KEY = 'initiatives:cooldown';
 const FOCUS_KEY = 'settings:focus';
 
+/**
+ * Generate collision-resistant hash for initiative deduplication
+ * TASK-008: Previous simple regex-based hash had collisions (e.g., "activate twitter" vs "activate-twitter")
+ */
+function generateInitiativeHash(title: string): string {
+  return crypto.createHash('sha256')
+    .update(title.toLowerCase().trim())
+    .digest('hex')
+    .slice(0, 16); // 16 hex chars = 64 bits, sufficient for deduplication
+}
+
 // Focus settings interface
 interface FocusSettings {
   revenueFocus: number;
@@ -443,7 +455,8 @@ function calculateInitiativeScore(initiative: Initiative, focus: FocusSettings, 
  */
 async function wasInitiativeCreated(title: string): Promise<boolean> {
   // First, check Redis cache (fast path)
-  const hash = title.toLowerCase().replace(/[^a-z0-9]/g, '');
+  // TASK-008: Use SHA256 hash to prevent collisions
+  const hash = generateInitiativeHash(title);
   const inRedis = await redis.sismember(INITIATIVE_CREATED_KEY, hash) === 1;
   if (inRedis) {
     logger.debug({ title }, 'Initiative found in Redis cache');
@@ -515,9 +528,10 @@ function calculateSimilarity(a: string, b: string): number {
 
 /**
  * Mark an initiative as created
+ * TASK-008: Use SHA256 hash to prevent collisions
  */
 async function markInitiativeCreated(title: string): Promise<void> {
-  const hash = title.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const hash = generateInitiativeHash(title);
   await redis.sadd(INITIATIVE_CREATED_KEY, hash);
 }
 

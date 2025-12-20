@@ -164,11 +164,14 @@ subscriber.on('message', async (channel, data) => {
 });
 
 // Task Queue
+/**
+ * Push task to queue and notify agent atomically
+ * TASK-017: Uses Redis transaction (MULTI/EXEC) to ensure both operations succeed together
+ * If crash occurs between operations, either both complete or neither does
+ */
 export async function pushTask(agentId: string, task: unknown): Promise<void> {
-  await redis.lpush(channels.tasks(agentId), JSON.stringify(task));
-
-  // Wake up agent immediately - send notification via pub/sub
-  await publisher.publish(channels.agent(agentId), JSON.stringify({
+  const taskJson = JSON.stringify(task);
+  const notificationJson = JSON.stringify({
     id: crypto.randomUUID(),
     type: 'task_queued',
     from: 'orchestrator',
@@ -177,7 +180,23 @@ export async function pushTask(agentId: string, task: unknown): Promise<void> {
     priority: 'normal',
     timestamp: new Date(),
     requiresResponse: false,
-  }));
+  });
+
+  // Use transaction for atomicity - both LPUSH and PUBLISH in same transaction
+  const multi = redis.multi();
+  multi.lpush(channels.tasks(agentId), taskJson);
+  multi.publish(channels.agent(agentId), notificationJson);
+
+  const results = await multi.exec();
+
+  // Check for errors in transaction
+  if (results) {
+    for (const [err] of results) {
+      if (err) {
+        throw err;
+      }
+    }
+  }
 }
 
 export async function popTask(agentId: string): Promise<unknown | null> {

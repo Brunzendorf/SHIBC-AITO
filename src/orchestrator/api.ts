@@ -13,6 +13,18 @@ import crypto from 'crypto';
 import { benchmarkRunner, BENCHMARK_TASKS } from '../lib/llm/benchmark.js';
 import type { BenchmarkTest } from '../lib/llm/benchmark.js';
 import { withTraceAsync, generateTraceId, getTraceId, TRACE_HEADER, SPAN_HEADER } from '../lib/tracing.js';
+// TASK-024: Request validation schemas
+import {
+  validate,
+  createTaskSchema,
+  updateTaskStatusSchema,
+  humanDecisionSchema,
+  sendMessageSchema,
+  broadcastSchema,
+  focusSettingsSchema,
+  addDomainWhitelistSchema,
+  runBenchmarkSchema,
+} from './validation.js';
 
 const logger = createLogger('api');
 
@@ -267,8 +279,8 @@ app.get('/tasks/agent/:id', asyncHandler(async (req, res) => {
   sendResponse(res, tasks);
 }));
 
-// Create task
-app.post('/tasks', asyncHandler(async (req, res) => {
+// Create task (TASK-024: validated)
+app.post('/tasks', validate(createTaskSchema), asyncHandler(async (req, res) => {
   const { title, description, assignedTo, createdBy, priority, dueDate } = req.body;
 
   const task = await taskRepo.create({
@@ -284,8 +296,8 @@ app.post('/tasks', asyncHandler(async (req, res) => {
   sendResponse(res, task, 201);
 }));
 
-// Update task status
-app.patch('/tasks/:id/status', asyncHandler(async (req, res) => {
+// Update task status (TASK-024: validated)
+app.patch('/tasks/:id/status', validate(updateTaskStatusSchema), asyncHandler(async (req, res) => {
   const taskId = req.params.id;
   const { status, result } = req.body;
 
@@ -449,14 +461,10 @@ app.get('/decisions/:id', asyncHandler(async (req, res) => {
   sendResponse(res, decision);
 }));
 
-// Human decision on escalated decision
-app.post('/decisions/:id/human-decision', asyncHandler(async (req, res) => {
+// Human decision on escalated decision (TASK-024: validated)
+app.post('/decisions/:id/human-decision', validate(humanDecisionSchema), asyncHandler(async (req, res) => {
   const { id } = req.params;
   const { decision, reason } = req.body;
-
-  if (!decision || !['approve', 'reject'].includes(decision)) {
-    return sendError(res, 'Invalid decision. Must be "approve" or "reject"', 400);
-  }
 
   const existingDecision = await decisionRepo.findById(id);
   if (!existingDecision) {
@@ -521,14 +529,10 @@ app.post('/escalations/:id/respond', asyncHandler(async (req, res) => {
 
 // === Human-to-Agent Messaging ===
 
-// Send message to specific agent (Human Oversight → Agent)
-app.post('/agents/:type/message', asyncHandler(async (req, res) => {
+// Send message to specific agent (Human Oversight → Agent) (TASK-024: validated)
+app.post('/agents/:type/message', validate(sendMessageSchema), asyncHandler(async (req, res) => {
   const { type } = req.params;
-  const { message, priority = 'normal' } = req.body;
-
-  if (!message || typeof message !== 'string') {
-    return sendError(res, 'Message is required', 400);
-  }
+  const { message, priority } = req.body;
 
   // Find agent by type
   const agent = await agentRepo.findByType(type as AgentType);
@@ -573,13 +577,9 @@ app.post('/agents/:type/message', asyncHandler(async (req, res) => {
   }, 201);
 }));
 
-// Broadcast message to all agents
-app.post('/broadcast', asyncHandler(async (req, res) => {
-  const { message, priority = 'normal' } = req.body;
-
-  if (!message || typeof message !== 'string') {
-    return sendError(res, 'Message is required', 400);
-  }
+// Broadcast message to all agents (TASK-024: validated)
+app.post('/broadcast', validate(broadcastSchema), asyncHandler(async (req, res) => {
+  const { message, priority } = req.body;
 
   const messagePayload = {
     id: crypto.randomUUID(),
@@ -723,14 +723,14 @@ app.get('/initiatives', asyncHandler(async (_req, res) => {
   sendResponse(res, initiatives);
 }));
 
-// Update focus settings
-app.post('/focus', asyncHandler(async (req, res) => {
+// Update focus settings (TASK-024: validated - Zod handles min/max)
+app.post('/focus', validate(focusSettingsSchema), asyncHandler(async (req, res) => {
   const settings: FocusSettings = {
-    revenueFocus: Math.max(0, Math.min(100, req.body.revenueFocus ?? DEFAULT_FOCUS.revenueFocus)),
-    communityGrowth: Math.max(0, Math.min(100, req.body.communityGrowth ?? DEFAULT_FOCUS.communityGrowth)),
-    marketingVsDev: Math.max(0, Math.min(100, req.body.marketingVsDev ?? DEFAULT_FOCUS.marketingVsDev)),
-    riskTolerance: Math.max(0, Math.min(100, req.body.riskTolerance ?? DEFAULT_FOCUS.riskTolerance)),
-    timeHorizon: Math.max(0, Math.min(100, req.body.timeHorizon ?? DEFAULT_FOCUS.timeHorizon)),
+    revenueFocus: req.body.revenueFocus ?? DEFAULT_FOCUS.revenueFocus,
+    communityGrowth: req.body.communityGrowth ?? DEFAULT_FOCUS.communityGrowth,
+    marketingVsDev: req.body.marketingVsDev ?? DEFAULT_FOCUS.marketingVsDev,
+    riskTolerance: req.body.riskTolerance ?? DEFAULT_FOCUS.riskTolerance,
+    timeHorizon: req.body.timeHorizon ?? DEFAULT_FOCUS.timeHorizon,
     updatedAt: new Date().toISOString(),
     updatedBy: req.body.updatedBy || 'dashboard',
   };
@@ -853,13 +853,9 @@ app.get('/whitelist/categories', asyncHandler(async (_req, res) => {
   sendResponse(res, categories);
 }));
 
-// Add domain to whitelist (manual)
-app.post('/whitelist', asyncHandler(async (req, res) => {
-  const { domain, category, description, addedBy = 'human' } = req.body;
-
-  if (!domain || !category) {
-    return sendError(res, 'Domain and category are required', 400);
-  }
+// Add domain to whitelist (manual) (TASK-024: validated)
+app.post('/whitelist', validate(addDomainWhitelistSchema), asyncHandler(async (req, res) => {
+  const { domain, category, description, addedBy } = req.body;
 
   const result = await domainWhitelistRepo.add(domain, category, description, addedBy);
   logger.info({ domain, category, addedBy }, 'Domain added to whitelist');
@@ -1097,8 +1093,8 @@ app.get('/benchmarks/latest', asyncHandler(async (_req, res) => {
   }
 }));
 
-// Run new benchmark (async, returns immediately)
-app.post('/benchmarks/run', asyncHandler(async (req, res) => {
+// Run new benchmark (async, returns immediately) (TASK-024: validated)
+app.post('/benchmarks/run', validate(runBenchmarkSchema), asyncHandler(async (req, res) => {
   const { models, tasks, description, enableTools } = req.body as {
     models?: BenchmarkTest['models'];
     tasks?: typeof BENCHMARK_TASKS;

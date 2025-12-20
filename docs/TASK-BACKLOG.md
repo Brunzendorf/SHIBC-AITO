@@ -40,27 +40,19 @@
 
 ---
 
-#### TASK-002: loopInProgress schützt nicht vor Message Overlap
-**Status:** 🐛 BUG
+#### TASK-002: loopInProgress schützt nicht vor Message Overlap ✅ DONE
+**Status:** 🐛 BUG → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 3h
-**Datei:** `src/agents/daemon.ts:528-530`
+**Datei:** `src/agents/daemon.ts`
 
-**Problem:**
-```typescript
-if (this.loopInProgress) {
-  logger.debug({ trigger }, 'Loop already in progress, skipping');
-  return;
-}
-```
+**Problem:** `handleMessage()` wurde während aktivem loop ausgeführt - parallele State-Updates konnten konflikten
 
-- Verhindert nur geteilten `runLoop()` Start
-- `handleMessage()` wird trotzdem ausgeführt während loop läuft
-- Parallele RAG-Searches, State-Updates können konflikten
-
-**Fix:**
-1. Message-Queue für incoming messages während loop
-2. Semaphore für exclusive access
-3. Oder: Messages queuen und nach loop-end verarbeiten
+**Lösung:**
+- `pendingMessages` Queue für Messages während loop
+- `processingMessages` Flag verhindert konkurrierende Verarbeitung
+- `handleMessage()` queued AI-Messages wenn `loopInProgress`
+- `processQueuedMessages()` verarbeitet Queue nach Loop-Ende
+- `setImmediate()` für saubere Call-Stack-Trennung
 
 ---
 
@@ -76,20 +68,19 @@ if (this.loopInProgress) {
 
 ### 🟠 HOCH
 
-#### TASK-004: Kein Retry-Mechanism für Actions
-**Status:** 🔧 IMPROVEMENT
+#### TASK-004: Kein Retry-Mechanism für Actions ✅ DONE
+**Status:** 🔧 IMPROVEMENT → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 4h
-**Datei:** `src/agents/daemon.ts:1085-1694`
+**Datei:** `src/agents/daemon.ts`
 
-**Problem:**
-- `processAction()` hat keinen Retry bei Fehlern
-- Wenn `spawn_worker` fehlschlägt, wird es nicht wiederholt
-- Kein Dead-Letter Queue für failed actions
+**Problem:** `processAction()` hatte keinen Retry bei Fehlern
 
-**Fix:**
-1. Retry-Wrapper um `processAction()`
-2. Max 3 Retries mit exponential backoff
-3. Failed actions in `queue:failed:${agentType}` speichern
+**Lösung:**
+- `executeActionWithRetry()` wrapper mit exponential backoff (1s, 2s, 4s)
+- Max 3 Retries pro Action
+- `logFailedAction()` schreibt in Dead-Letter Queue `queue:failed:${agentType}`
+- Queue begrenzt auf letzte 100 failed actions
+- Beide `processAction` Call-Sites aktualisiert
 
 ---
 
@@ -160,25 +151,17 @@ const currentState = await this.state.getAll();
 
 ### 🟠 HOCH
 
-#### TASK-008: Hash-Kollision bei Duplikat-Erkennung
-**Status:** 🐛 BUG
+#### TASK-008: Hash-Kollision bei Duplikat-Erkennung ✅ DONE
+**Status:** 🐛 BUG → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 2h
-**Datei:** `src/agents/initiative.ts:316`
+**Datei:** `src/agents/initiative.ts`
 
-**Problem:**
-```typescript
-hash = title.toLowerCase().replace(/[^a-z0-9]/g, '');
-// "activate twitter" → "activatetwitter"
-// "activate-twitter" → "activatetwitter" (SAME HASH!)
-```
+**Problem:** Simple regex hash verursachte Kollisionen ("activate twitter" = "activate-twitter")
 
-**Folge:** False positives bei Duplikat-Erkennung
-
-**Fix:**
-```typescript
-import crypto from 'crypto';
-const hash = crypto.createHash('sha256').update(title.toLowerCase()).digest('hex').slice(0, 16);
-```
+**Lösung:**
+- `generateInitiativeHash()` Funktion mit SHA256
+- 16 hex chars (64 bit) für ausreichende Entropie
+- `wasInitiativeCreated()` und `markInitiativeCreated()` aktualisiert
 
 ---
 
@@ -348,26 +331,17 @@ try {
 
 ---
 
-#### TASK-017: Task Queue nicht atomic
-**Status:** 🐛 BUG
+#### TASK-017: Task Queue nicht atomic ✅ DONE
+**Status:** 🐛 BUG → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 2h
-**Datei:** `src/lib/redis.ts:131-134`
+**Datei:** `src/lib/redis.ts`
 
-**Problem:**
-```typescript
-await redis.lpush(queueKey, task); // Zeile 131
-await publisher.publish(channel, notification); // Zeile 134
-// Wenn zwischen diesen Zeilen crash → notification lost
-```
+**Problem:** `lpush` und `publish` waren separate Operationen - Crash dazwischen verlor Notification
 
-**Fix:**
-```typescript
-// Use Redis transaction
-const multi = redis.multi();
-multi.lpush(queueKey, task);
-multi.publish(channel, notification);
-await multi.exec();
-```
+**Lösung:**
+- `pushTask()` verwendet jetzt `redis.multi()` Transaction
+- LPUSH und PUBLISH in einer atomaren Operation
+- Error checking nach `multi.exec()`
 
 ---
 
@@ -478,30 +452,24 @@ getDryRunInstructions() // Nur Text!
 
 ### 🟠 HOCH
 
-#### TASK-024: Keine Request Validation
-**Status:** 🐛 BUG
+#### TASK-024: Keine Request Validation ✅ DONE
+**Status:** 🐛 BUG → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 4h
-**Datei:** `src/orchestrator/api.ts:121`
+**Datei:** `src/orchestrator/api.ts`, `src/orchestrator/validation.ts`
 
-**Problem:**
-```typescript
-parseInt(req.query.limit as string) // Keine Validation!
-// "abc" → NaN
-```
+**Problem:** API Endpoints hatten keine Request-Body/Query Validierung
 
-**Fix:**
-```typescript
-import { z } from 'zod';
-
-const querySchema = z.object({
-  limit: z.string().regex(/^\d+$/).transform(Number).optional()
-});
-
-const parsed = querySchema.safeParse(req.query);
-if (!parsed.success) {
-  return res.status(400).json({ error: parsed.error });
-}
-```
+**Lösung:**
+- Neues Modul `src/orchestrator/validation.ts` mit Zod Schemas
+- `validate()` Middleware-Factory für einfache Integration
+- 9 kritische Endpoints validiert:
+  - POST /tasks, PATCH /tasks/:id/status
+  - POST /decisions/:id/human-decision
+  - POST /agents/:type/message, POST /broadcast
+  - POST /focus
+  - POST /whitelist
+  - POST /benchmarks/run
+- Automatic coercion für numerische Werte
 
 ---
 
@@ -717,32 +685,20 @@ export function useWebSocket() {
 
 ---
 
-#### TASK-035: Logger kann Secrets exposen
-**Status:** ⚠️ SECURITY
+#### TASK-035: Logger kann Secrets exposen ✅ DONE
+**Status:** ⚠️ SECURITY → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 4h
 **Datei:** `src/lib/logger.ts`
 
-**Problem:**
-```typescript
-logger.error({ error: e }) // e könnte Token enthalten
-```
+**Problem:** Logger konnte sensitive Daten in Logs schreiben
 
-**Fix:**
-```typescript
-// Sanitizer middleware
-const sanitize = (obj: any) => {
-  const sanitized = { ...obj };
-  const sensitiveKeys = ['token', 'password', 'secret', 'key'];
-  for (const key of Object.keys(sanitized)) {
-    if (sensitiveKeys.some(s => key.toLowerCase().includes(s))) {
-      sanitized[key] = '***REDACTED***';
-    }
-  }
-  return sanitized;
-};
-
-logger.error(sanitize({ error: e }));
-```
+**Lösung:**
+- `SENSITIVE_PATTERNS` Array für erkennung (token, password, secret, key, auth, etc.)
+- `sanitizeObject()` - Deep sanitization mit rekursiver Objektverarbeitung
+- `sanitizeString()` - Regex-basierte Token-Maskierung (GitHub, Bearer, OpenAI, Slack)
+- Pino `serializers` für err, error, req, res
+- Pino `redact` für bekannte Pfade (headers.authorization, body.password, etc.)
+- Max depth protection gegen infinite recursion
 
 ---
 
@@ -842,6 +798,14 @@ logger.error(sanitize({ error: e }));
 - ~~TASK-033: Distributed Tracing~~ ✅ Erledigt
 - ~~TASK-028: WebSocket Connection~~ ✅ Bereits implementiert
 - ~~TASK-026: Missing Endpoints~~ ✅ Erledigt
+
+**Sprint 4 (Resilience & Security):** ✅ KOMPLETT
+- ~~TASK-002: Message Overlap Protection~~ ✅ Message Queue + processQueuedMessages()
+- ~~TASK-004: Action Retry Mechanism~~ ✅ Exponential Backoff + Dead-Letter Queue
+- ~~TASK-008: Hash-Kollision Fix~~ ✅ SHA256 Hash für Initiative-Deduplication
+- ~~TASK-017: Task Queue atomic~~ ✅ Redis MULTI/EXEC Transaction
+- ~~TASK-035: Logger Secrets Sanitization~~ ✅ Pino Serializers + Redact Middleware
+- ~~TASK-024: Request Validation (Zod)~~ ✅ 9 kritische Endpoints validiert
 
 ---
 

@@ -117,6 +117,9 @@ export class AgentDaemon {
   private isRunning = false;
   private claudeAvailable = false;
   private loopInProgress = false; // Prevents concurrent loops
+  // TASK-002: Message queue for messages received during loop execution
+  private pendingMessages: Array<{ message: AgentMessage; channel: string }> = [];
+  private processingMessages = false; // Prevents concurrent message processing
 
   constructor(daemonConfig: DaemonConfig) {
     this.config = daemonConfig;
@@ -288,13 +291,27 @@ export class AgentDaemon {
 
   /**
    * Handle incoming message
+   * TASK-002: Queue messages when loop is in progress to prevent state conflicts
    */
   private async handleMessage(message: AgentMessage, channel: string): Promise<void> {
     logger.debug({ type: message.type, from: message.from, channel }, 'Received message');
 
     // Auto-extract state from worker_result to keep volatile state fresh
+    // This is safe to do even during loop - it only sets volatile state keys
     if (message.type === 'worker_result' && message.payload) {
       await this.extractAndSaveWorkerState(message.payload as Record<string, unknown>);
+    }
+
+    // TASK-002: Queue messages that need AI processing if loop is in progress
+    if (this.loopInProgress || this.processingMessages) {
+      const needsAI = this.shouldTriggerAI(message);
+      if (needsAI) {
+        logger.debug({ type: message.type, queueLength: this.pendingMessages.length + 1 },
+          'Loop in progress, queueing message for later processing');
+        this.pendingMessages.push({ message, channel });
+        return;
+      }
+      // Simple messages that don't need AI can still be handled immediately
     }
 
     // Determine if we need to trigger AI
@@ -307,6 +324,39 @@ export class AgentDaemon {
       // Handle simple events without AI
       await this.handleSimpleMessage(message);
     }
+  }
+
+  /**
+   * TASK-002: Process queued messages after loop completes
+   * Called at the end of runLoop to handle messages that arrived during execution
+   */
+  private async processQueuedMessages(): Promise<void> {
+    if (this.pendingMessages.length === 0) return;
+
+    this.processingMessages = true;
+    const messagesToProcess = [...this.pendingMessages];
+    this.pendingMessages = []; // Clear queue before processing
+
+    logger.info({ count: messagesToProcess.length }, 'Processing queued messages');
+
+    for (const { message, channel } of messagesToProcess) {
+      try {
+        // Re-check if message still needs AI (state may have changed)
+        const needsAI = this.shouldTriggerAI(message);
+
+        if (needsAI) {
+          logger.info({ type: message.type }, 'Processing queued message with AI');
+          await this.runLoop('queued_message', message);
+        } else {
+          await this.handleSimpleMessage(message);
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logger.error({ error: errMsg, messageType: message.type, channel }, 'Error processing queued message');
+      }
+    }
+
+    this.processingMessages = false;
   }
 
   /**
@@ -741,10 +791,10 @@ export class AgentDaemon {
             }
           }
 
-          // Process actions
+          // Process actions with retry logic (TASK-004)
           if (parsed.actions) {
             for (const action of parsed.actions) {
-              await this.processAction(action);
+              await this.executeActionWithRetry(action);
             }
           }
 
@@ -1001,6 +1051,18 @@ export class AgentDaemon {
     } finally {
       // Always release the lock
       this.loopInProgress = false;
+
+      // TASK-002: Process any messages that arrived during the loop
+      // This happens after lock is released to allow proper re-entry
+      if (this.pendingMessages.length > 0) {
+        // Use setImmediate to allow current call stack to complete
+        setImmediate(() => {
+          this.processQueuedMessages().catch((err) => {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            logger.error({ error: errMsg }, 'Error processing queued messages');
+          });
+        });
+      }
     }
   }
 
@@ -1074,10 +1136,10 @@ export class AgentDaemon {
         return;
       }
 
-      // Process any propose_initiative actions
+      // Process any propose_initiative actions with retry logic (TASK-004)
       for (const action of parsed.actions) {
         if (action.type === 'propose_initiative') {
-          await this.processAction(action);
+          await this.executeActionWithRetry(action);
         }
       }
 
@@ -1112,6 +1174,65 @@ export class AgentDaemon {
 
     await publisher.publish(channel, JSON.stringify(message));
     logger.debug({ to, channel }, 'Message sent');
+  }
+
+  /**
+   * TASK-004: Execute action with retry logic
+   * Retries up to 3 times with exponential backoff
+   * Failed actions are logged to dead-letter queue
+   */
+  private async executeActionWithRetry(action: { type: string; data?: unknown }): Promise<void> {
+    const maxRetries = 3;
+    const baseDelay = 1000; // 1 second
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        await this.processAction(action);
+        return; // Success
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logger.warn({
+          actionType: action.type,
+          attempt,
+          maxRetries,
+          error: errMsg,
+        }, 'Action failed, will retry');
+
+        if (attempt < maxRetries) {
+          // Exponential backoff: 1s, 2s, 4s
+          const delay = baseDelay * Math.pow(2, attempt - 1);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        } else {
+          // Max retries exhausted - log to dead-letter queue
+          logger.error({
+            actionType: action.type,
+            attempts: maxRetries,
+            error: errMsg,
+          }, 'Action failed after max retries, adding to dead-letter queue');
+
+          await this.logFailedAction(action, errMsg);
+        }
+      }
+    }
+  }
+
+  /**
+   * TASK-004: Log failed action to Redis dead-letter queue for later analysis
+   */
+  private async logFailedAction(action: { type: string; data?: unknown }, error: string): Promise<void> {
+    const failedAction = {
+      action,
+      error,
+      agentType: this.config.agentType,
+      agentId: this.config.agentId,
+      timestamp: new Date().toISOString(),
+    };
+
+    const deadLetterKey = `queue:failed:${this.config.agentType}`;
+    await redis.lpush(deadLetterKey, JSON.stringify(failedAction));
+
+    // Keep only last 100 failed actions per agent
+    await redis.ltrim(deadLetterKey, 0, 99);
   }
 
   /**
