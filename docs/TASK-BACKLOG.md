@@ -775,11 +775,11 @@ logger.error(sanitize({ error: e }));
 
 | Priorität | Anzahl Tasks | Offen | Geschätzter Aufwand |
 |-----------|--------------|-------|---------------------|
-| 🔴 KRITISCH | 8 | 2 | ~27h |
-| 🟠 HOCH | 14 | 11 | ~60h |
-| 🟡 MITTEL | 10 | 9 | ~34h |
+| 🔴 KRITISCH | 8 | 1 | ~24h |
+| 🟠 HOCH | 14 | 9 | ~48h |
+| 🟡 MITTEL | 10 | 8 | ~30h |
 | 🟢 NIEDRIG | 4 | 4 | ~12h |
-| **GESAMT** | **36** | **26 offen** | **~133h** |
+| **GESAMT** | **36** | **22 offen** | **~114h** |
 
 > **Update 2025-12-20:**
 > - 4 Quick Wins erledigt (TASK-003, TASK-010, TASK-014, TASK-020)
@@ -789,15 +789,19 @@ logger.error(sanitize({ error: e }));
 > - TASK-001 erledigt (Atomic Queue Pattern mit RPOPLPUSH)
 > - **Sprint 1 komplett!** Alle Security & Critical Bugs erledigt
 > - TASK-012 erledigt (Git Merge Conflict Handling)
+> - TASK-016 erledigt (Redis Streams Infrastruktur)
+> - TASK-032 erledigt (Circuit Breaker für GitHub API)
+> - TASK-027 erledigt (Dashboard Error Handling)
+> - **Sprint 2 komplett!** Alle Stability-Tasks erledigt
 
 ### Nach Kategorie
 
-| Kategorie | Anzahl | Offen |
-|-----------|--------|-------|
-| 🐛 BUG | 15 | 10 |
-| ⚠️ SECURITY | 6 | 2 |
-| 🔧 IMPROVEMENT | 10 | 10 |
-| ✨ FEATURE | 5 | 5 |
+| Kategorie | Anzahl | Offen | Erledigt |
+|-----------|--------|-------|----------|
+| 🐛 BUG | 15 | 7 | 8 |
+| ⚠️ SECURITY | 6 | 2 | 4 |
+| 🔧 IMPROVEMENT | 10 | 8 | 2 |
+| ✨ FEATURE | 5 | 5 | 0 |
 
 ### Quick Wins (< 2h) ✅ ALLE ERLEDIGT
 
@@ -814,17 +818,17 @@ logger.error(sanitize({ error: e }));
 - ~~TASK-018: Domain Whitelist Enforcement~~ ✅ fetch-validated MCP Server
 - ~~TASK-001: Task Queue Race Condition~~ ✅ Atomic RPOPLPUSH Pattern
 
-**Sprint 2 (Stability):**
+**Sprint 2 (Stability):** ✅ KOMPLETT
 - ~~TASK-012: Git Merge Conflicts~~ ✅ PullResult Interface + Auto-Abort
-- ~~TASK-016: Redis Streams~~ ✅ PARTIAL - Infrastruktur implementiert
+- ~~TASK-016: Redis Streams~~ ✅ Infrastruktur implementiert (Phase 2 TODO)
 - ~~TASK-032: Circuit Breaker~~ ✅ opossum + GitHub API geschützt
 - ~~TASK-027: Dashboard Error Handling~~ ✅ ErrorBoundary + Retry Logic
 
-**Sprint 3 (Quality):**
-- TASK-036: Test Coverage
-- TASK-033: Distributed Tracing
-- TASK-028: WebSocket Connection
-- TASK-026: Missing Endpoints
+**Sprint 3 (Quality):** 🚀 AKTUELL
+- TASK-036: Test Coverage (8h)
+- TASK-033: Distributed Tracing (6h)
+- TASK-028: WebSocket Connection (4h)
+- TASK-026: Missing Endpoints (3h)
 
 ---
 
