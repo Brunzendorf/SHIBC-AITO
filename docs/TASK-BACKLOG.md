@@ -84,50 +84,34 @@
 
 ---
 
-#### TASK-005: Initiative-Phase nur bei "scheduled" Trigger
-**Status:** 🔧 IMPROVEMENT
+#### TASK-005: Initiative-Phase nur bei "scheduled" Trigger ✅ DONE
+**Status:** 🔧 IMPROVEMENT → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 2h
-**Datei:** `src/agents/daemon.ts:926-958`
+**Datei:** `src/agents/daemon.ts`, `src/agents/initiative.ts`
 
-**Problem:**
-```typescript
-if (trigger === 'scheduled') {
-  // Initiative phase runs
-}
-```
+**Problem:** C-Level agents verpassten Initiative-Chance bei task reactions
 
-- C-Level agents verpassen Initiative-Chance bei task reactions
-- Nach Task-Bearbeitung sollte auch Initiative möglich sein
-
-**Fix:**
-```typescript
-// Run initiative if:
-// 1. Scheduled loop OR
-// 2. Queue empty after task processing AND cooldown passed
-if (trigger === 'scheduled' || (trigger !== 'queue_continuation' && await canGenerateInitiative())) {
-  await runInitiativePhase();
-}
-```
+**Lösung:**
+- `canRunInitiative()` Export aus initiative.ts für Cooldown-Check
+- Erweiterte Trigger-Logik: Initiative läuft bei scheduled ODER wenn Queue leer nach Task-Processing
+- `queue_continuation` Trigger ausgeschlossen von Initiative-Phase
 
 ---
 
 ### 🟡 MITTEL
 
-#### TASK-006: Performance - Unnötige State-Abfrage
-**Status:** 🔧 IMPROVEMENT
+#### TASK-006: Performance - Unnötige State-Abfrage ✅ DONE
+**Status:** 🔧 IMPROVEMENT → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 1h
-**Datei:** `src/agents/daemon.ts:543`
+**Datei:** `src/agents/state.ts`, `src/agents/daemon.ts`
 
-**Problem:**
-```typescript
-const currentState = await this.state.getAll();
-// currentState wird später nur für loopPrompt verwendet
-```
+**Problem:** Bei jedem loop wurde kompletter State (1000+ keys) geladen
 
-- Bei jedem loop wird kompletter state geladen
-- Bei 1000+ state keys = langsam
-
-**Fix:** Lazy loading oder nur benötigte keys laden
+**Lösung:**
+- `ESSENTIAL_STATE_KEYS` Konstante mit 6 benötigten Keys
+- `getEssential()` Methode im StateManager lädt nur essentielle Keys
+- Main loop nutzt `getEssential()` statt `getAll()`
+- Performance-Gewinn: 6 Queries statt kompletter State-Dump
 
 ---
 
@@ -165,26 +149,17 @@ const currentState = await this.state.getAll();
 
 ---
 
-#### TASK-009: GitHub API Error zu permissiv
-**Status:** 🐛 BUG
+#### TASK-009: GitHub API Error zu permissiv ✅ DONE
+**Status:** 🐛 BUG → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 2h
-**Datei:** `src/agents/initiative.ts:366-369`
+**Datei:** `src/agents/initiative.ts`
 
-**Problem:**
-```typescript
-} catch (error) {
-  logger.warn({ error }, 'GitHub search failed');
-  continue; // Schluckt ALLE Fehler!
-}
-```
+**Problem:** Rate-limited API führte zu false-positive "not duplicate"
 
-- Wenn search API rate-limited ist → false-positive "not duplicate"
-- Neue Issues werden erstellt obwohl Duplikate existieren
-
-**Fix:**
-1. Unterscheide zwischen rate-limit und anderen Fehlern
-2. Bei rate-limit: Retry mit backoff
-3. Bei network error: Fail loudly
+**Lösung:**
+- Rate-Limit Erkennung (403, 429, "rate limit" Message)
+- Bei Rate-Limit: Assume duplicate (safe default) statt neue Issue
+- Logging warnt bei Rate-Limit für Troubleshooting
 
 ---
 
@@ -240,25 +215,19 @@ Promise.all([fetchGitHubIssues, getTeamStatus, buildDataContext])
 
 ---
 
-#### TASK-013: Stash-Logik unsicher
-**Status:** 🐛 BUG
+#### TASK-013: Stash-Logik unsicher ✅ DONE
+**Status:** 🐛 BUG → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 3h
-**Datei:** `src/agents/workspace.ts:151-188`
+**Datei:** `src/agents/workspace.ts`
 
-**Problem:**
-```typescript
-await git.stash(); // Zeile 151
-// ... operations ...
-await git.stash(['pop']); // Zeile 188 - kann feilen!
-```
+**Problem:** git stash pop kann fehlschlagen, Änderungen im Stash vergessen
 
-**Folge:** Uncommitted changes können verloren gehen
-
-**Fix:**
-1. Vor stash: Temp-branch erstellen
-2. Changes committen (WIP commit)
-3. Nach operations: Cherry-pick oder rebase
-4. Cleanup temp-branch
+**Lösung:**
+- WIP-Commits statt Stash (sicherer, nie "verloren")
+- `createBranch()` erstellt WIP-Commit vor Branch-Wechsel
+- Cherry-pick + reset bringt Änderungen auf neuen Branch
+- Bei Konflikt: WIP bleibt auf Original-Branch recoverable
+- Cleanup WIP-Commit vom Original-Branch nach erfolgreichem Transfer
 
 ---
 
@@ -275,28 +244,18 @@ await git.stash(['pop']); // Zeile 188 - kann feilen!
 
 ---
 
-#### TASK-015: Kein Cleanup bei PR-Workflow-Fehler
-**Status:** 🐛 BUG
+#### TASK-015: Kein Cleanup bei PR-Workflow-Fehler ✅ DONE
+**Status:** 🐛 BUG → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 2h
 **Datei:** `src/agents/workspace.ts`
 
-**Problem:**
-- Branch erstellt → Commit → Push FAILS
-- Branch bleibt dangling
-- Kein Cleanup
+**Problem:** Branch bleibt dangling nach Push-Fehler
 
-**Fix:**
-```typescript
-try {
-  await createBranch();
-  await commit();
-  await push();
-} catch (error) {
-  // Cleanup dangling branch
-  await git.branch(['-D', branchName]);
-  throw error;
-}
-```
+**Lösung:**
+- Bei Push-Fehler: Zurück zu Main-Branch wechseln
+- Dangling Feature-Branch mit `git branch -D` löschen
+- Error-Logging für Cleanup-Fehler
+- Commit bleibt lokal erhalten (nicht verloren)
 
 ---
 
@@ -473,21 +432,19 @@ getDryRunInstructions() // Nur Text!
 
 ---
 
-#### TASK-025: Unbounded Queries
-**Status:** 🔧 IMPROVEMENT
+#### TASK-025: Unbounded Queries ✅ DONE
+**Status:** 🔧 IMPROVEMENT → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 2h
-**Datei:** `src/orchestrator/api.ts:200`
+**Datei:** `src/orchestrator/api.ts`
 
-**Problem:**
-```typescript
-getRecent(limit) // default 100
-// Bei 100k events in DB = slow query
-```
+**Problem:** Unbegrenzte Limits bei DB-Queries (bei 100k events = slow)
 
-**Fix:**
-1. Hard limit: `Math.min(limit, 500)`
-2. Cursor-basierte Pagination
-3. Index auf `created_at`
+**Lösung:**
+- `MAX_QUERY_LIMIT = 500` Hard Limit
+- `parseLimit()` Helper mit automatischem Cap
+- Alle 7 Limit-Parameter in API durch parseLimit() ersetzt:
+  - `/agents/:type/history`, `/events`, `/events/agent/:id`
+  - `/workers`, `/decisions`, `/domain-approvals`, `/benchmarks/runs`
 
 ---
 

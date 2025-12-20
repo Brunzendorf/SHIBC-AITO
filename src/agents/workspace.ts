@@ -243,33 +243,48 @@ export async function pullWorkspace(): Promise<PullResult> {
 
 /**
  * Create feature branch for PR workflow
+ * TASK-013: Uses WIP commits instead of stash for safer change preservation
  */
 export async function createBranch(agentType: string, loopNumber: number): Promise<string> {
   const timestamp = new Date().toISOString().slice(0, 10); // 2024-12-11
   const branchName = `feature/${agentType}-${timestamp}-loop${loopNumber}`;
 
   try {
-    // Stash any uncommitted changes from other agents before checkout
-    // Use --include-untracked to also stash untracked files
-    let hadStash = false;
+    // TASK-013: Save uncommitted changes as WIP commit instead of stash
+    // This is safer because WIP commits are never "lost" like stash entries can be
+    let wipCommitHash: string | null = null;
+    let originalBranch: string | null = null;
+
     try {
-      const { stdout: stashResult } = await execAsync(
-        `cd ${WORKSPACE_PATH} && git stash push --include-untracked -m "auto-stash-${agentType}"`
+      // Get current branch name
+      const { stdout: currentBranch } = await execAsync(
+        `cd ${WORKSPACE_PATH} && git rev-parse --abbrev-ref HEAD`
       );
-      hadStash = !stashResult.includes('No local changes to save');
-      if (hadStash) {
-        logger.info({ agentType }, 'Stashed uncommitted changes');
+      originalBranch = currentBranch.trim();
+
+      // Check for uncommitted changes (staged + unstaged + untracked)
+      const { stdout: status } = await execAsync(`cd ${WORKSPACE_PATH} && git status --porcelain`);
+
+      if (status.trim()) {
+        // Stage all changes including untracked files
+        await execAsync(`cd ${WORKSPACE_PATH} && git add -A`);
+
+        // Create WIP commit
+        const wipMessage = `WIP: auto-save before branch switch (${agentType})`;
+        await execAsync(`cd ${WORKSPACE_PATH} && git commit -m "${wipMessage}"`);
+
+        // Get the WIP commit hash for later cherry-pick
+        const { stdout: hash } = await execAsync(`cd ${WORKSPACE_PATH} && git rev-parse HEAD`);
+        wipCommitHash = hash.trim();
+
+        logger.info({ agentType, wipCommitHash, originalBranch }, 'Created WIP commit for uncommitted changes');
       }
-    } catch (stashErr) {
-      // Stash failed, try without untracked files
-      logger.warn({ error: stashErr }, 'Stash with untracked failed, trying without');
-      try {
-        const { stdout: stashResult } = await execAsync(
-          `cd ${WORKSPACE_PATH} && git stash push -m "auto-stash-${agentType}"`
-        );
-        hadStash = !stashResult.includes('No local changes to save');
-      } catch {
-        // Stash completely failed, continue anyway
+    } catch (wipErr) {
+      // WIP commit creation failed - log but continue
+      // Changes might already be committed or no changes exist
+      const errMsg = wipErr instanceof Error ? wipErr.message : String(wipErr);
+      if (!errMsg.includes('nothing to commit')) {
+        logger.warn({ error: maskSensitiveData(errMsg) }, 'Could not create WIP commit, continuing without');
       }
     }
 
@@ -297,14 +312,45 @@ export async function createBranch(agentType: string, loopNumber: number): Promi
     await execAsync(`cd ${WORKSPACE_PATH} && git checkout -b ${branchName}`);
     logger.info({ branchName }, 'Created feature branch');
 
-    // Restore stashed changes if any
-    if (hadStash) {
+    // TASK-013: Restore WIP changes via cherry-pick and reset
+    if (wipCommitHash) {
       try {
-        await execAsync(`cd ${WORKSPACE_PATH} && git stash pop`);
-        logger.info('Restored stashed changes');
-      } catch {
-        // Stash pop may fail on conflicts, leave in stash
-        logger.warn('Could not restore stashed changes, left in stash');
+        // Cherry-pick the WIP commit to bring changes to new branch
+        await execAsync(`cd ${WORKSPACE_PATH} && git cherry-pick ${wipCommitHash}`);
+
+        // Reset the cherry-picked commit to put changes back in working tree
+        // This effectively "uncommits" the WIP while keeping all changes staged
+        await execAsync(`cd ${WORKSPACE_PATH} && git reset HEAD~1`);
+
+        logger.info({ wipCommitHash }, 'Restored WIP changes via cherry-pick');
+
+        // Clean up the WIP commit from original branch (optional, keeps history clean)
+        // Only do this if original branch still exists and is not main
+        if (originalBranch && originalBranch !== workspaceConfig.branch && originalBranch !== 'HEAD') {
+          try {
+            // Reset the original branch to before the WIP commit
+            await execAsync(`cd ${WORKSPACE_PATH} && git branch -f ${originalBranch} ${wipCommitHash}~1`);
+            logger.debug({ originalBranch }, 'Cleaned up WIP commit from original branch');
+          } catch {
+            // Cleanup failed - not critical, WIP commit just stays on original branch
+            logger.debug('Could not cleanup WIP commit from original branch - changes still safe');
+          }
+        }
+      } catch (cherryErr) {
+        // Cherry-pick failed (likely conflicts)
+        // WIP commit is still safe on original branch - user can recover
+        const errMsg = cherryErr instanceof Error ? cherryErr.message : String(cherryErr);
+        logger.warn(
+          { error: maskSensitiveData(errMsg), wipCommitHash, originalBranch },
+          'Could not restore WIP changes - commit preserved on original branch for manual recovery'
+        );
+
+        // Abort cherry-pick if in progress
+        try {
+          await execAsync(`cd ${WORKSPACE_PATH} && git cherry-pick --abort`);
+        } catch {
+          // Not in cherry-pick state, ignore
+        }
       }
     }
 
@@ -394,6 +440,19 @@ export async function commitAndCreatePR(
       } catch (retryError) {
         const retryErrMsg = retryError instanceof Error ? retryError.message : String(retryError);
         logger.error({ error: retryErrMsg, branchName }, 'Push retry also failed - commit saved locally only');
+
+        // TASK-015: Clean up dangling branch on push failure
+        // Switch back to main and delete the failed feature branch
+        if (branchName !== workspaceConfig.branch) {
+          try {
+            await execAsync(`cd ${WORKSPACE_PATH} && git checkout ${workspaceConfig.branch}`);
+            await execAsync(`cd ${WORKSPACE_PATH} && git branch -D ${branchName}`);
+            logger.info({ branchName }, 'Cleaned up dangling feature branch after push failure');
+          } catch (cleanupError) {
+            const cleanupErrMsg = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+            logger.warn({ error: cleanupErrMsg, branchName }, 'Failed to cleanup dangling branch');
+          }
+        }
       }
     }
 

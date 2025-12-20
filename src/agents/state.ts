@@ -14,6 +14,8 @@ export interface StateManager {
   set<T>(key: string, value: T): Promise<void>;
   delete(key: string): Promise<void>;
   getAll(): Promise<Record<string, unknown>>;
+  /** TASK-006: Get only essential state keys for loop prompt (performance optimization) */
+  getEssential(): Promise<Record<string, unknown>>;
   clear(): Promise<void>;
 }
 
@@ -77,6 +79,42 @@ export function createStateManager(agentId: string, agentType: AgentType): State
     },
 
     /**
+     * TASK-006: Get only essential state keys for loop prompt
+     * This is a performance optimization - instead of loading 1000+ keys,
+     * only loads the 6 keys actually needed for the loop prompt.
+     */
+    async getEssential(): Promise<Record<string, unknown>> {
+      const result: Record<string, unknown> = {};
+      try {
+        // Import ESSENTIAL_STATE_KEYS locally to avoid circular dependency issues
+        const essentialKeys = [
+          'loop_count',
+          'last_loop_at',
+          'last_loop_result',
+          'current_focus',
+          'error_count',
+          'success_count',
+        ];
+
+        // Load each key individually - faster than loading all 1000+ keys
+        await Promise.all(
+          essentialKeys.map(async (key) => {
+            const value = await stateRepo.get(agentId, key);
+            if (value !== null) {
+              result[key] = value;
+            }
+          })
+        );
+
+        logger.debug({ agentId, keyCount: Object.keys(result).length }, 'Loaded essential state');
+        return result;
+      } catch (error) {
+        logger.error({ agentId, error }, 'Failed to get essential state');
+        return result;
+      }
+    },
+
+    /**
      * Clear all state for this agent
      */
     async clear(): Promise<void> {
@@ -119,6 +157,20 @@ export const StateKeys = {
   // Custom per-agent
   CUSTOM_PREFIX: 'custom:',
 } as const;
+
+/**
+ * TASK-006: Essential state keys for loop prompt
+ * Only these keys are loaded during the main loop to avoid
+ * loading 1000+ keys which slows down the agent
+ */
+export const ESSENTIAL_STATE_KEYS = [
+  StateKeys.LOOP_COUNT,
+  StateKeys.LAST_LOOP_AT,
+  StateKeys.LAST_LOOP_RESULT,
+  StateKeys.CURRENT_FOCUS,
+  StateKeys.ERROR_COUNT,
+  StateKeys.SUCCESS_COUNT,
+] as const;
 
 /**
  * Helper to create prefixed custom keys

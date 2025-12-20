@@ -503,8 +503,23 @@ async function wasInitiativeCreated(title: string): Promise<boolean> {
       }
     }
   } catch (error) {
+    // TASK-009: Distinguish error types for proper handling
+    const isRateLimit = error instanceof Error && (
+      error.message.includes('rate limit') ||
+      error.message.includes('403') ||
+      error.message.includes('429') ||
+      error.message.includes('API rate limit exceeded')
+    );
+
+    if (isRateLimit) {
+      // Rate limited - assume duplicate to prevent creating spam issues
+      logger.warn({ error, title }, 'GitHub rate limited, assuming duplicate to be safe');
+      return true;
+    }
+
+    // For network errors or other transient failures, fall through
+    // The circuit breaker will handle repeated failures by opening
     logger.warn({ error, title }, 'Failed to check GitHub for duplicates');
-    // Fall through - don't block on GitHub errors
   }
 
   return false;
@@ -541,6 +556,14 @@ async function markInitiativeCreated(title: string): Promise<void> {
 async function isInCooldown(agentType: AgentType): Promise<boolean> {
   const key = `${INITIATIVE_COOLDOWN_KEY}:${agentType}`;
   return await redis.exists(key) === 1;
+}
+
+/**
+ * TASK-005: Check if agent can run initiative phase
+ * Exported for use by daemon to allow initiative after task processing
+ */
+export async function canRunInitiative(agentType: AgentType): Promise<boolean> {
+  return !(await isInCooldown(agentType));
 }
 
 /**

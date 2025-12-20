@@ -69,6 +69,7 @@ const mockStateManager = {
   set: vi.fn<any, any>(),
   delete: vi.fn<any, any>(),
   getAll: vi.fn<any, any>(),
+  getEssential: vi.fn<any, any>(), // TASK-006: Added for performance optimization
   clear: vi.fn<any, any>(),
 };
 
@@ -429,6 +430,7 @@ describe('AgentDaemon', () => {
       mockStateManager.get.mockResolvedValue(0);
       mockStateManager.set.mockResolvedValue(undefined);
       mockStateManager.getAll.mockResolvedValue({});
+      mockStateManager.getEssential.mockResolvedValue({});
       mockDecisionRepo.findPending.mockResolvedValue([]);
       mockRag.search.mockResolvedValue([]);
       mockGenerateSystemPrompt.mockReturnValue('System prompt');
@@ -549,6 +551,7 @@ describe('AgentDaemon', () => {
       mockStateManager.get.mockResolvedValue(0);
       mockStateManager.set.mockResolvedValue(undefined);
       mockStateManager.getAll.mockResolvedValue({});
+      mockStateManager.getEssential.mockResolvedValue({});
       mockDecisionRepo.findPending.mockResolvedValue([]);
       mockRag.search.mockResolvedValue([]);
       mockGenerateSystemPrompt.mockReturnValue('System prompt');
@@ -622,6 +625,10 @@ describe('AgentDaemon', () => {
         loop_count: 5,
         last_loop_at: '2025-12-12T00:00:00Z',
       });
+      mockStateManager.getEssential.mockResolvedValue({
+        loop_count: 5,
+        last_loop_at: '2025-12-12T00:00:00Z',
+      });
       mockPublisher.publish.mockResolvedValue(undefined);
 
       const daemon = new AgentDaemon(config);
@@ -678,6 +685,7 @@ describe('AgentDaemon', () => {
       mockStateManager.get.mockResolvedValue(0);
       mockStateManager.set.mockResolvedValue(undefined);
       mockStateManager.getAll.mockResolvedValue({});
+      mockStateManager.getEssential.mockResolvedValue({});
       mockDecisionRepo.findPending.mockResolvedValue([]);
       mockRag.search.mockResolvedValue([]);
       mockGenerateSystemPrompt.mockReturnValue('System prompt');
@@ -842,6 +850,7 @@ describe('AgentDaemon', () => {
       mockStateManager.get.mockResolvedValue(0);
       mockStateManager.set.mockResolvedValue(undefined);
       mockStateManager.getAll.mockResolvedValue({});
+      mockStateManager.getEssential.mockResolvedValue({});
       mockDecisionRepo.findPending.mockResolvedValue([]);
       mockRag.search.mockResolvedValue([]);
       mockGenerateSystemPrompt.mockReturnValue('System prompt');
@@ -928,6 +937,7 @@ describe('AgentDaemon', () => {
       mockStateManager.get.mockResolvedValue(0);
       mockStateManager.set.mockResolvedValue(undefined);
       mockStateManager.getAll.mockResolvedValue({});
+      mockStateManager.getEssential.mockResolvedValue({});
       mockDecisionRepo.findPending.mockResolvedValue([]);
       mockRag.search.mockResolvedValue([]);
       mockGenerateSystemPrompt.mockReturnValue('System prompt');
@@ -1219,6 +1229,7 @@ describe('AgentDaemon', () => {
       mockStateManager.get.mockResolvedValue(0);
       mockStateManager.set.mockResolvedValue(undefined);
       mockStateManager.getAll.mockResolvedValue({});
+      mockStateManager.getEssential.mockResolvedValue({});
       mockDecisionRepo.findPending.mockResolvedValue([]);
       mockRag.search.mockResolvedValue([]);
       mockGenerateSystemPrompt.mockReturnValue('System prompt');

@@ -37,6 +37,7 @@ import { queueForArchive } from '../workers/archive-worker.js';
 import { getTraceId, withTraceAsync } from '../lib/tracing.js';
 import {
   runInitiativePhase,
+  canRunInitiative,
   getInitiativePromptContext,
   createInitiativeFromProposal,
   buildInitiativeGenerationPrompt,
@@ -613,8 +614,9 @@ export class AgentDaemon {
       const loopCount = (await this.state.get<number>(StateKeys.LOOP_COUNT)) || 0;
       await this.state.set(StateKeys.LOOP_COUNT, loopCount + 1);
 
-      // Get current state
-      const currentState = await this.state.getAll();
+      // TASK-006: Get essential state only (performance optimization)
+      // Loads only 6 keys instead of potentially 1000+ keys
+      const currentState = await this.state.getEssential();
 
       // Fetch pending decisions for HEAD agents (CEO/DAO)
       let pendingDecisions: PendingDecision[] = [];
@@ -998,23 +1000,30 @@ export class AgentDaemon {
           // Priority-based delay before next loop
           setTimeout(() => this.runLoop('queue_continuation'), delay);
         } else {
-          // Queue empty - WAIT for scheduled loop, don't immediately run initiative
-          // Initiative phase only runs during scheduled loops to prevent excessive API calls
+          // Queue empty - check if we should run initiative phase
           logger.info({
             agentType: this.config.agentType,
-            nextScheduledLoop: this.config.loopInterval
-          }, 'Task queue empty, waiting for scheduled loop');
+            trigger,
+          }, 'Task queue empty');
 
-          // Only run initiative phase if this was a SCHEDULED loop (not a task reaction)
-          if (trigger === 'scheduled') {
+          // TASK-005: Run initiative phase if:
+          // 1. Scheduled loop (always)
+          // 2. After task processing (message trigger) if cooldown has passed
+          // Excludes queue_continuation to prevent excessive API calls
+          const shouldRunInitiative = trigger === 'scheduled' ||
+            (trigger !== 'queue_continuation' && await canRunInitiative(this.config.agentType as InitiativeAgentType));
+
+          if (shouldRunInitiative) {
             try {
+              logger.debug({ trigger }, 'Running initiative phase');
               const initiativeResult = await runInitiativePhase(this.config.agentType as InitiativeAgentType);
               if (initiativeResult.created && initiativeResult.initiative) {
                 logger.info({
                   title: initiativeResult.initiative.title,
                   issueUrl: initiativeResult.issueUrl,
                   revenueImpact: initiativeResult.initiative.revenueImpact,
-                }, 'Initiative created during scheduled loop');
+                  trigger,
+                }, 'Initiative created');
 
                 await eventRepo.log({
                   eventType: 'initiative_created' as EventType,
@@ -1038,6 +1047,8 @@ export class AgentDaemon {
               const errMsg = initError instanceof Error ? initError.message : String(initError);
               logger.warn({ error: errMsg }, 'Initiative phase failed');
             }
+          } else {
+            logger.debug({ trigger }, 'Skipping initiative phase (cooldown active or queue continuation)');
           }
         }
       }

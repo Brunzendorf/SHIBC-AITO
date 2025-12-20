@@ -28,6 +28,18 @@ import {
 
 const logger = createLogger('api');
 
+// TASK-025: Hard limit for all query limits to prevent unbounded queries
+const MAX_QUERY_LIMIT = 500;
+
+/**
+ * TASK-025: Parse query limit with hard cap
+ * Prevents unbounded queries that could slow down the database
+ */
+function parseLimit(queryLimit: unknown, defaultValue: number = 50): number {
+  const parsed = parseInt(queryLimit as string) || defaultValue;
+  return Math.min(parsed, MAX_QUERY_LIMIT);
+}
+
 export const app = express();
 
 // Middleware
@@ -159,7 +171,7 @@ app.get('/agents/:type', asyncHandler(async (req, res) => {
 // Get agent history
 app.get('/agents/:type/history', asyncHandler(async (req, res) => {
   const agentType = req.params.type as AgentType;
-  const limit = parseInt(req.query.limit as string) || 50;
+  const limit = parseLimit(req.query.limit);
   const agent = await agentRepo.findByType(agentType);
 
   if (!agent) {
@@ -256,7 +268,7 @@ app.get('/containers', asyncHandler(async (_req, res) => {
 
 // Get recent events
 app.get('/events', asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit as string) || 100;
+  const limit = parseLimit(req.query.limit, 100);
   const events = await eventRepo.getRecent(limit);
   sendResponse(res, events);
 }));
@@ -264,7 +276,7 @@ app.get('/events', asyncHandler(async (req, res) => {
 // Get events for specific agent
 app.get('/events/agent/:id', asyncHandler(async (req, res) => {
   const agentId = req.params.id;
-  const limit = parseInt(req.query.limit as string) || 50;
+  const limit = parseLimit(req.query.limit);
   const events = await eventRepo.getByAgent(agentId, limit);
   sendResponse(res, events);
 }));
@@ -325,7 +337,7 @@ interface WorkerLogEntry {
 
 // Get all worker executions (combined real + dry-run)
 app.get('/workers', asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit as string) || 100;
+  const limit = parseLimit(req.query.limit, 100);
   const agentFilter = req.query.agent as string | undefined;
   const includeDryRun = req.query.includeDryRun !== 'false';
 
@@ -434,7 +446,7 @@ app.get('/workers/stats/summary', asyncHandler(async (_req, res) => {
 
 // Get all decisions (history)
 app.get('/decisions', asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit as string) || 50;
+  const limit = parseLimit(req.query.limit);
   const offset = parseInt(req.query.offset as string) || 0;
   const decisions = await decisionRepo.findAll(limit, offset);
   sendResponse(res, decisions);
@@ -755,7 +767,7 @@ app.post('/focus', validate(focusSettingsSchema), asyncHandler(async (req, res) 
 // Get all domain approval requests
 app.get('/domain-approvals', asyncHandler(async (req, res) => {
   const status = req.query.status as string | undefined;
-  const limit = parseInt(req.query.limit as string) || 50;
+  const limit = parseLimit(req.query.limit);
 
   let approvals;
   if (status === 'pending') {
@@ -1013,7 +1025,7 @@ app.get('/benchmarks/tasks', asyncHandler(async (_req, res) => {
 
 // List all benchmark runs (from Redis)
 app.get('/benchmarks/runs', asyncHandler(async (req, res) => {
-  const limit = parseInt(req.query.limit as string) || 20;
+  const limit = parseLimit(req.query.limit, 20);
 
   try {
     const keys = await redis.keys('benchmark:run:*');
