@@ -544,39 +544,30 @@ getRecent(limit) // default 100
 
 ### 🟠 HOCH
 
-#### TASK-027: API Error Handling fehlt
-**Status:** 🐛 BUG
+#### TASK-027: API Error Handling fehlt ✅ DONE
+**Status:** 🐛 BUG → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 4h
-**Datei:** `dashboard/src/`
 
 **Problem:**
 - Keine Error Boundaries
 - 1 API error crasht ganze Page
 - Keine Retry-Logic
 
-**Fix:**
-```tsx
-// Error Boundary
-class ErrorBoundary extends React.Component {
-  state = { hasError: false };
+**Lösung:**
+1. `dashboard/src/components/common/ErrorBoundary.tsx`:
+   - Class Component für React Error Boundaries
+   - Zeigt Retry-Button und Error Details (in Dev Mode)
+   - HOC `withErrorBoundary()` für einfache Nutzung
 
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
+2. `dashboard/src/lib/api.ts`:
+   - Retry-Logic mit exponential backoff + jitter
+   - Max 3 Retries für Network-Fehler und 5xx Errors
+   - Retryable Status: 408, 429, 500, 502, 503, 504
+   - Non-idempotent Methods (POST/PUT/DELETE) nur bei 5xx
 
-  render() {
-    if (this.state.hasError) {
-      return <ErrorDisplay message="Something went wrong" />;
-    }
-    return this.props.children;
-  }
-}
-
-// Wrap pages
-<ErrorBoundary>
-  <AgentsPage />
-</ErrorBoundary>
-```
+3. `dashboard/src/components/layout/DashboardLayout.tsx`:
+   - ErrorBoundary um children Content gewrapped
+   - Verhindert dass ein Error die ganze Page crasht
 
 ---
 
@@ -827,7 +818,7 @@ logger.error(sanitize({ error: e }));
 - ~~TASK-012: Git Merge Conflicts~~ ✅ PullResult Interface + Auto-Abort
 - ~~TASK-016: Redis Streams~~ ✅ PARTIAL - Infrastruktur implementiert
 - ~~TASK-032: Circuit Breaker~~ ✅ opossum + GitHub API geschützt
-- TASK-027: Dashboard Error Handling
+- ~~TASK-027: Dashboard Error Handling~~ ✅ ErrorBoundary + Retry Logic
 
 **Sprint 3 (Quality):**
 - TASK-036: Test Coverage

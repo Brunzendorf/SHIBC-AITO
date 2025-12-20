@@ -26,6 +26,7 @@ import {
   TableRow,
   Divider,
 } from '@mui/material';
+import ErrorBoundary from '@/components/common/ErrorBoundary';
 import {
   Menu as MenuIcon,
   Dashboard as DashboardIcon,
@@ -308,7 +309,10 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           mt: '64px',
         }}
       >
-        {children}
+        {/* TASK-027: Error Boundary prevents component errors from crashing the page */}
+        <ErrorBoundary>
+          {children}
+        </ErrorBoundary>
       </Box>
 
       {/* Health Details Dialog */}

@@ -3,9 +3,18 @@ import { createClient } from './supabase/client';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
+// TASK-027: Retry configuration
+const RETRY_CONFIG = {
+  maxRetries: 3,
+  baseDelayMs: 1000,
+  maxDelayMs: 10000,
+  retryableStatuses: [408, 429, 500, 502, 503, 504],
+};
+
 export interface ApiResponse<T> {
   data: T | null;
   error: string | null;
+  retried?: number; // Number of retries performed
 }
 
 /**
@@ -21,46 +30,106 @@ async function getAuthToken(): Promise<string | null> {
   }
 }
 
-async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
-  try {
-    // Get auth token for authenticated requests
-    const token = await getAuthToken();
+/**
+ * Sleep for a specified number of milliseconds
+ */
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...(options?.headers as Record<string, string>),
-    };
+/**
+ * Calculate exponential backoff delay with jitter
+ */
+function getRetryDelay(attempt: number): number {
+  const delay = Math.min(
+    RETRY_CONFIG.baseDelayMs * Math.pow(2, attempt),
+    RETRY_CONFIG.maxDelayMs
+  );
+  // Add jitter (0-25% of delay)
+  return delay + Math.random() * delay * 0.25;
+}
 
-    // Add Authorization header if we have a token
-    if (token) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE}${endpoint}`, {
-      ...options,
-      headers,
-    });
-
-    if (!response.ok) {
-      // Handle auth errors
-      if (response.status === 401) {
-        return { data: null, error: 'Authentication required' };
-      }
-      if (response.status === 403) {
-        return { data: null, error: 'Access denied' };
-      }
-
-      const errorText = await response.text();
-      return { data: null, error: errorText || `HTTP ${response.status}` };
-    }
-
-    const json = await response.json();
-    // Unwrap orchestrator response format: {success: true, data: T}
-    const data = json.data !== undefined ? json.data : json;
-    return { data, error: null };
-  } catch (error) {
-    return { data: null, error: error instanceof Error ? error.message : 'Unknown error' };
+/**
+ * Check if an error is retryable
+ */
+function isRetryable(status: number, method?: string): boolean {
+  // Don't retry non-idempotent methods (POST, PUT, DELETE) by default
+  // unless it's a server error
+  if (method && ['POST', 'PUT', 'DELETE'].includes(method.toUpperCase())) {
+    return status >= 500; // Only retry server errors for mutations
   }
+  return RETRY_CONFIG.retryableStatuses.includes(status);
+}
+
+async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
+  let lastError: string = 'Unknown error';
+  let retryCount = 0;
+
+  for (let attempt = 0; attempt <= RETRY_CONFIG.maxRetries; attempt++) {
+    try {
+      // Get auth token for authenticated requests
+      const token = await getAuthToken();
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(options?.headers as Record<string, string>),
+      };
+
+      // Add Authorization header if we have a token
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const response = await fetch(`${API_BASE}${endpoint}`, {
+        ...options,
+        headers,
+      });
+
+      if (!response.ok) {
+        // Handle auth errors - don't retry
+        if (response.status === 401) {
+          return { data: null, error: 'Authentication required' };
+        }
+        if (response.status === 403) {
+          return { data: null, error: 'Access denied' };
+        }
+
+        // Check if we should retry
+        if (attempt < RETRY_CONFIG.maxRetries && isRetryable(response.status, options?.method)) {
+          retryCount++;
+          const delay = getRetryDelay(attempt);
+          console.warn(`API request failed with ${response.status}, retrying in ${Math.round(delay)}ms... (attempt ${attempt + 1}/${RETRY_CONFIG.maxRetries})`);
+          await sleep(delay);
+          continue;
+        }
+
+        const errorText = await response.text();
+        return {
+          data: null,
+          error: errorText || `HTTP ${response.status}`,
+          retried: retryCount,
+        };
+      }
+
+      const json = await response.json();
+      // Unwrap orchestrator response format: {success: true, data: T}
+      const data = json.data !== undefined ? json.data : json;
+      return { data, error: null, retried: retryCount };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : 'Unknown error';
+
+      // Network errors are retryable
+      if (attempt < RETRY_CONFIG.maxRetries) {
+        retryCount++;
+        const delay = getRetryDelay(attempt);
+        console.warn(`API request failed with "${lastError}", retrying in ${Math.round(delay)}ms... (attempt ${attempt + 1}/${RETRY_CONFIG.maxRetries})`);
+        await sleep(delay);
+        continue;
+      }
+    }
+  }
+
+  return { data: null, error: lastError, retried: retryCount };
 }
 
 // Health endpoints
