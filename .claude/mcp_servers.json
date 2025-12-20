@@ -21,9 +21,12 @@
       "description": "Local filesystem access"
     },
     "fetch": {
-      "command": "npx",
-      "args": ["-y", "@anthropic-ai/mcp-server-fetch"],
-      "description": "Web content fetching"
+      "command": "node",
+      "args": ["/app/mcp-servers/fetch-validated/dist/index.js"],
+      "description": "Domain-validated web fetching (whitelist enforced)",
+      "env": {
+        "POSTGRES_URL": "${POSTGRES_URL}"
+      }
     },
     "imagen": {
       "command": "node",

@@ -70,6 +70,11 @@ COPY tsconfig.json tsconfig.build.json ./
 COPY src ./src
 RUN npm run build
 
+# Build custom MCP servers
+COPY mcp-servers ./mcp-servers
+RUN cd mcp-servers/fetch-validated && npm ci && npm run build
+RUN cd mcp-servers/imagen-mcp && npm ci && npm run build || true
+
 # Production stage
 FROM node:20-slim AS production
 
@@ -126,6 +131,9 @@ COPY profiles ./profiles
 # Copy Claude config (agents, commands, mcp_servers) to base location
 # Will be merged into /app/.claude on startup (volume mount overwrites direct copy)
 COPY .claude ./claude-base
+
+# Copy custom MCP servers from builder (pre-built)
+COPY --from=builder /app/mcp-servers ./mcp-servers
 
 # Create directories for agent
 RUN mkdir -p \

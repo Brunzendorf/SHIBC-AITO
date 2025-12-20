@@ -399,22 +399,20 @@ await multi.exec();
 
 ### 🔴 KRITISCH
 
-#### TASK-018: Domain-Whitelist-Enforcement zu schwach
-**Status:** ⚠️ SECURITY
+#### TASK-018: Domain-Whitelist-Enforcement zu schwach ✅ DONE
+**Status:** ⚠️ SECURITY → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 8h
-**Datei:** `src/workers/worker.ts:174-178`
 
-**Problem:**
-```typescript
-validateServerAccess() // Checks servers, NICHT domains
-// Worker könnte trotzdem unerlaubte domains aufrufen
-// Beispiel: "fetch" server ist whitelisted, aber agent ruft evil.com auf
-```
+**Problem:** Standard fetch-Server erlaubt Zugriff auf beliebige Domains
 
-**Fix:**
-1. MCP-Server mit Domain-Filtering wrappen
-2. Proxy für alle HTTP requests
-3. Domain-Check vor jedem fetch
+**Lösung:** Custom `fetch-validated` MCP Server erstellt:
+- Eigener MCP Server unter `mcp-servers/fetch-validated/`
+- Prüft URLs gegen PostgreSQL Domain-Whitelist BEVOR Request gemacht wird
+- Subdomain-Support (api.example.com → example.com)
+- Gibt klare Fehlermeldung bei geblockten Domains
+- `check_domain` Tool für Pre-Check
+- Caching der Whitelist (60s TTL)
+- In Docker-Build integriert
 
 ---
 
@@ -814,23 +812,24 @@ logger.error(sanitize({ error: e }));
 
 | Priorität | Anzahl Tasks | Offen | Geschätzter Aufwand |
 |-----------|--------------|-------|---------------------|
-| 🔴 KRITISCH | 8 | 5 | ~43h |
+| 🔴 KRITISCH | 8 | 4 | ~35h |
 | 🟠 HOCH | 14 | 11 | ~60h |
 | 🟡 MITTEL | 10 | 9 | ~34h |
 | 🟢 NIEDRIG | 4 | 4 | ~12h |
-| **GESAMT** | **36** | **29 offen** | **~149h** |
+| **GESAMT** | **36** | **28 offen** | **~141h** |
 
 > **Update 2025-12-20:**
 > - 4 Quick Wins erledigt (TASK-003, TASK-010, TASK-014, TASK-020)
-> - TASK-022 erledigt (Supabase Auth + 2FA)
+> - TASK-022 erledigt (Supabase Auth + 2FA + API JWT)
 > - TASK-023 übersprungen (Rate Limiting nicht benötigt bei 1-1 Whitelabel)
+> - TASK-018 erledigt (fetch-validated MCP Server)
 
 ### Nach Kategorie
 
 | Kategorie | Anzahl | Offen |
 |-----------|--------|-------|
 | 🐛 BUG | 15 | 12 |
-| ⚠️ SECURITY | 6 | 3 |
+| ⚠️ SECURITY | 6 | 2 |
 | 🔧 IMPROVEMENT | 10 | 10 |
 | ✨ FEATURE | 5 | 5 |
 
@@ -843,11 +842,11 @@ logger.error(sanitize({ error: e }));
 
 ### Empfohlene Reihenfolge
 
-**Sprint 1 (Security & Critical Bugs):**
-- ~~TASK-022: API Authentication~~ ✅ Supabase Auth + 2FA
+**Sprint 1 (Security & Critical Bugs):** ✅ FAST FERTIG
+- ~~TASK-022: API Authentication~~ ✅ Supabase Auth + 2FA + API JWT
 - ~~TASK-023: Rate Limiting~~ ⏭️ Nicht benötigt (1-1 Whitelabel)
-- TASK-018: Domain Whitelist Enforcement
-- TASK-001: Task Queue Race Condition
+- ~~TASK-018: Domain Whitelist Enforcement~~ ✅ fetch-validated MCP Server
+- TASK-001: Task Queue Race Condition (4h) ← LETZTER TASK
 
 **Sprint 2 (Stability):**
 - TASK-012: Git Merge Conflicts
