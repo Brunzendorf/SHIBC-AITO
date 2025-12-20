@@ -1,6 +1,5 @@
 import type { Metadata } from 'next';
 import ThemeRegistry from '@/components/providers/ThemeRegistry';
-import DashboardLayout from '@/components/layout/DashboardLayout';
 
 export const metadata: Metadata = {
   title: 'AITO Dashboard',
@@ -15,9 +14,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <ThemeRegistry>
-          <DashboardLayout>{children}</DashboardLayout>
-        </ThemeRegistry>
+        <ThemeRegistry>{children}</ThemeRegistry>
       </body>
     </html>
   );

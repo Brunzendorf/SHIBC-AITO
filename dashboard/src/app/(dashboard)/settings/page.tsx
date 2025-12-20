@@ -35,12 +35,21 @@ import {
   Psychology as LLMIcon,
   Notifications as NotificationsIcon,
   Settings as SettingsIcon,
+  Security as SecurityIcon,
+  Logout as LogoutIcon,
 } from '@mui/icons-material';
+import { useRouter } from 'next/navigation';
 import { useSettings, saveSetting } from '@/hooks/useSettings';
 import Loading from '@/components/common/Loading';
 import ErrorDisplay from '@/components/common/ErrorDisplay';
+import { createClient } from '@/lib/supabase/client';
 
 const categoryLabels: Record<string, { label: string; icon: React.ReactNode; description: string }> = {
+  security: {
+    label: 'Security',
+    icon: <SecurityIcon />,
+    description: 'Account security and two-factor authentication',
+  },
   queue: {
     label: 'Queue Delays',
     icon: <SpeedIcon />,
@@ -167,7 +176,8 @@ export default function SettingsPage() {
   if (isError) return <ErrorDisplay error="Failed to load settings" />;
   if (!settings) return <ErrorDisplay error="No settings found" />;
 
-  const categories = Object.keys(settings).filter(c => categoryLabels[c]);
+  // Security is always first, then settings-based categories
+  const categories = ['security', ...Object.keys(settings).filter(c => categoryLabels[c])];
 
   return (
     <Box>
@@ -214,17 +224,20 @@ export default function SettingsPage() {
               title={categoryLabels[category]?.label || category}
               subheader={categoryLabels[category]?.description}
               action={
-                <Button
-                  variant="contained"
-                  startIcon={<SaveIcon />}
-                  onClick={() => handleSaveAll(category)}
-                  disabled={saving}
-                >
-                  Save All
-                </Button>
+                category !== 'security' ? (
+                  <Button
+                    variant="contained"
+                    startIcon={<SaveIcon />}
+                    onClick={() => handleSaveAll(category)}
+                    disabled={saving}
+                  >
+                    Save All
+                  </Button>
+                ) : null
               }
             />
             <CardContent>
+              {category === 'security' && <SecuritySettings />}
               {category === 'queue' && (
                 <QueueSettings
                   settings={settings.queue}
@@ -561,6 +574,250 @@ function InitiativeSettings({ settings, edited, onChange, onSave, saving }: Sett
         }
         label="Only generate initiatives during scheduled loops (not after task completion)"
       />
+    </Stack>
+  );
+}
+
+// Security & 2FA Settings Component
+function SecuritySettings() {
+  const router = useRouter();
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [user, setUser] = useState<{ email?: string } | null>(null);
+  const [factors, setFactors] = useState<{ id: string; friendly_name?: string; created_at: string }[]>([]);
+  const [enrolling, setEnrolling] = useState(false);
+  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [secret, setSecret] = useState<string | null>(null);
+  const [factorId, setFactorId] = useState<string | null>(null);
+  const [verifyCode, setVerifyCode] = useState('');
+
+  useEffect(() => {
+    const loadUserAndFactors = async () => {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      setUser(user);
+
+      const { data: factorData } = await supabase.auth.mfa.listFactors();
+      if (factorData?.totp) {
+        setFactors(factorData.totp.map(f => ({
+          id: f.id,
+          friendly_name: f.friendly_name ?? undefined,
+          created_at: f.created_at,
+        })));
+      }
+    };
+    loadUserAndFactors();
+  }, []);
+
+  const handleEnroll2FA = async () => {
+    setEnrolling(true);
+    setError(null);
+    const supabase = createClient();
+
+    const { data, error } = await supabase.auth.mfa.enroll({
+      factorType: 'totp',
+      friendlyName: 'Authenticator App',
+    });
+
+    if (error) {
+      setError(error.message);
+      setEnrolling(false);
+      return;
+    }
+
+    if (data) {
+      setQrCode(data.totp.qr_code);
+      setSecret(data.totp.secret);
+      setFactorId(data.id);
+    }
+  };
+
+  const handleVerifyEnrollment = async () => {
+    if (!factorId) return;
+    setLoading(true);
+    setError(null);
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.mfa.challengeAndVerify({
+      factorId,
+      code: verifyCode,
+    });
+
+    if (error) {
+      setError(error.message);
+      setLoading(false);
+      return;
+    }
+
+    setSuccess('Two-factor authentication enabled successfully!');
+    setEnrolling(false);
+    setQrCode(null);
+    setSecret(null);
+    setVerifyCode('');
+
+    // Refresh factors list
+    const { data: factorData } = await supabase.auth.mfa.listFactors();
+    if (factorData?.totp) {
+      setFactors(factorData.totp.map(f => ({
+        id: f.id,
+        friendly_name: f.friendly_name ?? undefined,
+        created_at: f.created_at,
+      })));
+    }
+    setLoading(false);
+  };
+
+  const handleUnenroll = async (factorIdToRemove: string) => {
+    setLoading(true);
+    setError(null);
+
+    const supabase = createClient();
+    const { error } = await supabase.auth.mfa.unenroll({ factorId: factorIdToRemove });
+
+    if (error) {
+      setError(error.message);
+      setLoading(false);
+      return;
+    }
+
+    setSuccess('Two-factor authentication removed.');
+    setFactors(factors.filter(f => f.id !== factorIdToRemove));
+    setLoading(false);
+  };
+
+  const handleLogout = async () => {
+    const supabase = createClient();
+    await supabase.auth.signOut();
+    router.push('/auth/login');
+  };
+
+  return (
+    <Stack spacing={3}>
+      {/* User Info */}
+      <Box>
+        <Typography variant="subtitle2" color="text.secondary">
+          Logged in as
+        </Typography>
+        <Typography variant="body1">{user?.email || 'Loading...'}</Typography>
+      </Box>
+
+      <Divider />
+
+      {/* 2FA Section */}
+      <Typography variant="h6">Two-Factor Authentication (2FA)</Typography>
+
+      {error && <Alert severity="error">{error}</Alert>}
+      {success && <Alert severity="success">{success}</Alert>}
+
+      {factors.length > 0 ? (
+        <Box>
+          <Alert severity="success" sx={{ mb: 2 }}>
+            2FA is enabled on your account
+          </Alert>
+          {factors.map((factor) => (
+            <Card key={factor.id} variant="outlined" sx={{ mb: 2 }}>
+              <CardContent>
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Box>
+                    <Typography variant="body1">
+                      {factor.friendly_name || 'Authenticator App'}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Added: {new Date(factor.created_at).toLocaleDateString()}
+                    </Typography>
+                  </Box>
+                  <Button
+                    variant="outlined"
+                    color="error"
+                    size="small"
+                    onClick={() => handleUnenroll(factor.id)}
+                    disabled={loading}
+                  >
+                    Remove
+                  </Button>
+                </Stack>
+              </CardContent>
+            </Card>
+          ))}
+        </Box>
+      ) : enrolling ? (
+        <Card variant="outlined">
+          <CardContent>
+            <Typography variant="subtitle1" gutterBottom>
+              Set up Authenticator App
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Scan this QR code with Google Authenticator, Authy, or another TOTP app.
+            </Typography>
+
+            {qrCode && (
+              <Box sx={{ textAlign: 'center', my: 3 }}>
+                <img src={qrCode} alt="2FA QR Code" style={{ maxWidth: 200 }} />
+              </Box>
+            )}
+
+            {secret && (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                Manual entry code: <code>{secret}</code>
+              </Alert>
+            )}
+
+            <TextField
+              fullWidth
+              label="Enter 6-digit code"
+              value={verifyCode}
+              onChange={(e) => setVerifyCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              inputProps={{
+                maxLength: 6,
+                inputMode: 'numeric',
+              }}
+              sx={{ mb: 2 }}
+            />
+
+            <Stack direction="row" spacing={2}>
+              <Button
+                variant="contained"
+                onClick={handleVerifyEnrollment}
+                disabled={loading || verifyCode.length !== 6}
+              >
+                Verify & Enable
+              </Button>
+              <Button
+                variant="outlined"
+                onClick={() => {
+                  setEnrolling(false);
+                  setQrCode(null);
+                  setSecret(null);
+                }}
+              >
+                Cancel
+              </Button>
+            </Stack>
+          </CardContent>
+        </Card>
+      ) : (
+        <Box>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            2FA is not enabled. We recommend enabling it for better security.
+          </Alert>
+          <Button variant="contained" onClick={handleEnroll2FA} disabled={loading}>
+            Enable 2FA
+          </Button>
+        </Box>
+      )}
+
+      <Divider />
+
+      {/* Logout */}
+      <Button
+        variant="outlined"
+        color="error"
+        startIcon={<LogoutIcon />}
+        onClick={handleLogout}
+      >
+        Logout
+      </Button>
     </Stack>
   );
 }

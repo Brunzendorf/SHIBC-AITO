@@ -471,40 +471,18 @@ getDryRunInstructions() // Nur Text!
 
 ### 🔴 KRITISCH
 
-#### TASK-022: Keine Authentication
-**Status:** ⚠️ SECURITY
+#### TASK-022: Keine Authentication ✅ DONE
+**Status:** ⚠️ SECURITY → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 6h
-**Datei:** `src/orchestrator/api.ts:23-31`
 
-**Problem:**
-```typescript
-app.use(cors({ origin: '*' })); // Wildcard!
-// Keine Token-Validierung
-// Jeder kann API aufrufen
-```
+**Problem:** Dashboard hatte keine Authentifizierung
 
-**Fix:**
-1. JWT Token Validation Middleware
-2. CORS nur für Dashboard-Origin
-3. API Key für externe Calls
-
-```typescript
-import jwt from 'jsonwebtoken';
-
-const authMiddleware = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  if (!token) return res.status(401).json({ error: 'No token' });
-
-  try {
-    req.user = jwt.verify(token, process.env.JWT_SECRET);
-    next();
-  } catch {
-    res.status(403).json({ error: 'Invalid token' });
-  }
-};
-
-app.use('/api', authMiddleware);
-```
+**Lösung:** Supabase Auth implementiert:
+- Login-Seite mit Email/Password
+- 2FA (TOTP) Support mit Authenticator Apps
+- Middleware für geschützte Routen
+- Security Tab in Settings für 2FA-Enrollment
+- Packages: `@supabase/supabase-js@2.89.0`, `@supabase/ssr@0.8.0`
 
 ---
 
@@ -828,14 +806,15 @@ logger.error(sanitize({ error: e }));
 
 | Priorität | Anzahl Tasks | Offen | Geschätzter Aufwand |
 |-----------|--------------|-------|---------------------|
-| 🔴 KRITISCH | 8 | 6 | ~49h |
+| 🔴 KRITISCH | 8 | 5 | ~43h |
 | 🟠 HOCH | 14 | 11 | ~60h |
 | 🟡 MITTEL | 10 | 9 | ~34h |
 | 🟢 NIEDRIG | 4 | 4 | ~12h |
-| **GESAMT** | **36** | **30 offen** | **~155h** |
+| **GESAMT** | **36** | **29 offen** | **~149h** |
 
 > **Update 2025-12-20:**
 > - 4 Quick Wins erledigt (TASK-003, TASK-010, TASK-014, TASK-020)
+> - TASK-022 erledigt (Supabase Auth + 2FA)
 > - TASK-023 übersprungen (Rate Limiting nicht benötigt bei 1-1 Whitelabel)
 
 ### Nach Kategorie
@@ -843,7 +822,7 @@ logger.error(sanitize({ error: e }));
 | Kategorie | Anzahl | Offen |
 |-----------|--------|-------|
 | 🐛 BUG | 15 | 12 |
-| ⚠️ SECURITY | 6 | 4 |
+| ⚠️ SECURITY | 6 | 3 |
 | 🔧 IMPROVEMENT | 10 | 10 |
 | ✨ FEATURE | 5 | 5 |
 
@@ -857,7 +836,7 @@ logger.error(sanitize({ error: e }));
 ### Empfohlene Reihenfolge
 
 **Sprint 1 (Security & Critical Bugs):**
-- TASK-022: API Authentication
+- ~~TASK-022: API Authentication~~ ✅ Supabase Auth + 2FA
 - ~~TASK-023: Rate Limiting~~ ⏭️ Nicht benötigt (1-1 Whitelabel)
 - TASK-018: Domain Whitelist Enforcement
 - TASK-001: Task Queue Race Condition
