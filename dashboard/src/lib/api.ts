@@ -1,4 +1,5 @@
 // API client for AITO Orchestrator
+import { createClient } from './supabase/client';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
@@ -7,17 +8,48 @@ export interface ApiResponse<T> {
   error: string | null;
 }
 
+/**
+ * Get the current auth token from Supabase session
+ */
+async function getAuthToken(): Promise<string | null> {
+  try {
+    const supabase = createClient();
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<ApiResponse<T>> {
   try {
+    // Get auth token for authenticated requests
+    const token = await getAuthToken();
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...(options?.headers as Record<string, string>),
+    };
+
+    // Add Authorization header if we have a token
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+
     const response = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
-      headers: {
-        'Content-Type': 'application/json',
-        ...options?.headers,
-      },
+      headers,
     });
 
     if (!response.ok) {
+      // Handle auth errors
+      if (response.status === 401) {
+        return { data: null, error: 'Authentication required' };
+      }
+      if (response.status === 403) {
+        return { data: null, error: 'Access denied' };
+      }
+
       const errorText = await response.text();
       return { data: null, error: errorText || `HTTP ${response.status}` };
     }

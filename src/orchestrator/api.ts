@@ -7,6 +7,7 @@ import { startAgent, stopAgent, restartAgent, getAgentContainerStatus, listManag
 import { getScheduledJobs, pauseJob, resumeJob } from './scheduler.js';
 import { getSystemHealth, isAlive, isReady, getAgentHealth } from './health.js';
 import { triggerEscalation } from './events.js';
+import { authMiddleware, type AuthenticatedRequest } from './auth.js';
 import type { AgentType, AgentMessage, ApiResponse, DecisionStatus } from '../lib/types.js';
 import crypto from 'crypto';
 import { benchmarkRunner, BENCHMARK_TASKS } from '../lib/llm/benchmark.js';
@@ -43,6 +44,9 @@ app.use((req, res, next) => {
   });
   next();
 });
+
+// Authentication middleware (skips /health and /ready)
+app.use(authMiddleware);
 
 // Error handler
 const asyncHandler = (fn: (req: Request, res: Response) => Promise<void>) =>
