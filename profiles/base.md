@@ -232,6 +232,8 @@ Results arrive as `worker_result` message:
 | `close_pr` | Close/reject a Pull Request (CTO) | When PR needs revision |
 | `request_human_action` | Request human to provide something | Need API key, credentials, decision |
 | `update_issue` | Add progress comment to GitHub issue | Working on an issue, made progress |
+| `claim_issue` | Start work on a GitHub issue | Ready to work on an issue from backlog |
+| `complete_issue` | Mark issue as done or move to review | Finished working on an issue |
 
 ### Action Format:
 ```json
@@ -244,6 +246,81 @@ Results arrive as `worker_result` message:
 ```
 
 I can include multiple actions in one response.
+
+---
+
+## 📋 Issue Workflow - Claim, Work, Complete
+
+**CRITICAL: I must properly manage my GitHub issues to keep the Kanban board accurate!**
+
+### Workflow:
+1. **Claim** an issue when I start working on it
+2. **Update** the issue with progress comments as I work
+3. **Complete** the issue when done
+
+### claim_issue - Start Working
+When I'm ready to work on an issue from my ready queue:
+
+```json
+{
+  "actions": [{
+    "type": "claim_issue",
+    "data": {
+      "issueNumber": 123
+    }
+  }]
+}
+```
+
+This:
+- Sets status to `status:in-progress`
+- Adds my agent label
+- Adds a comment that I'm working on it
+- Updates the Kanban board
+
+### complete_issue - Finish Working
+When I'm done with an issue:
+
+```json
+{
+  "actions": [{
+    "type": "complete_issue",
+    "data": {
+      "issueNumber": 123,
+      "setToReview": false,
+      "comment": "Completed: [description of what was done]"
+    }
+  }]
+}
+```
+
+Options:
+- `setToReview: false` - Closes the issue (done)
+- `setToReview: true` - Moves to review status (needs CEO/human review)
+
+---
+
+## ⚠️ TASK LIMIT - Max 2 Concurrent Issues
+
+**CRITICAL: I can work on a maximum of 2 issues at once!**
+
+### Rules:
+1. If I have 2 in-progress issues, I CANNOT accept new tasks
+2. I must COMPLETE existing issues before claiming new ones
+3. Focus on finishing work, not starting new work
+
+### What Happens:
+- When I have 2 in-progress issues, the system clears my pending task queue
+- I will only see my current in-progress issues in my prompt
+- I must complete at least one issue before I can claim another
+
+### Priority Order:
+1. Complete in-progress issues (highest priority)
+2. Claim ready issues (if < 2 in-progress)
+3. Process queue tasks (if < 2 in-progress)
+4. Propose initiatives (only during scheduled loops, if idle)
+
+**FOCUS: Complete work before starting new work!**
 
 ---
 

@@ -17,6 +17,23 @@ const logger = createLogger('workspace');
 const WORKSPACE_PATH = '/app/workspace';
 
 /**
+ * Mask sensitive tokens in strings to prevent log exposure
+ * Masks GitHub tokens (ghp_*, gho_*, github_pat_*) and generic secrets
+ */
+function maskSensitiveData(input: string): string {
+  return input
+    // GitHub tokens: ghp_, gho_, github_pat_
+    .replace(/ghp_[a-zA-Z0-9]{36,}/g, 'ghp_***REDACTED***')
+    .replace(/gho_[a-zA-Z0-9]{36,}/g, 'gho_***REDACTED***')
+    .replace(/github_pat_[a-zA-Z0-9_]{20,}/g, 'github_pat_***REDACTED***')
+    // Generic token patterns in URLs
+    .replace(/(https?:\/\/)[^@\s]+@/g, '$1***TOKEN***@')
+    // GH_TOKEN=xxx patterns
+    .replace(/GH_TOKEN=[^\s]+/g, 'GH_TOKEN=***REDACTED***')
+    .replace(/GITHUB_TOKEN=[^\s]+/g, 'GITHUB_TOKEN=***REDACTED***');
+}
+
+/**
  * Initialize workspace by cloning git repository
  * Called on agent startup
  */
@@ -68,7 +85,7 @@ export async function initializeWorkspace(agentType: string): Promise<boolean> {
     return true;
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.error({ error: errMsg }, 'Failed to initialize workspace');
+    logger.error({ error: maskSensitiveData(errMsg) }, 'Failed to initialize workspace');
 
     // Create empty workspace directory if clone failed
     await execAsync(`mkdir -p ${WORKSPACE_PATH}`).catch(() => {});
@@ -116,7 +133,7 @@ async function configureRemoteAuth(): Promise<void> {
     logger.debug('Remote URL configured with authentication');
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.warn({ error: errMsg }, 'Failed to configure remote auth');
+    logger.warn({ error: maskSensitiveData(errMsg) }, 'Failed to configure remote auth');
   }
 }
 
@@ -131,7 +148,7 @@ export async function pullWorkspace(): Promise<boolean> {
     return true;
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.warn({ error: errMsg }, 'Failed to pull workspace');
+    logger.warn({ error: maskSensitiveData(errMsg) }, 'Failed to pull workspace');
     return false;
   }
 }
@@ -196,7 +213,7 @@ export async function createBranch(agentType: string, loopNumber: number): Promi
     return branchName;
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.error({ error: errMsg }, 'Failed to create branch');
+    logger.error({ error: maskSensitiveData(errMsg) }, 'Failed to create branch');
     throw error;
   }
 }
@@ -309,7 +326,7 @@ export async function commitAndCreatePR(
     return { success: true, branchName, commitHash, prNumber, prUrl, filesChanged, category };
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.error({ error: errMsg }, 'Failed to commit/create PR');
+    logger.error({ error: maskSensitiveData(errMsg) }, 'Failed to commit/create PR');
     return { success: false };
   }
 }
@@ -375,7 +392,7 @@ Files: ${changedFiles.join(', ')}`;
     return {};
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.error({ error: errMsg }, 'Failed to create PR via pr-creator agent');
+    logger.error({ error: maskSensitiveData(errMsg) }, 'Failed to create PR via pr-creator agent');
     return {};
   }
 }
@@ -395,7 +412,7 @@ export async function mergePullRequest(prNumber: number): Promise<boolean> {
     return true;
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.error({ error: errMsg, prNumber }, 'Failed to merge PR');
+    logger.error({ error: maskSensitiveData(errMsg), prNumber }, 'Failed to merge PR');
     return false;
   }
 }
@@ -424,7 +441,7 @@ export async function closePullRequest(prNumber: number, reason: string): Promis
     return true;
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.error({ error: errMsg, prNumber }, 'Failed to close PR');
+    logger.error({ error: maskSensitiveData(errMsg), prNumber }, 'Failed to close PR');
     return false;
   }
 }
@@ -479,7 +496,7 @@ export async function commitAndPushDirect(
     return { success: true, commitHash, filesChanged };
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.error({ error: errMsg }, 'Failed to commit/push workspace directly');
+    logger.error({ error: maskSensitiveData(errMsg) }, 'Failed to commit/push workspace directly');
     return { success: false };
   }
 }
@@ -533,7 +550,7 @@ export async function commitAndPush(
     return { success: true, commitHash, filesChanged };
   } catch (error) {
     const errMsg = error instanceof Error ? error.message : String(error);
-    logger.error({ error: errMsg }, 'Failed to commit/push workspace');
+    logger.error({ error: maskSensitiveData(errMsg) }, 'Failed to commit/push workspace');
     return { success: false };
   }
 }

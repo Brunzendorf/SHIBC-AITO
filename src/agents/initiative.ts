@@ -337,11 +337,11 @@ async function wasInitiativeCreated(title: string): Promise<boolean> {
 
     if (!keywords) return false;
 
-    // Search both open and closed issues
+    // Search both open and closed issues (30 results is enough for duplicate detection)
     const searchQuery = `repo:${owner}/${repo} is:issue ${keywords}`;
     const searchResult = await gh.search.issuesAndPullRequests({
       q: searchQuery,
-      per_page: 10,
+      per_page: 30,
     });
 
     // Check for similar titles using fuzzy matching
