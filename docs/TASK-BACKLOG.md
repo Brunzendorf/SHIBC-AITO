@@ -475,14 +475,22 @@ getDryRunInstructions() // Nur Text!
 **Status:** ⚠️ SECURITY → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 6h
 
-**Problem:** Dashboard hatte keine Authentifizierung
+**Problem:** Dashboard und Orchestrator API hatten keine Authentifizierung
 
-**Lösung:** Supabase Auth implementiert:
+**Lösung:** Supabase Auth + JWT Validation:
+
+*Dashboard:*
 - Login-Seite mit Email/Password
 - 2FA (TOTP) Support mit Authenticator Apps
 - Middleware für geschützte Routen
 - Security Tab in Settings für 2FA-Enrollment
 - Packages: `@supabase/supabase-js@2.89.0`, `@supabase/ssr@0.8.0`
+
+*Orchestrator API:*
+- JWT-Validation Middleware (`src/orchestrator/auth.ts`)
+- Dashboard sendet Token im Authorization Header
+- Health-Endpoints bleiben öffentlich (Kubernetes Probes)
+- Package: `jsonwebtoken`
 
 ---
 
