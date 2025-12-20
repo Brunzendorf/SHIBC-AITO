@@ -11,6 +11,10 @@ import {
   channels,
   setAgentStatus,
   redis,
+  claimTasks,
+  acknowledgeTasks,
+  recoverOrphanedTasks,
+  getTaskCount,
 } from '../lib/redis.js';
 import { agentRepo, historyRepo, eventRepo, decisionRepo, settingsRepo } from '../lib/db.js';
 import { rag } from '../lib/rag.js';
@@ -148,6 +152,13 @@ export class AgentDaemon {
 
       // 2.5. Load settings from database (queue delays, task limits, etc.)
       await loadSettingsFromDB();
+
+      // 2.55. Recover orphaned tasks from previous crash (atomic queue pattern)
+      const recoveredTasks = await recoverOrphanedTasks(this.config.agentType);
+      if (recoveredTasks > 0) {
+        logger.info({ recoveredTasks, agentType: this.config.agentType },
+          'Recovered orphaned tasks from previous run - tasks requeued');
+      }
 
       // 2.6. Initialize workspace (git clone)
       const workspaceInitialized = await workspace.initialize(this.config.agentType);
@@ -559,30 +570,24 @@ export class AgentDaemon {
         }
       }
 
-      // Fetch pending tasks from queue (NEW: Actually read the task queue!)
+      // Fetch pending tasks from queue using atomic claim pattern
+      // Tasks are moved to a processing list, preventing race conditions
       let pendingTasks: Array<{ title: string; description: string; priority: string; from: string }> = [];
+      let claimedTasks: Array<{ raw: string; parsed: Record<string, unknown> }> = [];
       try {
-        const taskQueueKey = `queue:tasks:${this.config.agentType}`;
-        const rawTasks = await redis.lrange(taskQueueKey, 0, 9); // Get up to 10 pending tasks
-        if (rawTasks.length > 0) {
-          pendingTasks = rawTasks.map(t => {
-            try {
-              const parsed = JSON.parse(t);
-              return {
-                title: parsed.title || 'Untitled Task',
-                description: parsed.description || '',
-                priority: parsed.priority || 'normal',
-                from: parsed.from || 'unknown',
-              };
-            } catch {
-              return null;
-            }
-          }).filter((t): t is NonNullable<typeof t> => t !== null);
-          logger.info({ count: pendingTasks.length, agentType: this.config.agentType }, 'Found pending tasks in queue');
+        claimedTasks = await claimTasks(this.config.agentType, 10);
+        if (claimedTasks.length > 0) {
+          pendingTasks = claimedTasks.map(t => ({
+            title: (t.parsed.title as string) || 'Untitled Task',
+            description: (t.parsed.description as string) || '',
+            priority: (t.parsed.priority as string) || 'normal',
+            from: (t.parsed.from as string) || 'unknown',
+          }));
+          logger.info({ count: pendingTasks.length, agentType: this.config.agentType }, 'Claimed pending tasks atomically');
         }
       } catch (taskError) {
         const errMsg = taskError instanceof Error ? taskError.message : String(taskError);
-        logger.warn({ error: errMsg }, 'Failed to fetch pending tasks');
+        logger.warn({ error: errMsg }, 'Failed to claim pending tasks');
       }
 
       // RAG: Build query from agent type + trigger + data
@@ -863,19 +868,18 @@ export class AgentDaemon {
         const successCount = (await this.state.get<number>(StateKeys.SUCCESS_COUNT)) || 0;
         await this.state.set(StateKeys.SUCCESS_COUNT, successCount + 1);
 
-        // ACKNOWLEDGE PROCESSED TASKS: Remove them from queue so they don't repeat
-        if (pendingTasks.length > 0) {
+        // ACKNOWLEDGE PROCESSED TASKS: Remove them from processing list
+        // Uses atomic pattern - tasks were already moved to processing list during claim
+        if (claimedTasks.length > 0) {
           try {
-            const taskQueueKey = `queue:tasks:${this.config.agentType}`;
-            // Remove the tasks we just processed (first N items)
-            await redis.ltrim(taskQueueKey, pendingTasks.length, -1);
+            await acknowledgeTasks(this.config.agentType, claimedTasks);
             logger.info({
-              removed: pendingTasks.length,
+              acknowledged: claimedTasks.length,
               agentType: this.config.agentType
-            }, 'Acknowledged and removed processed tasks from queue');
+            }, 'Acknowledged and removed processed tasks from processing list');
           } catch (ackError) {
             const errMsg = ackError instanceof Error ? ackError.message : String(ackError);
-            logger.warn({ error: errMsg }, 'Failed to acknowledge tasks');
+            logger.warn({ error: errMsg }, 'Failed to acknowledge tasks - will be recovered on restart');
           }
         }
 
@@ -885,6 +889,15 @@ export class AgentDaemon {
         // Update error count
         const errorCount = (await this.state.get<number>(StateKeys.ERROR_COUNT)) || 0;
         await this.state.set(StateKeys.ERROR_COUNT, errorCount + 1);
+
+        // On failure, tasks remain in processing list
+        // They will be recovered on next agent startup via recoverOrphanedTasks()
+        if (claimedTasks.length > 0) {
+          logger.warn({
+            orphanedTasks: claimedTasks.length,
+            agentType: this.config.agentType
+          }, 'Tasks left in processing list - will be recovered on restart');
+        }
       }
 
       // Update last loop timestamp
@@ -894,11 +907,15 @@ export class AgentDaemon {
       logger.info({ trigger, duration, success: result.success }, 'Loop completed');
 
       // EVENT-DRIVEN: Check if more tasks in queue
+      // Note: This is a read-only peek to decide if we need another loop.
+      // Actual task claiming happens atomically in the next runLoop call.
       if (result.success) {
-        const taskQueueKey = `queue:tasks:${this.config.agentType}`;
-        const rawTasks = await redis.lrange(taskQueueKey, 0, 9);
+        const remainingCount = await getTaskCount(this.config.agentType);
 
-        if (rawTasks.length > 0) {
+        if (remainingCount > 0) {
+          // Peek at first few tasks for priority-based delay calculation
+          const taskQueueKey = `queue:tasks:${this.config.agentType}`;
+          const rawTasks = await redis.lrange(taskQueueKey, 0, 4);
           // Parse tasks to get priority
           const parsedTasks = rawTasks.map(t => {
             try { return JSON.parse(t); } catch { return { priority: 'normal' }; }
@@ -909,7 +926,7 @@ export class AgentDaemon {
           const highestPriority = parsedTasks[0]?.priority || 'normal';
 
           logger.info({
-            remainingTasks: rawTasks.length,
+            remainingTasks: remainingCount,
             highestPriority,
             delayMs: delay,
             agentType: this.config.agentType

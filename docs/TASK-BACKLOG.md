@@ -25,31 +25,18 @@
 
 ### 🔴 KRITISCH
 
-#### TASK-001: Task-Queue Race Condition
-**Status:** 🐛 BUG
+#### TASK-001: Task-Queue Race Condition ✅ DONE
+**Status:** 🐛 BUG → ✅ ERLEDIGT (2025-12-20)
 **Aufwand:** 4h
-**Datei:** `src/agents/daemon.ts:566-899`
 
-**Problem:**
-```typescript
-// Zeile 566: Erste Lesung
-const rawTasks = await redis.lrange(taskQueueKey, 0, 9);
+**Problem:** Race Condition zwischen LRANGE/LTRIM - neue Tasks konnten zwischen Lesen und Löschen verloren gehen
 
-// ... loop processing ...
-
-// Zeile 871: Tasks entfernen
-await redis.ltrim(taskQueueKey, pendingTasks.length, -1);
-
-// Zeile 899: Zweite Lesung (für continuation check)
-const rawTasks = await redis.lrange(taskQueueKey, 0, 9);
-```
-
-**Folge:** Zwischen Reads/Trims können neue Tasks ankommen → Tasks übersprungen oder dupliziert
-
-**Fix:**
-1. Tasks als Snapshot speichern, nur einmal lesen
-2. Atomic operations mit Redis MULTI/EXEC
-3. Task acknowledgment mit BRPOPLPUSH pattern
+**Lösung:** Atomic RPOPLPUSH Pattern implementiert:
+- `claimTasks()`: Verschiebt Tasks atomar von Queue zu Processing-Liste
+- `acknowledgeTasks()`: Entfernt Tasks nach erfolgreicher Verarbeitung
+- `recoverOrphanedTasks()`: Stellt bei Crash abgebrochene Tasks wieder her
+- Crash Recovery beim Agent-Start integriert
+- Logging für alle Queue-Operationen
 
 ---
 
@@ -812,23 +799,25 @@ logger.error(sanitize({ error: e }));
 
 | Priorität | Anzahl Tasks | Offen | Geschätzter Aufwand |
 |-----------|--------------|-------|---------------------|
-| 🔴 KRITISCH | 8 | 4 | ~35h |
+| 🔴 KRITISCH | 8 | 3 | ~31h |
 | 🟠 HOCH | 14 | 11 | ~60h |
 | 🟡 MITTEL | 10 | 9 | ~34h |
 | 🟢 NIEDRIG | 4 | 4 | ~12h |
-| **GESAMT** | **36** | **28 offen** | **~141h** |
+| **GESAMT** | **36** | **27 offen** | **~137h** |
 
 > **Update 2025-12-20:**
 > - 4 Quick Wins erledigt (TASK-003, TASK-010, TASK-014, TASK-020)
 > - TASK-022 erledigt (Supabase Auth + 2FA + API JWT)
 > - TASK-023 übersprungen (Rate Limiting nicht benötigt bei 1-1 Whitelabel)
 > - TASK-018 erledigt (fetch-validated MCP Server)
+> - TASK-001 erledigt (Atomic Queue Pattern mit RPOPLPUSH)
+> - **Sprint 1 komplett!** Alle Security & Critical Bugs erledigt
 
 ### Nach Kategorie
 
 | Kategorie | Anzahl | Offen |
 |-----------|--------|-------|
-| 🐛 BUG | 15 | 12 |
+| 🐛 BUG | 15 | 11 |
 | ⚠️ SECURITY | 6 | 2 |
 | 🔧 IMPROVEMENT | 10 | 10 |
 | ✨ FEATURE | 5 | 5 |
@@ -842,11 +831,11 @@ logger.error(sanitize({ error: e }));
 
 ### Empfohlene Reihenfolge
 
-**Sprint 1 (Security & Critical Bugs):** ✅ FAST FERTIG
+**Sprint 1 (Security & Critical Bugs):** ✅ KOMPLETT
 - ~~TASK-022: API Authentication~~ ✅ Supabase Auth + 2FA + API JWT
 - ~~TASK-023: Rate Limiting~~ ⏭️ Nicht benötigt (1-1 Whitelabel)
 - ~~TASK-018: Domain Whitelist Enforcement~~ ✅ fetch-validated MCP Server
-- TASK-001: Task Queue Race Condition (4h) ← LETZTER TASK
+- ~~TASK-001: Task Queue Race Condition~~ ✅ Atomic RPOPLPUSH Pattern
 
 **Sprint 2 (Stability):**
 - TASK-012: Git Merge Conflicts

@@ -152,6 +152,101 @@ export async function getTaskCount(agentId: string): Promise<number> {
   return redis.llen(channels.tasks(agentId));
 }
 
+// Atomic Task Claiming (RPOPLPUSH pattern to prevent race conditions)
+// Processing list key - holds tasks that are currently being processed
+const processingKey = (agentId: string) => `queue:processing:${agentId}`;
+
+/**
+ * Atomically claim up to `count` tasks from the queue.
+ * Tasks are moved to a processing list, preventing race conditions.
+ * Returns the claimed tasks as parsed objects.
+ */
+export async function claimTasks(
+  agentId: string,
+  count: number = 10
+): Promise<Array<{ raw: string; parsed: Record<string, unknown> }>> {
+  const queueKey = channels.tasks(agentId);
+  const procKey = processingKey(agentId);
+  const claimed: Array<{ raw: string; parsed: Record<string, unknown> }> = [];
+
+  // Use LMOVE (Redis 6.2+) or RPOPLPUSH to atomically move items
+  // RPOPLPUSH: pops from right of source, pushes to left of destination
+  for (let i = 0; i < count; i++) {
+    // lmove is preferred (Redis 6.2+), fallback to rpoplpush
+    const raw = await redis.rpoplpush(queueKey, procKey);
+    if (!raw) break; // Queue empty
+
+    try {
+      const parsed = JSON.parse(raw);
+      claimed.push({ raw, parsed });
+    } catch {
+      // Invalid JSON - still add to processing list but skip
+      logger.warn({ raw: raw.slice(0, 100) }, 'Invalid JSON in task queue');
+      // Remove invalid item from processing
+      await redis.lrem(procKey, 1, raw);
+    }
+  }
+
+  if (claimed.length > 0) {
+    logger.debug({ agentId, claimed: claimed.length }, 'Claimed tasks atomically');
+  }
+
+  return claimed;
+}
+
+/**
+ * Acknowledge processed tasks by removing them from the processing list.
+ * Call this after successfully processing tasks.
+ */
+export async function acknowledgeTasks(
+  agentId: string,
+  tasks: Array<{ raw: string }>
+): Promise<void> {
+  const procKey = processingKey(agentId);
+
+  // Use pipeline for efficiency
+  const pipeline = redis.pipeline();
+  for (const task of tasks) {
+    pipeline.lrem(procKey, 1, task.raw);
+  }
+  await pipeline.exec();
+
+  logger.debug({ agentId, acknowledged: tasks.length }, 'Acknowledged processed tasks');
+}
+
+/**
+ * Recover orphaned tasks from the processing list back to main queue.
+ * Call this on agent startup to handle crashes during processing.
+ * Tasks are pushed back to the right (end) of the queue so they maintain order.
+ */
+export async function recoverOrphanedTasks(agentId: string): Promise<number> {
+  const queueKey = channels.tasks(agentId);
+  const procKey = processingKey(agentId);
+
+  let recovered = 0;
+  // Move all items from processing back to main queue
+  // Use RPOPLPUSH in reverse: from processing to main queue
+  while (true) {
+    // Pop from processing, push to END of main queue (rpush via lmove)
+    const task = await redis.rpoplpush(procKey, queueKey);
+    if (!task) break;
+    recovered++;
+  }
+
+  if (recovered > 0) {
+    logger.info({ agentId, recovered }, 'Recovered orphaned tasks from previous run');
+  }
+
+  return recovered;
+}
+
+/**
+ * Get count of tasks in processing (for monitoring)
+ */
+export async function getProcessingCount(agentId: string): Promise<number> {
+  return redis.llen(processingKey(agentId));
+}
+
 // Urgent Queue
 export async function pushUrgent(task: unknown): Promise<void> {
   await redis.lpush(channels.urgent, JSON.stringify(task));
