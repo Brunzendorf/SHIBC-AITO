@@ -1,871 +1,148 @@
 /**
- * Initiative System - Proactive Agent Autonomy
+ * Initiative System - Compatibility Layer
  *
- * Enables agents to generate their own work instead of waiting for tasks.
- * Each agent scans their domain, identifies opportunities, and creates
- * GitHub issues or self-assigns work.
+ * This module provides backwards-compatible exports that delegate to the
+ * new plugin-based Initiative Framework in src/lib/initiative/.
+ *
+ * TASK-037: Refactored from 1474 lines to modular framework.
+ * This file now serves as a thin wrapper maintaining the existing API.
+ *
+ * @deprecated Import from '../lib/initiative/index.js' directly for new code.
  */
 
-import crypto from 'crypto';
+// Re-export types from new framework
+export type { AgentType, Initiative, FocusSettings, Priority } from '../lib/initiative/index.js';
+
+// Re-export GitHub operations
+export {
+  // Client utilities
+  isGitHubAvailable,
+  isCircuitAvailable,
+
+  // Issue operations
+  createGitHubIssue,
+  createHumanActionRequest,
+  addIssueComment,
+  updateIssueStatus,
+  claimIssue,
+  completeIssue,
+  fetchGitHubIssues,
+
+  // Cache
+  refreshBacklogCache,
+  INITIATIVE_CONTEXT_TTL,
+} from '../lib/initiative/index.js';
+
+// Re-export context building (internal use only - wrapper functions below for API)
+export {
+  getFocusSettings,
+  setFocusSettings,
+} from '../lib/initiative/index.js';
+
+// Re-export runner functions
+export { canRunInitiative, runner } from '../lib/initiative/index.js';
+
+// Re-export scoring
+export { getTopInitiatives, scoreInitiatives } from '../lib/initiative/index.js';
+
+// Re-export deduplication
+export {
+  getCreatedHashes,
+  getCreatedCount,
+  clearDeduplicationCache,
+} from '../lib/initiative/index.js';
+
+// Re-export providers for bootstrap initiatives
+export {
+  AGENT_FOCUS_CONFIGS,
+  BOOTSTRAP_INITIATIVES,
+  getBootstrapInitiatives,
+  registerAllProviders,
+} from '../lib/initiative/index.js';
+
+// ============================================================================
+// LEGACY FUNCTION WRAPPERS
+// These maintain the exact old API signatures while using new implementations
+// ============================================================================
+
 import { createLogger } from '../lib/logger.js';
-import { search } from '../lib/rag.js';
-import { redis, publisher, channels } from '../lib/redis.js';
-import { agentRepo } from '../lib/db.js';
-import { Octokit } from '@octokit/rest';
-import { buildDataContext } from '../lib/data-fetcher.js';
-import { createCircuitBreaker, GITHUB_OPTIONS, isCircuitOpen } from '../lib/circuit-breaker.js';
+import {
+  runner,
+  registry,
+  registerAllProviders,
+  buildContext,
+  formatContextAsPrompt,
+  type AgentType,
+  type Initiative,
+  type InitiativeProposal,
+  type ContextBuilderOptions,
+} from '../lib/initiative/index.js';
 
-const logger = createLogger('initiative');
+const logger = createLogger('initiative-compat');
 
-// TASK-011: Type for cached GitHub issues summary
-type GitHubIssuesSummary = { open: string[]; recent: string[] };
-
-// GitHub client (initialized lazily)
-let octokit: Octokit | null = null;
-
-function getOctokit(): Octokit {
-  if (!octokit) {
-    const token = process.env.GITHUB_TOKEN;
-    if (!token) {
-      throw new Error('GITHUB_TOKEN not set');
-    }
-    octokit = new Octokit({ auth: token });
-  }
-  return octokit;
-}
-
-// === CIRCUIT BREAKER WRAPPED GITHUB API CALLS ===
-// These wrappers prevent cascading failures when GitHub is down
+// Ensure providers are registered on module load
+registerAllProviders();
 
 /**
- * Search GitHub issues with circuit breaker protection
+ * Run initiative phase for an agent
+ * @deprecated Use runner.run() from '../lib/initiative/index.js'
  */
-const searchIssuesBreaker = createCircuitBreaker(
-  'github-search-issues',
-  async (query: string, owner: string, repo: string, perPage: number) => {
-    const gh = getOctokit();
-    const result = await gh.search.issuesAndPullRequests({
-      q: `${query} repo:${owner}/${repo} is:issue`,
-      per_page: perPage,
-    });
-    return result.data.items;
-  },
-  GITHUB_OPTIONS,
-  // Fallback: return empty array when circuit is open
-  () => {
-    logger.warn('GitHub search circuit open - returning empty results');
-    return [];
-  }
-);
-
-/**
- * List GitHub issues with circuit breaker protection
- */
-const listIssuesBreaker = createCircuitBreaker(
-  'github-list-issues',
-  async (owner: string, repo: string, state: 'open' | 'closed' | 'all', perPage: number) => {
-    const gh = getOctokit();
-    const result = await gh.issues.listForRepo({
-      owner,
-      repo,
-      state,
-      per_page: perPage,
-      sort: 'updated',
-      direction: 'desc',
-    });
-    return result.data;
-  },
-  GITHUB_OPTIONS,
-  // Fallback: return empty array
-  () => {
-    logger.warn('GitHub list issues circuit open - returning empty results');
-    return [];
-  }
-);
-
-/**
- * Create GitHub issue with circuit breaker protection
- */
-const createIssueBreaker = createCircuitBreaker(
-  'github-create-issue',
-  async (owner: string, repo: string, title: string, body: string, labels: string[], assignee?: string) => {
-    const gh = getOctokit();
-    const result = await gh.issues.create({
-      owner,
-      repo,
-      title,
-      body,
-      labels,
-      assignees: assignee ? [assignee] : undefined,
-    });
-    return result.data;
-  },
-  GITHUB_OPTIONS,
-  // Fallback: return null (issue not created)
-  () => {
-    logger.error('GitHub create issue circuit open - issue NOT created');
-    return null;
-  }
-);
-
-/**
- * Add comment to GitHub issue with circuit breaker protection
- */
-const _addCommentBreaker = createCircuitBreaker(
-  'github-add-comment',
-  async (owner: string, repo: string, issueNumber: number, body: string) => {
-    const gh = getOctokit();
-    const result = await gh.issues.createComment({
-      owner,
-      repo,
-      issue_number: issueNumber,
-      body,
-    });
-    return result.data;
-  },
-  GITHUB_OPTIONS,
-  // Fallback: return null
-  () => {
-    logger.warn('GitHub add comment circuit open - comment NOT added');
-    return null;
-  }
-);
-
-/**
- * Update GitHub issue labels with circuit breaker protection
- */
-const _updateIssueLabelsBreaker = createCircuitBreaker(
-  'github-update-labels',
-  async (owner: string, repo: string, issueNumber: number, labels: string[]) => {
-    const gh = getOctokit();
-    const result = await gh.issues.setLabels({
-      owner,
-      repo,
-      issue_number: issueNumber,
-      labels,
-    });
-    return result.data;
-  },
-  GITHUB_OPTIONS,
-  // Fallback: return null
-  () => {
-    logger.warn('GitHub update labels circuit open - labels NOT updated');
-    return null;
-  }
-);
-
-/**
- * Check if GitHub API is available (circuit is closed)
- */
-export function isGitHubAvailable(): boolean {
-  return !isCircuitOpen('github-search-issues') &&
-         !isCircuitOpen('github-list-issues') &&
-         !isCircuitOpen('github-create-issue');
-}
-
-// Agent types
-export type AgentType = 'ceo' | 'cmo' | 'cto' | 'cfo' | 'coo' | 'cco' | 'dao';
-
-// Initiative definition
-export interface Initiative {
-  title: string;
-  description: string;
-  priority: 'critical' | 'high' | 'medium' | 'low';
-  revenueImpact: number; // 0-10
-  effort: number; // 0-10 (story points)
-  suggestedAssignee: AgentType;
-  tags: string[];
-  source: string; // Where this initiative came from
-}
-
-// Domain-specific focus areas
-const AGENT_FOCUS: Record<AgentType, {
-  keyQuestions: string[];
-  revenueAngles: string[];
-  scanTopics: string[];
-}> = {
-  ceo: {
-    keyQuestions: [
-      'What is blocking our launch?',
-      'Which partnerships could accelerate growth?',
-      'Are all agents productive?',
-    ],
-    revenueAngles: [
-      'Strategic partnerships',
-      'Investor relations',
-      'Token launch timing',
-    ],
-    scanTopics: ['roadmap', 'team status', 'blockers', 'strategy'],
-  },
-  cmo: {
-    keyQuestions: [
-      'How can we grow Twitter/X followers?',
-      'What content would go viral?',
-      'Which influencers should we approach?',
-    ],
-    revenueAngles: [
-      'Viral marketing campaigns',
-      'Community growth → token demand',
-      'Influencer partnerships',
-    ],
-    scanTopics: ['crypto trends', 'meme marketing', 'community growth'],
-  },
-  cfo: {
-    keyQuestions: [
-      'What funding sources are available?',
-      'How do we optimize treasury?',
-      'What are gas-efficient strategies?',
-    ],
-    revenueAngles: [
-      'Grants and funding',
-      'Treasury yield strategies',
-      'Cost optimization',
-    ],
-    scanTopics: ['defi yields', 'grants', 'treasury management'],
-  },
-  cto: {
-    keyQuestions: [
-      'Are there security vulnerabilities?',
-      'What technical debt needs addressing?',
-      'Which tools would improve efficiency?',
-    ],
-    revenueAngles: [
-      'Automation saves costs',
-      'Security prevents losses',
-      'Better tools = faster delivery',
-    ],
-    scanTopics: ['smart contracts', 'security', 'infrastructure'],
-  },
-  coo: {
-    keyQuestions: [
-      'What processes are inefficient?',
-      'Which partnerships need follow-up?',
-      'How is team coordination?',
-    ],
-    revenueAngles: [
-      'Process efficiency',
-      'Partnership revenue',
-      'Resource optimization',
-    ],
-    scanTopics: ['operations', 'partnerships', 'efficiency'],
-  },
-  cco: {
-    keyQuestions: [
-      'Are we compliant with regulations?',
-      'What legal risks exist?',
-      'Do we need legal counsel?',
-    ],
-    revenueAngles: [
-      'Compliance prevents fines',
-      'Legal clarity enables growth',
-      'Risk management',
-    ],
-    scanTopics: ['crypto regulations', 'compliance', 'legal'],
-  },
-  dao: {
-    keyQuestions: [
-      'What governance decisions are pending?',
-      'Is voting participation healthy?',
-      'Are treasury allocations optimal?',
-    ],
-    revenueAngles: [
-      'Governance efficiency',
-      'Community trust → token value',
-      'Treasury optimization',
-    ],
-    scanTopics: ['governance', 'voting', 'dao management'],
-  },
-};
-
-// Pre-defined initiatives for bootstrapping (revenue-focused)
-const BOOTSTRAP_INITIATIVES: Initiative[] = [
-  {
-    title: 'Activate X/Twitter for organic reach',
-    description: 'Twitter is the primary channel for crypto marketing. Need to post regularly, engage with community, build follower base. Target: 1000 followers in first month.',
-    priority: 'critical',
-    revenueImpact: 9,
-    effort: 2,
-    suggestedAssignee: 'cmo',
-    tags: ['marketing', 'social', 'growth'],
-    source: 'bootstrap',
-  },
-  {
-    title: 'Apply for CoinGecko listing',
-    description: 'CoinGecko listing provides legitimacy and visibility. Free to apply, high impact. Submit token details, contract address, social links.',
-    priority: 'high',
-    revenueImpact: 8,
-    effort: 3,
-    suggestedAssignee: 'cmo',
-    tags: ['listing', 'visibility', 'growth'],
-    source: 'bootstrap',
-  },
-  {
-    title: 'Apply for CoinMarketCap listing',
-    description: 'CMC is the most visited crypto data site. Listing drives organic traffic and trading volume.',
-    priority: 'high',
-    revenueImpact: 8,
-    effort: 3,
-    suggestedAssignee: 'cmo',
-    tags: ['listing', 'visibility', 'growth'],
-    source: 'bootstrap',
-  },
-  {
-    title: 'Research and apply for crypto grants',
-    description: 'Many foundations offer grants: Ethereum Foundation, Gitcoin, Optimism RPGF, etc. Research eligibility and apply.',
-    priority: 'high',
-    revenueImpact: 10,
-    effort: 5,
-    suggestedAssignee: 'cfo',
-    tags: ['funding', 'grants', 'revenue'],
-    source: 'bootstrap',
-  },
-  {
-    title: 'Define token utility features',
-    description: 'Pure meme tokens struggle. Define utility: staking, governance, access to features. Increases token value proposition.',
-    priority: 'medium',
-    revenueImpact: 7,
-    effort: 5,
-    suggestedAssignee: 'cto',
-    tags: ['tokenomics', 'utility', 'product'],
-    source: 'bootstrap',
-  },
-  {
-    title: 'Launch community meme contest',
-    description: 'User-generated content drives engagement. Prize pool from treasury. Winners get tokens + recognition.',
-    priority: 'medium',
-    revenueImpact: 6,
-    effort: 3,
-    suggestedAssignee: 'cmo',
-    tags: ['community', 'engagement', 'marketing'],
-    source: 'bootstrap',
-  },
-  {
-    title: 'Create ambassador program',
-    description: 'Recruit community members as ambassadors. Provide incentives for promotion, content creation, community moderation.',
-    priority: 'medium',
-    revenueImpact: 7,
-    effort: 4,
-    suggestedAssignee: 'coo',
-    tags: ['community', 'growth', 'partnerships'],
-    source: 'bootstrap',
-  },
-  {
-    title: 'Security audit preparation',
-    description: 'Prepare documentation for security audit. Clean up contracts, document functions, prepare test suite.',
-    priority: 'high',
-    revenueImpact: 5,
-    effort: 6,
-    suggestedAssignee: 'cto',
-    tags: ['security', 'audit', 'trust'],
-    source: 'bootstrap',
-  },
-];
-
-// Redis keys
-const INITIATIVE_CREATED_KEY = 'initiatives:created';
-const INITIATIVE_COOLDOWN_KEY = 'initiatives:cooldown';
-const FOCUS_KEY = 'settings:focus';
-
-/**
- * Generate collision-resistant hash for initiative deduplication
- * TASK-008: Previous simple regex-based hash had collisions (e.g., "activate twitter" vs "activate-twitter")
- */
-function generateInitiativeHash(title: string): string {
-  return crypto.createHash('sha256')
-    .update(title.toLowerCase().trim())
-    .digest('hex')
-    .slice(0, 16); // 16 hex chars = 64 bits, sufficient for deduplication
-}
-
-// Focus settings interface
-interface FocusSettings {
-  revenueFocus: number;
-  communityGrowth: number;
-  marketingVsDev: number;
-  riskTolerance: number;
-  timeHorizon: number;
-}
-
-const DEFAULT_FOCUS: FocusSettings = {
-  revenueFocus: 80,
-  communityGrowth: 60,
-  marketingVsDev: 50,
-  riskTolerance: 40,
-  timeHorizon: 30,
-};
-
-/**
- * Get current focus settings from Redis
- */
-async function getFocusSettings(): Promise<FocusSettings> {
+export async function runInitiativePhase(agentType: AgentType): Promise<{
+  created: boolean;
+  initiative?: Initiative;
+  issueUrl?: string;
+  needsAIGeneration?: boolean;
+}> {
   try {
-    const stored = await redis.get(FOCUS_KEY);
-    if (stored) {
-      return JSON.parse(stored);
-    }
-  } catch (error) {
-    logger.warn({ error }, 'Failed to load focus settings, using defaults');
-  }
-  return DEFAULT_FOCUS;
-}
-
-/**
- * Calculate initiative score based on focus settings
- */
-function calculateInitiativeScore(initiative: Initiative, focus: FocusSettings, agentType: AgentType): number {
-  let score = 0;
-
-  // Base score from revenue impact
-  score += initiative.revenueImpact * (focus.revenueFocus / 100) * 2;
-
-  // Adjust based on agent type and marketingVsDev slider
-  const isMarketingAgent = ['cmo', 'coo'].includes(agentType);
-  const isDevAgent = ['cto', 'cfo'].includes(agentType);
-
-  if (isMarketingAgent) {
-    score += (focus.marketingVsDev / 100) * 3;
-  } else if (isDevAgent) {
-    score += ((100 - focus.marketingVsDev) / 100) * 3;
-  }
-
-  // Community growth bonus for community-related initiatives
-  if (initiative.tags.some(t => ['community', 'growth', 'social'].includes(t))) {
-    score += (focus.communityGrowth / 100) * 2;
-  }
-
-  // Risk adjustment
-  const isRisky = initiative.tags.some(t => ['aggressive', 'experimental'].includes(t));
-  if (isRisky) {
-    score *= (focus.riskTolerance / 100);
-  }
-
-  // Time horizon adjustment
-  const isLongTerm = initiative.effort > 5;
-  if (isLongTerm) {
-    score *= (focus.timeHorizon / 100);
-  } else {
-    score *= ((100 - focus.timeHorizon) / 100) + 0.5; // Boost quick wins when short-term focused
-  }
-
-  // Subtract effort
-  score -= initiative.effort * 0.5;
-
-  return score;
-}
-
-/**
- * Check if an initiative was already created (IMPROVED: checks GitHub too)
- */
-async function wasInitiativeCreated(title: string): Promise<boolean> {
-  // First, check Redis cache (fast path)
-  // TASK-008: Use SHA256 hash to prevent collisions
-  const hash = generateInitiativeHash(title);
-  const inRedis = await redis.sismember(INITIATIVE_CREATED_KEY, hash) === 1;
-  if (inRedis) {
-    logger.debug({ title }, 'Initiative found in Redis cache');
-    return true;
-  }
-
-  // Second, check GitHub for similar issues (slow path, but accurate)
-  // Uses circuit breaker to prevent cascading failures when GitHub is down
-  try {
-    const owner = process.env.GITHUB_ORG || 'Brunzendorf';
-    const repo = 'SHIBC-AITO';
-
-    // Extract key words from title for search
-    const keywords = title
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, '')
-      .split(/\s+/)
-      .filter(w => w.length > 3)
-      .slice(0, 5)
-      .join(' ');
-
-    if (!keywords) return false;
-
-    // Search using circuit breaker (returns empty array if circuit is open)
-    const searchResults = await searchIssuesBreaker.fire(keywords, owner, repo, 30);
-
-    // Check for similar titles using fuzzy matching
-    const normalizedTitle = title.toLowerCase().replace(/[^a-z0-9]/g, '');
-    for (const issue of searchResults) {
-      const issueTitle = issue.title.toLowerCase().replace(/[^a-z0-9]/g, '');
-
-      // Check for exact match
-      if (issueTitle === normalizedTitle) {
-        logger.info({ title, existingIssue: issue.number }, 'Exact duplicate found on GitHub');
-        await markInitiativeCreated(title); // Cache for next time
-        return true;
-      }
-
-      // Check for high similarity (>80% overlap)
-      const similarity = calculateSimilarity(normalizedTitle, issueTitle);
-      if (similarity > 0.8) {
-        logger.info({ title, existingIssue: issue.number, similarity }, 'Similar issue found on GitHub');
-        return true;
-      }
-    }
-  } catch (error) {
-    // TASK-009: Distinguish error types for proper handling
-    const isRateLimit = error instanceof Error && (
-      error.message.includes('rate limit') ||
-      error.message.includes('403') ||
-      error.message.includes('429') ||
-      error.message.includes('API rate limit exceeded')
-    );
-
-    if (isRateLimit) {
-      // Rate limited - assume duplicate to prevent creating spam issues
-      logger.warn({ error, title }, 'GitHub rate limited, assuming duplicate to be safe');
-      return true;
+    // Check if provider is registered
+    if (!registry.has(agentType)) {
+      logger.warn({ agentType }, 'Provider not registered, registering now');
+      registerAllProviders();
     }
 
-    // For network errors or other transient failures, fall through
-    // The circuit breaker will handle repeated failures by opening
-    logger.warn({ error, title }, 'Failed to check GitHub for duplicates');
-  }
+    const result = await runner.run(agentType);
 
-  return false;
-}
-
-/**
- * Calculate similarity between two strings (Jaccard index on words)
- */
-function calculateSimilarity(a: string, b: string): number {
-  const wordsA = new Set(a.match(/[a-z0-9]+/g) || []);
-  const wordsB = new Set(b.match(/[a-z0-9]+/g) || []);
-
-  if (wordsA.size === 0 && wordsB.size === 0) return 1;
-  if (wordsA.size === 0 || wordsB.size === 0) return 0;
-
-  const intersection = new Set([...wordsA].filter(x => wordsB.has(x)));
-  const union = new Set([...wordsA, ...wordsB]);
-
-  return intersection.size / union.size;
-}
-
-/**
- * Mark an initiative as created
- * TASK-008: Use SHA256 hash to prevent collisions
- */
-async function markInitiativeCreated(title: string): Promise<void> {
-  const hash = generateInitiativeHash(title);
-  await redis.sadd(INITIATIVE_CREATED_KEY, hash);
-}
-
-/**
- * Check if agent is in cooldown (prevent spam)
- */
-async function isInCooldown(agentType: AgentType): Promise<boolean> {
-  const key = `${INITIATIVE_COOLDOWN_KEY}:${agentType}`;
-  return await redis.exists(key) === 1;
-}
-
-/**
- * TASK-005: Check if agent can run initiative phase
- * Exported for use by daemon to allow initiative after task processing
- */
-export async function canRunInitiative(agentType: AgentType): Promise<boolean> {
-  return !(await isInCooldown(agentType));
-}
-
-/**
- * Set cooldown for agent (1 hour)
- */
-async function setCooldown(agentType: AgentType): Promise<void> {
-  const key = `${INITIATIVE_COOLDOWN_KEY}:${agentType}`;
-  await redis.setex(key, 3600, '1'); // 1 hour cooldown
-}
-
-/**
- * Scan RAG for relevant context
- */
-async function scanRAG(topics: string[]): Promise<string[]> {
-  const results: string[] = [];
-
-  for (const topic of topics) {
-    try {
-      const hits = await search(topic, 3);
-      for (const hit of hits) {
-        results.push(`[${hit.source}] ${hit.text.slice(0, 200)}`);
-      }
-    } catch (error) {
-      logger.debug({ topic, error }, 'RAG scan failed for topic');
-    }
-  }
-
-  return results;
-}
-
-/**
- * Fetch open GitHub issues for context
- * Uses circuit breaker to prevent cascading failures
- */
-async function fetchGitHubIssues(): Promise<{ open: string[]; recent: string[] }> {
-  try {
-    const owner = process.env.GITHUB_ORG || 'Brunzendorf';
-    const repo = 'SHIBC-AITO';
-
-    // Get open and closed issues using circuit breaker
-    const [openIssues, closedIssues] = await Promise.all([
-      listIssuesBreaker.fire(owner, repo, 'open', 15),
-      listIssuesBreaker.fire(owner, repo, 'closed', 10),
-    ]);
-
+    // Result already matches the expected format
     return {
-      open: openIssues.map(i => {
-        const labelNames = i.labels.map(l => typeof l === 'string' ? l : l.name).filter(Boolean);
-        return `#${i.number}: ${i.title} [${labelNames.join(', ')}]`;
-      }),
-      recent: closedIssues.map(i => `#${i.number}: ${i.title} (closed)`),
+      created: result.created,
+      initiative: result.initiative,
+      issueUrl: result.issueUrl,
+      needsAIGeneration: result.needsAIGeneration,
     };
   } catch (error) {
-    logger.debug({ error }, 'Failed to fetch GitHub issues');
-    return { open: [], recent: [] };
+    logger.error({ error, agentType }, 'runInitiativePhase failed');
+    return { created: false, needsAIGeneration: true };
   }
 }
 
 /**
- * Get other agents' current status from PostgreSQL
- */
-async function getTeamStatus(): Promise<Record<string, string>> {
-  const status: Record<string, string> = {};
-  const agents: AgentType[] = ['ceo', 'cmo', 'cto', 'cfo', 'coo', 'cco', 'dao'];
-
-  for (const agentType of agents) {
-    try {
-      // Get agent from DB to get their ID
-      const agent = await agentRepo.findByType(agentType);
-      if (!agent) continue;
-
-      // Query PostgreSQL for agent state
-      const { stateRepo } = await import('../lib/db.js');
-      const stateData = await stateRepo.getAll(agent.id);
-
-      if (stateData && Object.keys(stateData).length > 0) {
-        const loopCount = stateData.loop_count || '?';
-        const lastActive = stateData.last_loop_at
-          ? new Date(String(stateData.last_loop_at)).toLocaleString()
-          : 'unknown';
-        const currentStatus = stateData.status || stateData.current_focus || 'active';
-        status[agentType.toUpperCase()] = `Loop ${loopCount}, ${currentStatus}, last: ${lastActive}`;
-      }
-    } catch {
-      // ignore individual agent errors
-    }
-  }
-
-  return status;
-}
-
-// TASK-011: Cache TTL for initiative context (15 minutes)
-const INITIATIVE_CONTEXT_TTL = 15 * 60; // seconds
-
-/**
- * Build rich initiative context for agent prompts
- * TASK-011: Cached to avoid slow blocking calls on every loop
- */
-export async function buildInitiativeContext(
-  agentType: AgentType,
-  ragContext: string[],
-  focusSettings: FocusSettings,
-  existingTitles: string[]
-): Promise<string> {
-  const agentFocus = AGENT_FOCUS[agentType];
-  if (!agentFocus) return '';
-
-  // TASK-011: Check cache for slow data (GitHub issues, data context)
-  const cacheKey = `initiative:context:${agentType}`;
-  let cachedData: { githubIssues: GitHubIssuesSummary; dataContext: string } | null = null;
-
-  try {
-    const cached = await redis.get(cacheKey);
-    if (cached) {
-      cachedData = JSON.parse(cached);
-      logger.debug({ agentType }, 'Using cached initiative context');
-    }
-  } catch (err) {
-    logger.warn({ err }, 'Failed to read initiative context cache');
-  }
-
-  // Fetch data - use cache for slow operations, always fetch fresh team status
-  let githubIssues: GitHubIssuesSummary;
-  let dataContext: string;
-
-  if (cachedData) {
-    // Use cached slow data
-    githubIssues = cachedData.githubIssues;
-    dataContext = cachedData.dataContext;
-  } else {
-    // Fetch fresh data in parallel
-    const [freshGithubIssues, freshDataContext] = await Promise.all([
-      fetchGitHubIssues(),
-      buildDataContext(), // Live market data, news, fear & greed
-    ]);
-    githubIssues = freshGithubIssues;
-    dataContext = freshDataContext;
-
-    // Cache the slow data
-    try {
-      await redis.setex(cacheKey, INITIATIVE_CONTEXT_TTL, JSON.stringify({
-        githubIssues,
-        dataContext,
-      }));
-      logger.debug({ agentType, ttl: INITIATIVE_CONTEXT_TTL }, 'Cached initiative context');
-    } catch (err) {
-      logger.warn({ err }, 'Failed to cache initiative context');
-    }
-  }
-
-  // Always fetch fresh team status (it's fast and changes frequently)
-  const teamStatus = await getTeamStatus();
-
-  const teamStatusStr = Object.entries(teamStatus)
-    .map(([agent, status]) => `- ${agent}: ${status}`)
-    .join('\n') || 'No team data available';
-
-  // Rich, data-driven context for AI decision making
-  return `
-## 🧠 Strategic Context for ${agentType.toUpperCase()}
-
-You MUST use \`propose_initiative\` action to create new initiatives based on this data.
-Analyze the market conditions, news, and project status to identify opportunities.
-
-### Focus Settings (Dashboard Controls)
-- Revenue Priority: ${focusSettings.revenueFocus}%
-- Community Growth: ${focusSettings.communityGrowth}%
-- Marketing vs Dev: ${focusSettings.marketingVsDev}% (higher = more marketing)
-- Risk Tolerance: ${focusSettings.riskTolerance}%
-- Time Horizon: ${focusSettings.timeHorizon}% (higher = longer term)
-
----
-
-${dataContext}
-
----
-
-### Team Status (Live)
-${teamStatusStr}
-
-### Open GitHub Issues (${githubIssues.open.length})
-${githubIssues.open.slice(0, 10).join('\n') || 'None'}
-
-### Recently Completed
-${githubIssues.recent.slice(0, 5).join('\n') || 'None'}
-
-### Existing Initiatives (avoid duplicates!)
-${existingTitles.slice(0, 15).join(', ') || 'None'}
-
-### RAG Knowledge
-${ragContext.slice(0, 5).join('\n') || 'None'}
-
----
-
-## Your Role: ${agentType.toUpperCase()}
-
-### Key Questions to Consider
-${agentFocus.keyQuestions.map(q => `- ${q}`).join('\n')}
-
-### Revenue Angles for Your Domain
-${agentFocus.revenueAngles.map(r => `- ${r}`).join('\n')}
-
----
-
-## ACTION REQUIRED
-
-Based on the data above, propose a NEW initiative using:
-\`\`\`json
-{
-  "actions": [{
-    "type": "propose_initiative",
-    "data": {
-      "title": "Clear, actionable title",
-      "description": "What, why, expected outcome",
-      "rationale": "Why NOW based on current data?",
-      "priority": "high|medium|low",
-      "effort": 1-5,
-      "revenueImpact": 0-5,
-      "communityImpact": 0-5,
-      "tags": ["relevant", "tags"]
-    }
-  }]
-}
-\`\`\`
-
-Think strategically. Use the market data and news to inform your proposal.
-`;
-}
-
-/**
- * Get initiative context for agent prompt injection
- * This provides agents with context to propose their own initiatives
- */
-export async function getInitiativePromptContext(agentType: AgentType): Promise<string> {
-  const agentFocus = AGENT_FOCUS[agentType];
-  if (!agentFocus) return '';
-
-  const focusSettings = await getFocusSettings();
-  const ragContext = await scanRAG(agentFocus.scanTopics);
-  const createdTitles = await redis.smembers(INITIATIVE_CREATED_KEY);
-
-  return buildInitiativeContext(agentType, ragContext, focusSettings, createdTitles);
-}
-
-/**
- * Generate bootstrap initiatives for an agent (fallback if agent doesn't propose)
+ * Generate bootstrap initiatives for an agent
+ * @deprecated Use runner.run() or provider.getBootstrapInitiatives()
  */
 export async function generateInitiatives(agentType: AgentType): Promise<Initiative[]> {
-  // Check cooldown
-  if (await isInCooldown(agentType)) {
-    logger.debug({ agentType }, 'Agent in initiative cooldown');
-    return [];
-  }
-
-  const agentFocus = AGENT_FOCUS[agentType];
-  if (!agentFocus) {
-    logger.warn({ agentType }, 'Unknown agent type');
-    return [];
-  }
-
-  // Get focus settings from dashboard
-  const focusSettings = await getFocusSettings();
-
-  // Scan RAG for context
-  const ragContext = await scanRAG(agentFocus.scanTopics);
-
-  // Filter bootstrap initiatives relevant to this agent (that haven't been created)
-  const relevantBootstrap = BOOTSTRAP_INITIATIVES.filter(
-    i => i.suggestedAssignee === agentType
-  );
-  const newBootstrapInitiatives: Initiative[] = [];
-  for (const initiative of relevantBootstrap) {
-    if (!(await wasInitiativeCreated(initiative.title))) {
-      newBootstrapInitiatives.push(initiative);
+  try {
+    const canRun = await runner.canRun(agentType);
+    if (!canRun) {
+      logger.debug({ agentType }, 'Agent in cooldown');
+      return [];
     }
+
+    const provider = registry.get(agentType);
+    if (!provider) {
+      logger.warn({ agentType }, 'Unknown agent type');
+      return [];
+    }
+
+    return provider.getBootstrapInitiatives?.() || [];
+  } catch (error) {
+    logger.error({ error, agentType }, 'generateInitiatives failed');
+    return [];
   }
-
-  // Sort by focus-adjusted score (uses dashboard slider settings)
-  newBootstrapInitiatives.sort((a, b) => {
-    const scoreA = calculateInitiativeScore(a, focusSettings, agentType);
-    const scoreB = calculateInitiativeScore(b, focusSettings, agentType);
-    return scoreB - scoreA;
-  });
-
-  logger.info({
-    agentType,
-    totalInitiatives: newBootstrapInitiatives.length,
-    ragContextItems: ragContext.length,
-    focusSettings: {
-      revenueFocus: focusSettings.revenueFocus,
-      marketingVsDev: focusSettings.marketingVsDev,
-    },
-  }, 'Generated bootstrap initiatives with focus-adjusted scoring');
-
-  return newBootstrapInitiatives;
 }
 
 /**
  * Create initiative from agent proposal
+ * @deprecated Use runner.createFromProposal()
  */
 export async function createInitiativeFromProposal(
   agentType: AgentType,
@@ -878,597 +155,84 @@ export async function createInitiativeFromProposal(
     tags: string[];
   }
 ): Promise<{ initiative: Initiative; issueUrl: string | null }> {
-  const initiative: Initiative = {
-    title: proposal.title,
-    description: proposal.description,
-    priority: (['critical', 'high', 'medium', 'low'].includes(proposal.priority)
-      ? proposal.priority : 'medium') as Initiative['priority'],
-    revenueImpact: Math.min(10, Math.max(1, proposal.revenueImpact || 5)),
-    effort: Math.min(10, Math.max(1, proposal.effort || 5)),
-    suggestedAssignee: agentType,
-    tags: Array.isArray(proposal.tags) ? proposal.tags : [],
-    source: 'agent-proposed',
-  };
-
-  // Check if already exists
-  if (await wasInitiativeCreated(initiative.title)) {
-    logger.info({ title: initiative.title }, 'Initiative already exists, skipping');
-    return { initiative, issueUrl: null };
-  }
-
-  // Create GitHub issue
-  const issueUrl = await createGitHubIssue(initiative);
-
-  if (issueUrl) {
-    await markInitiativeCreated(initiative.title);
-    await setCooldown(agentType);
-
-    // Auto-assign: Queue as task for the assigned agent
-    await assignInitiativeAsTask(initiative, issueUrl);
-  }
-
-  return { initiative, issueUrl };
-}
-
-/**
- * Auto-assign an initiative as a task to the suggested agent
- */
-async function assignInitiativeAsTask(initiative: Initiative, issueUrl: string): Promise<void> {
   try {
-    // Find the agent in DB
-    const agent = await agentRepo.findByType(initiative.suggestedAssignee);
-    if (!agent) {
-      logger.warn({ agentType: initiative.suggestedAssignee }, 'Cannot auto-assign: agent not found');
-      return;
-    }
-
-    // Create task payload
-    const task = {
-      title: `[Initiative] ${initiative.title}`,
-      description: `${initiative.description}\n\nGitHub Issue: ${issueUrl}\nPriority: ${initiative.priority}\nRevenue Impact: ${initiative.revenueImpact}/10\nEffort: ${initiative.effort}/10`,
-      priority: initiative.priority,
-      from: 'initiative-system',
-      issueUrl,
-      tags: initiative.tags,
-      createdAt: new Date().toISOString(),
+    const initiativeProposal: InitiativeProposal = {
+      title: proposal.title,
+      description: proposal.description,
+      priority: (['critical', 'high', 'medium', 'low'].includes(proposal.priority)
+        ? proposal.priority
+        : 'medium') as Initiative['priority'],
+      revenueImpact: Math.min(10, Math.max(1, proposal.revenueImpact || 5)),
+      effort: Math.min(10, Math.max(1, proposal.effort || 5)),
+      tags: Array.isArray(proposal.tags) ? proposal.tags : [],
     };
 
-    // Queue to agent's task queue
-    const taskQueueKey = `queue:tasks:${initiative.suggestedAssignee}`;
-    await redis.rpush(taskQueueKey, JSON.stringify(task));
-
-    // Notify the agent via Redis pub/sub
-    await publisher.publish(channels.agent(agent.id), JSON.stringify({
-      id: crypto.randomUUID(),
-      type: 'task_queued',
-      from: 'initiative-system',
-      to: agent.id,
-      payload: { title: task.title, queueKey: taskQueueKey },
-      priority: initiative.priority,
-      timestamp: new Date(),
-      requiresResponse: false,
-    }));
-
-    logger.info({
-      agentType: initiative.suggestedAssignee,
-      title: initiative.title,
-      issueUrl,
-    }, 'Initiative auto-assigned as task to agent');
-  } catch (error) {
-    logger.warn({ error, title: initiative.title }, 'Failed to auto-assign initiative');
-  }
-}
-
-/**
- * Create a GitHub issue for an initiative
- */
-export async function createGitHubIssue(initiative: Initiative): Promise<string | null> {
-  const owner = process.env.GITHUB_ORG || 'Brunzendorf';
-  const repo = 'SHIBC-AITO';
-
-  try {
-    // Map priority to labels
-    const priorityLabel = `priority:${initiative.priority}`;
-    const labels = [
-      priorityLabel,
-      `agent:${initiative.suggestedAssignee}`,
-      ...initiative.tags.map(t => t.toLowerCase()),
-    ];
-
-    // Create issue body
-    const body = `## Description
-
-${initiative.description}
-
-## Priority
-
-**${initiative.priority.toUpperCase()}** (Revenue Impact: ${initiative.revenueImpact}/10, Effort: ${initiative.effort}/10)
-
-## Revenue Angle
-
-This initiative contributes to revenue by: ${AGENT_FOCUS[initiative.suggestedAssignee]?.revenueAngles.join(', ') || 'TBD'}
-
-## Suggested Assignee
-
-@${initiative.suggestedAssignee}-agent
-
-## Source
-
-Auto-generated by AITO Initiative System from: ${initiative.source}
-
----
-*Created by AITO autonomous initiative system*`;
-
-    // Use circuit breaker for issue creation
-    const response = await createIssueBreaker.fire(owner, repo, initiative.title, body, labels);
-
-    if (!response) {
-      // Circuit breaker returned fallback (null)
-      logger.warn({ title: initiative.title }, 'GitHub issue creation skipped - circuit open');
-      return null;
-    }
-
-    // Mark as created
-    await markInitiativeCreated(initiative.title);
-
-    logger.info({
-      issueNumber: response.number,
-      title: initiative.title,
-    }, 'Created GitHub issue');
-
-    return response.html_url;
-  } catch (error) {
-    logger.error({ error, initiative: initiative.title }, 'Failed to create GitHub issue');
-    return null;
-  }
-}
-
-/**
- * Create a GitHub issue for human action request (assigned to human)
- */
-export async function createHumanActionRequest(request: {
-  title: string;
-  description: string;
-  urgency: 'low' | 'medium' | 'high' | 'critical';
-  requestedBy: string;
-  blockedInitiatives?: string[];
-  category?: string;
-}): Promise<{ issueUrl: string | null; issueNumber: number | null }> {
-  const owner = process.env.GITHUB_ORG || 'Brunzendorf';
-  const repo = 'SHIBC-AITO';
-  const humanUsername = process.env.GITHUB_HUMAN_USERNAME || 'Brunzendorf';
-
-  try {
-    const gh = getOctokit();
-
-    const urgencyEmoji = {
-      low: '📋',
-      medium: '⚠️',
-      high: '🔴',
-      critical: '🚨',
-    }[request.urgency];
-
-    const labels = [
-      'human-action-required',
-      `urgency:${request.urgency}`,
-      `from:${request.requestedBy}`,
-    ];
-    if (request.category) labels.push(request.category);
-
-    const body = `${urgencyEmoji} **Human Action Required**
-
-## Request
-${request.description}
-
-## Urgency
-**${request.urgency.toUpperCase()}**
-
-## Requested By
-${request.requestedBy.toUpperCase()} Agent
-
-${request.blockedInitiatives?.length ? `## Blocked Initiatives
-${request.blockedInitiatives.map(i => `- ${i}`).join('\n')}` : ''}
-
----
-*This issue was automatically created by AITO because an agent needs human input to proceed.*
-*Please resolve this and close the issue when done - the agent will be notified.*`;
-
-    const response = await gh.issues.create({
-      owner,
-      repo,
-      title: `${urgencyEmoji} [Human Required] ${request.title}`,
-      body,
-      labels,
-      assignees: [humanUsername],
-    });
-
-    logger.info({
-      issueNumber: response.data.number,
-      title: request.title,
-      assignee: humanUsername,
-    }, 'Created human action request issue');
+    const result = await runner.createFromProposal(agentType, initiativeProposal);
 
     return {
-      issueUrl: response.data.html_url,
-      issueNumber: response.data.number,
+      initiative: result.initiative,
+      issueUrl: result.issueUrl,
     };
   } catch (error) {
-    logger.error({ error, title: request.title }, 'Failed to create human action request');
-    return { issueUrl: null, issueNumber: null };
+    logger.error({ error, agentType }, 'createInitiativeFromProposal failed');
+
+    // Return a minimal initiative on error
+    const fallbackInitiative: Initiative = {
+      title: proposal.title,
+      description: proposal.description,
+      priority: 'medium',
+      revenueImpact: proposal.revenueImpact || 5,
+      effort: proposal.effort || 5,
+      suggestedAssignee: agentType,
+      tags: proposal.tags || [],
+      source: 'agent-proposed',
+    };
+
+    return { initiative: fallbackInitiative, issueUrl: null };
   }
-}
-
-/**
- * Add a comment to a GitHub issue (for agent progress updates)
- */
-export async function addIssueComment(
-  issueNumber: number,
-  comment: string,
-  agentType: string
-): Promise<boolean> {
-  const owner = process.env.GITHUB_ORG || 'Brunzendorf';
-  const repo = 'SHIBC-AITO';
-
-  try {
-    const gh = getOctokit();
-
-    const body = `**[${agentType.toUpperCase()} Agent Update]**
-
-${comment}
-
----
-*Automated update from AITO agent system*`;
-
-    await gh.issues.createComment({
-      owner,
-      repo,
-      issue_number: issueNumber,
-      body,
-    });
-
-    logger.info({ issueNumber, agentType }, 'Added comment to issue');
-    return true;
-  } catch (error) {
-    logger.error({ error, issueNumber }, 'Failed to add issue comment');
-    return false;
-  }
-}
-
-/**
- * Run initiative phase for an agent
- * Now AI-driven: If no bootstrap initiatives, queues a task for Claude Code to generate ideas
- * Returns true if an initiative was created/executed
- */
-export async function runInitiativePhase(agentType: AgentType): Promise<{
-  created: boolean;
-  initiative?: Initiative;
-  issueUrl?: string;
-  needsAIGeneration?: boolean;
-}> {
-  logger.info({ agentType }, 'Running initiative phase');
-
-  // Check cooldown first
-  if (await isInCooldown(agentType)) {
-    logger.debug({ agentType }, 'Agent in initiative cooldown');
-    return { created: false };
-  }
-
-  // Try bootstrap initiatives first
-  const bootstrapInitiatives = await generateInitiatives(agentType);
-
-  if (bootstrapInitiatives.length > 0) {
-    // Use bootstrap initiative
-    const topInitiative = bootstrapInitiatives[0];
-    const issueUrl = await createGitHubIssue(topInitiative);
-
-    if (issueUrl) {
-      await setCooldown(agentType);
-      await assignInitiativeAsTask(topInitiative, issueUrl);
-      return {
-        created: true,
-        initiative: topInitiative,
-        issueUrl,
-        needsAIGeneration: false,
-      };
-    }
-  }
-
-  // No bootstrap available - signal that AI generation is needed
-  // The daemon will handle this by running a Claude Code session with initiative context
-  logger.info({ agentType }, 'No bootstrap initiatives, AI generation needed');
-  return { created: false, needsAIGeneration: true };
-}
-
-/**
- * Build a prompt for AI initiative generation (used by daemon with Claude Code CLI)
- */
-export async function buildInitiativeGenerationPrompt(agentType: AgentType): Promise<string> {
-  const agentFocus = AGENT_FOCUS[agentType];
-  if (!agentFocus) return '';
-
-  const focusSettings = await getFocusSettings();
-  const ragContext = await scanRAG(agentFocus.scanTopics);
-  const createdTitles = await redis.smembers(INITIATIVE_CREATED_KEY);
-  const context = await buildInitiativeContext(agentType, ragContext, focusSettings, createdTitles);
-
-  // Current date/time for time-aware initiatives
-  const now = new Date();
-  const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-  const dayName = days[now.getUTCDay()];
-  const dateStr = now.toISOString().split('T')[0];
-
-  return `# INITIATIVE GENERATION TASK
-
-⚠️ **TODAY IS: ${dayName}, ${dateStr}** - Use this date for any time-sensitive planning!
-
-You are the ${agentType.toUpperCase()} agent. Your ONLY task right now is to propose ONE new initiative.
-
-${context}
-
-## REQUIRED ACTION
-
-You MUST respond with a propose_initiative action. Example:
-
-\`\`\`json
-{
-  "actions": [{
-    "type": "propose_initiative",
-    "data": {
-      "title": "Specific, actionable title",
-      "description": "What to do, why it matters, expected outcome (2-3 sentences)",
-      "rationale": "Why NOW based on the market data above?",
-      "priority": "high",
-      "effort": 3,
-      "revenueImpact": 5,
-      "communityImpact": 4,
-      "tags": ["relevant", "tags"]
-    }
-  }]
-}
-\`\`\`
-
-## GUIDELINES
-
-- Be SPECIFIC and ACTIONABLE (can start TODAY)
-- Consider market conditions: Fear & Greed is ${focusSettings.riskTolerance > 50 ? 'favorable for risks' : 'suggesting caution'}
-- Revenue focus: ${focusSettings.revenueFocus}%
-- DON'T propose things already in "Existing Initiatives" list
-- Base your proposal on the news, market data, and team status above
-
-NOW PROPOSE YOUR INITIATIVE:`;
 }
 
 /**
  * Get initiative stats
+ * @deprecated Use runner.getStats()
  */
 export async function getInitiativeStats(): Promise<{
   totalCreated: number;
   agentCooldowns: Record<string, boolean>;
 }> {
-  const totalCreated = await redis.scard(INITIATIVE_CREATED_KEY);
-
-  const agentCooldowns: Record<string, boolean> = {};
-  for (const agent of Object.keys(AGENT_FOCUS)) {
-    agentCooldowns[agent] = await isInCooldown(agent as AgentType);
-  }
-
-  return {
-    totalCreated,
-    agentCooldowns,
-  };
-}
-
-// === GITHUB ISSUE STATUS MANAGEMENT ===
-
-const STATUS_LABELS = {
-  BACKLOG: 'status:backlog',
-  READY: 'status:ready',
-  IN_PROGRESS: 'status:in-progress',
-  REVIEW: 'status:review',
-  DONE: 'status:done',
-  BLOCKED: 'status:blocked',
-};
-
-/**
- * Update an issue's status label on GitHub
- */
-export async function updateIssueStatus(
-  issueNumber: number,
-  newStatus: keyof typeof STATUS_LABELS,
-  agentType?: string
-): Promise<boolean> {
-  const owner = process.env.GITHUB_ORG || 'Brunzendorf';
-  const repo = 'SHIBC-AITO';
-
-  try {
-    const gh = getOctokit();
-
-    // Get current labels
-    const issue = await gh.issues.get({ owner, repo, issue_number: issueNumber });
-    const currentLabels = issue.data.labels.map((l) =>
-      typeof l === 'string' ? l : l.name || ''
-    );
-
-    // Remove old status labels, keep others
-    const newLabels = currentLabels.filter((l) => !l.startsWith('status:'));
-
-    // Add new status label
-    newLabels.push(STATUS_LABELS[newStatus]);
-
-    // Update labels
-    await gh.issues.setLabels({
-      owner,
-      repo,
-      issue_number: issueNumber,
-      labels: newLabels,
-    });
-
-    logger.info({
-      issueNumber,
-      newStatus: STATUS_LABELS[newStatus],
-      agentType,
-    }, 'Updated GitHub issue status');
-
-    // Refresh backlog cache
-    await refreshBacklogCache();
-
-    return true;
-  } catch (error) {
-    logger.error({ error, issueNumber, newStatus }, 'Failed to update issue status');
-    return false;
-  }
+  return runner.getStats();
 }
 
 /**
- * Claim an issue - set to in-progress and assign to agent
+ * Build initiative context for prompt injection (old API)
+ * @deprecated Use buildContext() and formatContextAsPrompt() from '../lib/initiative/index.js'
  */
-export async function claimIssue(
-  issueNumber: number,
-  agentType: string
-): Promise<boolean> {
-  const owner = process.env.GITHUB_ORG || 'Brunzendorf';
-  const repo = 'SHIBC-AITO';
-
+export async function getInitiativePromptContext(agentType: AgentType): Promise<string> {
   try {
-    const gh = getOctokit();
+    const provider = registry.get(agentType);
+    if (!provider) return '';
 
-    // Get current labels
-    const issue = await gh.issues.get({ owner, repo, issue_number: issueNumber });
-    const currentLabels = issue.data.labels.map((l) =>
-      typeof l === 'string' ? l : l.name || ''
-    );
-
-    // Check if already in-progress by another agent
-    const hasOtherAgent = currentLabels.some(
-      (l) => l.startsWith('agent:') && l !== `agent:${agentType}`
-    );
-    if (hasOtherAgent && currentLabels.includes(STATUS_LABELS.IN_PROGRESS)) {
-      logger.warn({ issueNumber, agentType }, 'Issue already claimed by another agent');
-      return false;
-    }
-
-    // Remove old status labels and agent labels
-    const newLabels = currentLabels.filter(
-      (l) => !l.startsWith('status:') && !l.startsWith('agent:')
-    );
-
-    // Add in-progress status and agent label
-    newLabels.push(STATUS_LABELS.IN_PROGRESS);
-    newLabels.push(`agent:${agentType}`);
-
-    // Update labels
-    await gh.issues.setLabels({
-      owner,
-      repo,
-      issue_number: issueNumber,
-      labels: newLabels,
-    });
-
-    // Add comment
-    await gh.issues.createComment({
-      owner,
-      repo,
-      issue_number: issueNumber,
-      body: `🤖 **${agentType.toUpperCase()} Agent** is now working on this issue.`,
-    });
-
-    logger.info({ issueNumber, agentType }, 'Agent claimed issue');
-
-    // Refresh backlog cache
-    await refreshBacklogCache();
-
-    return true;
-  } catch (error) {
-    logger.error({ error, issueNumber, agentType }, 'Failed to claim issue');
-    return false;
-  }
-}
-
-/**
- * Complete an issue - set to done or review
- */
-export async function completeIssue(
-  issueNumber: number,
-  agentType: string,
-  setToReview = false,
-  completionComment?: string
-): Promise<boolean> {
-  const owner = process.env.GITHUB_ORG || 'Brunzendorf';
-  const repo = 'SHIBC-AITO';
-
-  try {
-    const gh = getOctokit();
-
-    // Update status
-    const newStatus = setToReview ? 'REVIEW' : 'DONE';
-    await updateIssueStatus(issueNumber, newStatus, agentType);
-
-    // Add completion comment
-    const comment = completionComment ||
-      (setToReview
-        ? `✅ **${agentType.toUpperCase()} Agent** has completed work and moved this to review.`
-        : `✅ **${agentType.toUpperCase()} Agent** has completed this issue.`);
-
-    await gh.issues.createComment({
-      owner,
-      repo,
-      issue_number: issueNumber,
-      body: comment,
-    });
-
-    // Close issue if done (not review)
-    if (!setToReview) {
-      await gh.issues.update({
-        owner,
-        repo,
-        issue_number: issueNumber,
-        state: 'closed',
-      });
-    }
-
-    logger.info({ issueNumber, agentType, setToReview }, 'Agent completed issue');
-
-    return true;
-  } catch (error) {
-    logger.error({ error, issueNumber, agentType }, 'Failed to complete issue');
-    return false;
-  }
-}
-
-/**
- * Refresh the backlog cache in Redis after status changes
- */
-async function refreshBacklogCache(): Promise<void> {
-  try {
-    const owner = process.env.GITHUB_ORG || 'Brunzendorf';
-    const repo = 'SHIBC-AITO';
-    const gh = getOctokit();
-
-    // Fetch all open issues
-    const issues = await gh.issues.listForRepo({
-      owner,
-      repo,
-      state: 'open',
-      per_page: 100,
-    });
-
-    const backlogData = {
-      issues: issues.data.map((issue) => ({
-        number: issue.number,
-        title: issue.title,
-        body: issue.body,
-        labels: issue.labels.map((l) => (typeof l === 'string' ? l : l.name || '')),
-        state: issue.state,
-        created_at: issue.created_at,
-        assignee: issue.assignee?.login,
-        html_url: issue.html_url,
-      })),
-      lastGroomed: new Date().toISOString(),
+    const options: ContextBuilderOptions = {
+      sources: provider.getContextSources(),
+      focusConfig: provider.getFocusConfig(),
     };
-
-    await redis.set('context:backlog', JSON.stringify(backlogData));
-    logger.debug({ issueCount: issues.data.length }, 'Refreshed backlog cache');
+    const context = await buildContext(agentType, options);
+    return formatContextAsPrompt(context, agentType);
   } catch (error) {
-    logger.warn({ error }, 'Failed to refresh backlog cache');
+    logger.warn({ error, agentType }, 'Failed to build initiative context');
+    return '';
+  }
+}
+
+/**
+ * Build prompt for AI initiative generation
+ * @deprecated Use runner.buildPrompt() from '../lib/initiative/index.js'
+ */
+export async function buildInitiativeGenerationPrompt(agentType: AgentType): Promise<string> {
+  try {
+    return await runner.buildPrompt(agentType);
+  } catch (error) {
+    logger.warn({ error, agentType }, 'Failed to build initiative generation prompt');
+    return '';
   }
 }
