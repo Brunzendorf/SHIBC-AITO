@@ -810,9 +810,9 @@ const initiative = await runner.createFromProposal('cmo', {
 
 ---
 
-#### TASK-040: Image-Tools Refactoring & Tests ✅ DONE
-**Status:** 🔧 IMPROVEMENT → ✅ ERLEDIGT (2025-12-21)
-**Aufwand:** 6h → 3h (Phase 1+2)
+#### TASK-040: Image-Tools Refactoring & Tests ✅ COMPLETE
+**Status:** 🔧 IMPROVEMENT → ✅ VOLLSTÄNDIG ERLEDIGT (2025-12-21)
+**Aufwand:** 6h → 4h (alle 3 Phasen)
 **Ziel:** Image-Tools Architektur verbessern und Testabdeckung erhöhen
 
 **Phase 1: Quick Wins - ✅ DONE**
@@ -821,23 +821,25 @@ const initiative = await runner.createFromProposal('cmo', {
 - [x] `src/lib/tools/types.ts` - ImageMetadata vereinheitlicht (26 tests)
 - [x] `src/lib/tools/index.ts` - Centralized exports
 
-**Phase 2: Tests - ✅ DONE**
+**Phase 2: Core Tests - ✅ DONE**
 - [x] `src/lib/tools/constants.test.ts` - 23 Tests
 - [x] `src/lib/tools/position.test.ts` - 38 Tests
 - [x] `src/lib/tools/types.test.ts` - 26 Tests
 - [x] `src/lib/tools/image-cache.test.ts` - 15 Tests (94.66% coverage)
 - [x] `src/lib/tools/image-quota.test.ts` - 22 Tests (100% coverage)
 
+**Phase 3: Extended Tests - ✅ DONE**
+- [x] `src/lib/tools/brand-image-generator.test.ts` - 32 Tests
+- [x] `src/lib/tools/text-overlay.test.ts` - 19 Tests
+- [x] `src/lib/tools/imagen-tools.test.ts` - 14 Tests
+- [x] `src/lib/tools/image-storage.test.ts` - 22 Tests
+
 **Ergebnis:**
-- 124 neue Tests für image-tools Modul
+- **211 neue Tests** für image-tools Modul
 - Position-Utility beseitigt Duplikation
 - Unified ImageMetadata types
-- Coverage: constants.ts 100%, position.ts 100%, image-cache.ts 94.66%, image-quota.ts 100%
-
-**Phase 3: Optional (deferred)**
-- [ ] brand-image-generator.ts Tests (0% coverage)
-- [ ] text-overlay.ts Tests (0% coverage)
-- [ ] imagen-tools.ts Tests (0% coverage)
+- Coverage signifikant verbessert für alle Image-Tools
+- **Gesamt: 1153 Tests passing, 50 skipped**
 
 ---
 
@@ -889,20 +891,19 @@ const initiative = await runner.createFromProposal('cmo', {
 | 🟢 NIEDRIG | 4 | 4 | ~12h |
 | **GESAMT** | **40** | **4 offen** | **~26h** |
 
-> **Update 2025-12-21 (Nacht):**
+> **Update 2025-12-21 (Nacht - Final):**
 > - **TASK-037 komplett!** Initiative Framework refactored (1474 → 240 Zeilen Wrapper)
 > - **TASK-038 komplett!** agents/index.test.ts bereits vorhanden (17 Tests)
-> - **TASK-040 komplett!** Image-Tools Refactoring & Tests (124 neue Tests)
->   - constants.ts, position.ts, types.ts (100% coverage)
->   - image-cache.ts (94.66%), image-quota.ts (100%)
-> - 1066 Tests bestehen, 50 skipped
-> - Coverage: 61.67% Lines
+> - **TASK-040 VOLLSTÄNDIG komplett!** Image-Tools Refactoring & Tests (211 neue Tests)
+>   - Phase 1: constants.ts, position.ts, types.ts (100% coverage)
+>   - Phase 2: image-cache.ts (94.66%), image-quota.ts (100%)
+>   - Phase 3: brand-image-generator (32), text-overlay (19), imagen-tools (14), image-storage (22)
+> - **1153 Tests bestehen**, 50 skipped
 >
-> **Gesamt:** 38 von 40 Tasks erledigt (95%)
+> **Gesamt:** 39 von 40 Tasks erledigt (97.5%)
 >
 > **Offene Tasks:**
 > - TASK-039: Low Coverage Files verbessern (~12h) - daemon.ts, gemini.ts, openai.ts
-> - TASK-040 Phase 3: Optional brand-image-generator, text-overlay, imagen-tools Tests
 
 ### Nach Kategorie
 
