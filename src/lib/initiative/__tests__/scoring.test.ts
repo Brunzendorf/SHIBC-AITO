@@ -331,40 +331,19 @@ describe('FocusBasedStrategy', () => {
 
     it('should return partial penalty for highly similar titles (>80% Jaccard)', () => {
       const strategy = new FocusBasedStrategy();
-      // Need >0.8 Jaccard similarity for penalty
-      // These titles share 5 of 6 words = 0.833 > 0.8
+
+      // Use exact same words with one extra: 5/6 = 0.833 > 0.8
       const initiative = createTestInitiative({
-        title: 'Twitter Campaign Launch Viral Marketing Strategy',
-      });
-      const existing = [createTestInitiative({
-        title: 'Twitter Campaign Launch Viral Marketing Plan',
-      })];
-      // Words: twitter, campaign, launch, viral, marketing (5 shared) + strategy/plan (2 unique)
-      // Jaccard: 5/7 = 0.714 < 0.8 - still not enough!
-
-      // Let's use 4 of 5 = 0.8, but we need > 0.8, so 5/6 = 0.833
-      const initiative2 = createTestInitiative({
-        title: 'Twitter Marketing Campaign Launch Success',
-      });
-      const existing2 = [createTestInitiative({
-        title: 'Twitter Marketing Campaign Launch', // 4 words
-      })];
-      // Words: twitter, marketing, campaign, launch, success vs twitter, marketing, campaign, launch
-      // Jaccard: 4/5 = 0.8 - still not > 0.8
-
-      // Use exact same words with one extra
-      const initiative3 = createTestInitiative({
         title: 'Activate Twitter Marketing Campaign Today Now',
       });
-      const existing3 = [createTestInitiative({
+      const existing = [createTestInitiative({
         title: 'Activate Twitter Marketing Campaign Today',
       })];
-      // Jaccard: 5/6 = 0.833 > 0.8 - this should work
 
-      const penalty3 = strategy.duplicatePenalty!(initiative3, existing3);
+      const penalty = strategy.duplicatePenalty!(initiative, existing);
 
-      expect(penalty3).toBeGreaterThan(0);
-      expect(penalty3).toBeLessThan(100);
+      expect(penalty).toBeGreaterThan(0);
+      expect(penalty).toBeLessThan(100);
     });
 
     it('should return zero penalty for dissimilar titles', () => {

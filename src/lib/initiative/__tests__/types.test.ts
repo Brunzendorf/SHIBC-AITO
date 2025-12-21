@@ -177,7 +177,7 @@ describe('Type Definitions', () => {
       const strategy: ScoringStrategy = {
         name: 'test',
         score: () => 5,
-        duplicatePenalty: (initiative, existing) => {
+        duplicatePenalty: (_initiative, existing) => {
           return existing.length > 0 ? 10 : 0;
         },
       };

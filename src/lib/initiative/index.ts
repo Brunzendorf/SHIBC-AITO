@@ -125,3 +125,38 @@ export {
   clearDeduplicationCache,
   getCreatedCount,
 } from './dedup.js';
+
+// =============================================================================
+// GITHUB
+// =============================================================================
+
+export {
+  // Client
+  getOctokit,
+  resetOctokit,
+  getRepoConfig,
+  getHumanUsername,
+  isGitHubAvailable,
+  isCircuitAvailable,
+
+  // Issues
+  createGitHubIssue,
+  createHumanActionRequest,
+  addIssueComment,
+  updateIssueStatus,
+  claimIssue,
+  completeIssue,
+  fetchGitHubIssues,
+  searchForSimilarIssue,
+
+  // Cache
+  refreshBacklogCache,
+  getBacklogCache,
+  getCachedContext,
+  setCachedContext,
+  invalidateCachedContext,
+  invalidateAllCachedContexts,
+  INITIATIVE_CONTEXT_TTL,
+  type BacklogData,
+  type CachedContextData,
+} from './github/index.js';
