@@ -186,3 +186,14 @@ export {
   GitHubContextSource,
   createGitHubSource,
 } from './context/index.js';
+
+// =============================================================================
+// RUNNER
+// =============================================================================
+
+export {
+  canRunInitiative,
+  DefaultInitiativeRunner,
+  createRunner,
+  runner,
+} from './runner.js';
