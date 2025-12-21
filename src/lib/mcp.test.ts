@@ -44,12 +44,25 @@ describe('MCP Module', () => {
   });
 
   describe('loadMCPConfig', () => {
-    it.skip('should load MCP config from file', async () => {
-      // Skipped: Complex ES module mocking for fs
+    it('should load MCP config from file', async () => {
+      const mockConfig = {
+        mcpServers: {
+          telegram: { command: 'npx', args: ['-y', '@test/telegram'] },
+          fetch: { command: 'npx', args: ['-y', '@test/fetch'] },
+        },
+      };
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(mockConfig));
+
+      const { loadMCPConfig } = await import('./mcp.js');
+      const config = loadMCPConfig();
+
+      expect(config.telegram).toBeDefined();
+      expect(config.telegram.command).toBe('npx');
     });
 
     it.skip('should use custom config path from env', async () => {
-      // Skipped: Complex ES module mocking for fs
+      // Skipped: Dynamic require in loadMCPConfig prevents proper env variable testing
+      // Function uses require('fs') internally which caches across test runs
     });
 
     it('should return default config on file read error', async () => {

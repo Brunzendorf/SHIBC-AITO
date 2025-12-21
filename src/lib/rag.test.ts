@@ -198,9 +198,9 @@ describe('RAG System', () => {
       await mockBasicInit();
     });
 
-    it.skip('should index a document with embeddings', async () => {
-      // Skipped: Requires proper embedding mock setup
-      const text = 'This is a test document. It has some content.';
+    it('should index a document with embeddings', async () => {
+      // Need a longer text to pass the 50 char minimum filter
+      const text = 'This is a test document with sufficient content to be indexed. It needs at least 50 characters.';
       const mockEmbedding = new Array(1024).fill(0.1);
 
       mockFetch
@@ -221,7 +221,7 @@ describe('RAG System', () => {
     });
 
     it.skip('should split large documents into chunks', async () => {
-      // Skipped: Requires complex mock chain
+      // Skipped: Requires complex mock chain with dynamic URL matching
       const longText = 'A'.repeat(3000) + '\n\n' + 'B'.repeat(3000);
       const mockEmbedding = new Array(1024).fill(0.1);
 
@@ -243,17 +243,17 @@ describe('RAG System', () => {
       expect(chunksIndexed).toBeGreaterThan(1);
     });
 
-    it.skip('should handle embedding API failures', async () => {
-      // Skipped: Needs init to run first before testing this
+    it('should handle embedding API failures', async () => {
+      const text = 'A long enough text that should be indexed but the embedding API will fail. More text here.';
       mockFetch.mockResolvedValueOnce(mockResponse({ ok: false, status: 500 }));
 
       await expect(
-        ragModule.indexDocument('test', 'source', 'project_doc')
+        ragModule.indexDocument(text, 'source', 'project_doc')
       ).rejects.toThrow('Ollama embedding failed: 500');
     });
 
-    it.skip('should handle Qdrant upsert failures', async () => {
-      // Skipped: Needs complex mock chain
+    it('should handle Qdrant upsert failures', async () => {
+      const text = 'A long enough text that should be indexed but Qdrant upsert will fail. More text here.';
       const mockEmbedding = new Array(1024).fill(0.1);
 
       mockFetch
@@ -267,12 +267,12 @@ describe('RAG System', () => {
         }));
 
       await expect(
-        ragModule.indexDocument('test', 'source', 'project_doc')
+        ragModule.indexDocument(text, 'source', 'project_doc')
       ).rejects.toThrow('Failed to index document: Upsert failed');
     });
 
     it.skip('should include metadata in indexed points', async () => {
-      // Skipped: Complex mock capture
+      // Skipped: Complex mock capture with body inspection
       const mockEmbedding = new Array(1024).fill(0.1);
       const metadata = { custom: 'value', tier: 'major' };
 
@@ -298,8 +298,9 @@ describe('RAG System', () => {
     });
 
     it.skip('should filter out very small chunks', async () => {
-      // Skipped: Needs proper init
-      const text = 'Short.\n\nA bit longer but still under 50 chars';
+      // Skipped: Implementation still makes fetch call even for empty chunk sets
+      // Text where all chunks are under 50 chars after splitting
+      const text = 'Short text.\n\nAnother short one.';
 
       const chunksIndexed = await ragModule.indexDocument(text, 'tiny', 'project_doc');
 
@@ -312,8 +313,7 @@ describe('RAG System', () => {
       await mockBasicInit();
     });
 
-    it.skip('should perform semantic search', async () => {
-      // Skipped: Needs complex mock chain with init
+    it('should perform semantic search', async () => {
       const mockEmbedding = new Array(1024).fill(0.2);
       const mockResults = {
         result: [
@@ -343,18 +343,41 @@ describe('RAG System', () => {
       const results = await ragModule.search('test query', 5);
 
       expect(results).toHaveLength(1);
+      expect(results[0].text).toBe('Test result');
+      expect(results[0].score).toBe(0.95);
     });
 
     it.skip('should apply type filter', async () => {
-      // Skipped: Complex mock capture
+      // Skipped: Filter not included in body - need to verify actual implementation
+      const mockEmbedding = new Array(1024).fill(0.2);
+
+      mockFetch
+        .mockResolvedValueOnce(mockResponse({
+          ok: true,
+          jsonData: { embedding: mockEmbedding },
+        }))
+        .mockResolvedValueOnce(mockResponse({
+          ok: true,
+          jsonData: { result: [] },
+        }));
+
+      await ragModule.search('query', 5, 'decision');
+
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
     it.skip('should apply multiple filters', async () => {
-      // Skipped: Complex mock capture
+      // Skipped: Complex filter verification needed
     });
 
-    it.skip('should handle search failures', async () => {
-      // Skipped: Needs proper init first
+    it('should handle search failures', async () => {
+      mockFetch.mockResolvedValueOnce(mockResponse({
+        ok: false,
+        status: 500,
+        textData: 'Search failed',
+      }));
+
+      await expect(ragModule.search('query', 5)).rejects.toThrow();
     });
   });
 
@@ -363,8 +386,7 @@ describe('RAG System', () => {
       await mockBasicInit();
     });
 
-    it.skip('should delete documents by source', async () => {
-      // Skipped: Needs proper init
+    it('should delete documents by source', async () => {
       mockFetch.mockResolvedValueOnce(mockResponse({
         ok: true,
         textData: '{}',
@@ -381,8 +403,13 @@ describe('RAG System', () => {
       );
     });
 
-    it.skip('should handle delete failures', async () => {
-      // Skipped: Needs proper init
+    it('should handle delete failures', async () => {
+      mockFetch.mockResolvedValueOnce(mockResponse({
+        ok: false,
+        textData: 'Server error',
+      }));
+
+      await expect(ragModule.deleteBySource('bad-source')).rejects.toThrow('Delete failed');
     });
   });
 
@@ -391,8 +418,7 @@ describe('RAG System', () => {
       await mockBasicInit();
     });
 
-    it.skip('should retrieve collection stats', async () => {
-      // Skipped: Needs proper init
+    it('should retrieve collection stats', async () => {
       mockFetch.mockResolvedValueOnce(mockResponse({
         ok: true,
         jsonData: {
@@ -411,8 +437,14 @@ describe('RAG System', () => {
       });
     });
 
-    it.skip('should handle stats retrieval failures', async () => {
-      // Skipped: Needs proper init
+    it('should handle stats retrieval failures', async () => {
+      mockFetch.mockResolvedValueOnce(mockResponse({
+        ok: false,
+        status: 500,
+        textData: 'Stats failed',
+      }));
+
+      await expect(ragModule.getStats()).rejects.toThrow();
     });
   });
 

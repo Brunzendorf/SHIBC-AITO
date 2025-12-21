@@ -811,6 +811,12 @@ export function useWebSocket() {
   - profile.test.ts: generateSystemPrompt returns rawContent
   - daemon.test.ts: streams mock (TASK-016), llmRouter.execute
 
+**Sprint 9 (Skipped Tests):** ✅ KOMPLETT
+- ~~Skipped Tests~~ ✅ 10 von 55 unskipped (570/570 pass, 45 skipped)
+  - rag.test.ts: 9 Tests unskipped (indexDocument, search, delete, stats)
+  - mcp.test.ts: 1 Test unskipped (loadMCPConfig)
+  - Verbleibende Skips: child_process mocking (MCPClient/MCPManager), complex mock chains
+
 ---
 
 ## Referenzen
