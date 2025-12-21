@@ -683,87 +683,88 @@ export function useWebSocket() {
 
 ### 🟡 MITTEL
 
-#### TASK-037: Initiative Framework - Wiederverwendbare Architektur
-**Status:** 🔧 IMPROVEMENT
-**Aufwand:** 12h
+#### TASK-037: Initiative Framework - Wiederverwendbare Architektur ✅ DONE
+**Status:** ✅ COMPLETE
+**Aufwand:** 12h (actual)
 **Datei:** `src/agents/initiative.ts` (1474 Zeilen) → `src/lib/initiative/`
 
-**Problem:**
-- Zu große Datei mit zu vielen Verantwortlichkeiten
-- Nicht wiederverwendbar für andere Features
-- Agents können keine eigenen Initiative-Typen registrieren
+**Implementiert:**
 
-**Ziel:** Plugin-fähiges Framework das Agents dynamisch nutzen können
-
-**Lösung:** Generisches Initiative Framework:
 ```
 src/lib/initiative/
-├── index.ts              # Public API exports
-├── types.ts              # Core interfaces (generisch)
-│   ├── Initiative<T>     # Generic initiative mit custom payload
-│   ├── InitiativeProvider # Interface für Agent-spezifische Provider
-│   └── ScoringStrategy   # Pluggable scoring
-├── registry.ts           # Provider-Registry (Agents registrieren sich)
-├── github/
-│   ├── client.ts         # GitHub API + circuit breakers
-│   ├── issues.ts         # Issue CRUD operations
-│   └── cache.ts          # Backlog caching
+├── index.ts              # Public API exports (230 lines)
+├── types.ts              # Core interfaces (450 lines)
+├── registry.ts           # Provider-Registry
+├── dedup.ts              # SHA256 deduplication
+├── runner.ts             # Initiative phase runner (400 lines)
 ├── scoring/
-│   ├── engine.ts         # Scoring engine (nutzt Strategies)
-│   ├── dedup.ts          # Similarity & deduplication
-│   └── strategies/       # Pluggable scoring strategies
+│   ├── index.ts
+│   ├── engine.ts         # Scoring engine
+│   └── strategies/
 │       ├── focus-based.ts
 │       └── priority-based.ts
+├── github/
+│   ├── index.ts
+│   ├── client.ts         # Octokit + circuit breakers
+│   ├── issues.ts         # Issue CRUD
+│   └── cache.ts          # Redis caching
 ├── context/
-│   ├── builder.ts        # Context builder (composable)
-│   ├── sources/          # Pluggable context sources
-│   │   ├── rag.ts
-│   │   ├── github.ts
-│   │   ├── team-status.ts
-│   │   └── market-data.ts
-│   └── formatters.ts     # Output formatters
-└── runner.ts             # Initiative phase runner
-
-src/agents/initiative/     # Agent-spezifische Provider
-├── ceo-provider.ts       # CEO initiative strategies
-├── cmo-provider.ts       # CMO: Marketing initiatives
-├── cto-provider.ts       # CTO: Tech initiatives
-└── ...
+│   ├── index.ts
+│   ├── builder.ts        # Context aggregation
+│   └── sources/
+│       ├── rag.ts
+│       ├── github.ts
+│       ├── team-status.ts
+│       └── market-data.ts
+├── providers/
+│   ├── index.ts
+│   ├── base.ts           # Shared config
+│   ├── ceo.ts, cmo.ts, cto.ts, cfo.ts, coo.ts, cco.ts, dao.ts
+└── __tests__/
+    ├── types.test.ts     # 19 tests
+    ├── registry.test.ts  # 18 tests
+    ├── scoring.test.ts   # 26 tests
+    └── dedup.test.ts     # 26 tests
 ```
 
-**Konzept: Provider-Pattern**
+**Statistiken:**
+- 31 neue Dateien
+- ~5000 Zeilen Code
+- 89 neue Tests (alle bestanden)
+- 5 Commits
+
+**Commits:**
+- `fdbe0c7` Phase 1 - Core types & registry (89 tests)
+- `cc78a08` Phase 2 - GitHub module extraction
+- `7f4d0a1` Phase 3 - Context module with pluggable sources
+- `17d968b` Phase 4 - Initiative Runner
+- `6804e9f` Phase 5 - Agent providers
+
+**Usage:**
 ```typescript
-// Agent registriert eigenen Provider
-initiativeRegistry.register('cmo', {
-  getContextSources: () => ['rag', 'github', 'telegram-metrics'],
-  getScoringStrategy: () => new MarketingFocusStrategy(),
-  getPromptTemplate: () => CMO_INITIATIVE_PROMPT,
-  validateInitiative: (init) => init.category === 'marketing',
+import {
+  registry,
+  runner,
+  registerAllProviders,
+  createFocusBasedStrategy,
+} from './lib/initiative/index.js';
+
+// Register all default providers
+registerAllProviders();
+
+// Run initiative phase for CMO
+const result = await runner.run('cmo');
+
+// Or create from AI proposal
+const initiative = await runner.createFromProposal('cmo', {
+  title: 'Launch viral campaign',
+  description: '...',
+  priority: 'high',
+  revenueImpact: 8,
+  effort: 3,
+  tags: ['marketing', 'viral'],
 });
-
-// Framework nutzt registrierte Provider
-const initiatives = await initiativeRunner.run('cmo');
 ```
-
-**Vorteile:**
-- ✅ Agents können eigene Initiative-Typen definieren
-- ✅ Scoring-Strategien sind austauschbar
-- ✅ Context-Sources sind pluggable (neue Datenquellen easy hinzufügbar)
-- ✅ GitHub-Code ist wiederverwendbar für andere Features
-- ✅ Testbar durch Dependency Injection
-
-**Phasen:**
-1. [ ] PLANEN: Interface-Design, Provider-Contract definieren
-2. [ ] ANALYSIEREN: Bestehende Funktionen kategorisieren
-3. [ ] IMPLEMENTIEREN:
-   - 3a: Core types & registry
-   - 3b: GitHub module extrahieren
-   - 3c: Scoring engine + strategies
-   - 3d: Context builder + sources
-   - 3e: Agent providers migrieren
-4. [ ] TESTEN: Unit tests pro Modul, Integration tests
-5. [ ] DOKU UPDATEN: Framework-Dokumentation erstellen
-6. [ ] FINALISIEREN: Commits mit TASK-037
 
 ---
 
