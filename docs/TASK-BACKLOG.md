@@ -817,6 +817,13 @@ export function useWebSocket() {
   - mcp.test.ts: 1 Test unskipped (loadMCPConfig)
   - Verbleibende Skips: child_process mocking (MCPClient/MCPManager), complex mock chains
 
+**Sprint 10 (New Test Coverage):** ✅ KOMPLETT
+- ~~Neue Tests für 0% Coverage-Files~~ ✅ 61 neue Tests (631/676 total)
+  - secrets.test.ts: 23 Tests (SecretsManager, Backends, Helper functions)
+  - auth.test.ts: 13 Tests (JWT auth middleware, 2FA)
+  - triage.test.ts: 25 Tests (Focus-based triage, keyword matching)
+  - Coverage: 40.23% → 42.96% Lines
+
 ---
 
 ## Referenzen
