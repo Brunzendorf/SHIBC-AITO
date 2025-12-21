@@ -164,6 +164,7 @@ export function validate<T extends z.ZodType>(
       }
 
       next();
+      return;
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.error({ error: errMsg }, 'Validation middleware error');
