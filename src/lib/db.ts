@@ -481,6 +481,116 @@ export const eventRepo = {
   },
 };
 
+// TASK-007: Audit Log Repository for sensitive actions
+// Immutable audit trail for compliance
+export interface AuditLogEntry {
+  id: string;
+  agentId: string | null;
+  agentType: string;
+  actionType: string;
+  actionData: Record<string, unknown>;
+  success: boolean;
+  errorMessage?: string;
+  correlationId?: string;
+  createdAt: Date;
+}
+
+export const auditRepo = {
+  /**
+   * Log an audit entry (immutable - cannot be modified after creation)
+   */
+  async log(entry: {
+    agentId?: string;
+    agentType: string;
+    actionType: string;
+    actionData: Record<string, unknown>;
+    success?: boolean;
+    errorMessage?: string;
+    correlationId?: string;
+  }): Promise<AuditLogEntry> {
+    const [result] = await query<AuditLogEntry>(
+      `INSERT INTO audit_logs (agent_id, agent_type, action_type, action_data, success, error_message, correlation_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, agent_id as "agentId", agent_type as "agentType",
+                 action_type as "actionType", action_data as "actionData",
+                 success, error_message as "errorMessage",
+                 correlation_id as "correlationId", created_at as "createdAt"`,
+      [
+        entry.agentId || null,
+        entry.agentType,
+        entry.actionType,
+        JSON.stringify(entry.actionData),
+        entry.success !== false, // Default to true
+        entry.errorMessage || null,
+        entry.correlationId || null,
+      ]
+    );
+    return result;
+  },
+
+  /**
+   * Get recent audit logs
+   */
+  async getRecent(limit = 100): Promise<AuditLogEntry[]> {
+    return query<AuditLogEntry>(
+      `SELECT id, agent_id as "agentId", agent_type as "agentType",
+              action_type as "actionType", action_data as "actionData",
+              success, error_message as "errorMessage",
+              correlation_id as "correlationId", created_at as "createdAt"
+       FROM audit_logs ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
+  },
+
+  /**
+   * Get audit logs by agent type
+   */
+  async getByAgentType(agentType: string, limit = 50): Promise<AuditLogEntry[]> {
+    return query<AuditLogEntry>(
+      `SELECT id, agent_id as "agentId", agent_type as "agentType",
+              action_type as "actionType", action_data as "actionData",
+              success, error_message as "errorMessage",
+              correlation_id as "correlationId", created_at as "createdAt"
+       FROM audit_logs
+       WHERE agent_type = $1
+       ORDER BY created_at DESC LIMIT $2`,
+      [agentType, limit]
+    );
+  },
+
+  /**
+   * Get audit logs by action type
+   */
+  async getByActionType(actionType: string, limit = 50): Promise<AuditLogEntry[]> {
+    return query<AuditLogEntry>(
+      `SELECT id, agent_id as "agentId", agent_type as "agentType",
+              action_type as "actionType", action_data as "actionData",
+              success, error_message as "errorMessage",
+              correlation_id as "correlationId", created_at as "createdAt"
+       FROM audit_logs
+       WHERE action_type = $1
+       ORDER BY created_at DESC LIMIT $2`,
+      [actionType, limit]
+    );
+  },
+
+  /**
+   * Get failed audit entries (for monitoring)
+   */
+  async getFailed(limit = 50): Promise<AuditLogEntry[]> {
+    return query<AuditLogEntry>(
+      `SELECT id, agent_id as "agentId", agent_type as "agentType",
+              action_type as "actionType", action_data as "actionData",
+              success, error_message as "errorMessage",
+              correlation_id as "correlationId", created_at as "createdAt"
+       FROM audit_logs
+       WHERE success = false
+       ORDER BY created_at DESC LIMIT $1`,
+      [limit]
+    );
+  },
+};
+
 // Escalation Repository
 export const escalationRepo = {
   async create(escalation: Omit<Escalation, 'id' | 'createdAt'>): Promise<Escalation> {

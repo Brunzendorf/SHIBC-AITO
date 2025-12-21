@@ -17,6 +17,9 @@ import { createCircuitBreaker, GITHUB_OPTIONS, isCircuitOpen } from '../lib/circ
 
 const logger = createLogger('initiative');
 
+// TASK-011: Type for cached GitHub issues summary
+type GitHubIssuesSummary = { open: string[]; recent: string[] };
+
 // GitHub client (initialized lazily)
 let octokit: Octokit | null = null;
 
@@ -655,8 +658,12 @@ async function getTeamStatus(): Promise<Record<string, string>> {
   return status;
 }
 
+// TASK-011: Cache TTL for initiative context (15 minutes)
+const INITIATIVE_CONTEXT_TTL = 15 * 60; // seconds
+
 /**
  * Build rich initiative context for agent prompts
+ * TASK-011: Cached to avoid slow blocking calls on every loop
  */
 export async function buildInitiativeContext(
   agentType: AgentType,
@@ -667,12 +674,51 @@ export async function buildInitiativeContext(
   const agentFocus = AGENT_FOCUS[agentType];
   if (!agentFocus) return '';
 
-  // Fetch additional context in parallel
-  const [githubIssues, teamStatus, dataContext] = await Promise.all([
-    fetchGitHubIssues(),
-    getTeamStatus(),
-    buildDataContext(), // Live market data, news, fear & greed
-  ]);
+  // TASK-011: Check cache for slow data (GitHub issues, data context)
+  const cacheKey = `initiative:context:${agentType}`;
+  let cachedData: { githubIssues: GitHubIssuesSummary; dataContext: string } | null = null;
+
+  try {
+    const cached = await redis.get(cacheKey);
+    if (cached) {
+      cachedData = JSON.parse(cached);
+      logger.debug({ agentType }, 'Using cached initiative context');
+    }
+  } catch (err) {
+    logger.warn({ err }, 'Failed to read initiative context cache');
+  }
+
+  // Fetch data - use cache for slow operations, always fetch fresh team status
+  let githubIssues: GitHubIssuesSummary;
+  let dataContext: string;
+
+  if (cachedData) {
+    // Use cached slow data
+    githubIssues = cachedData.githubIssues;
+    dataContext = cachedData.dataContext;
+  } else {
+    // Fetch fresh data in parallel
+    const [freshGithubIssues, freshDataContext] = await Promise.all([
+      fetchGitHubIssues(),
+      buildDataContext(), // Live market data, news, fear & greed
+    ]);
+    githubIssues = freshGithubIssues;
+    dataContext = freshDataContext;
+
+    // Cache the slow data
+    try {
+      await redis.setex(cacheKey, INITIATIVE_CONTEXT_TTL, JSON.stringify({
+        githubIssues,
+        dataContext,
+      }));
+      logger.debug({ agentType, ttl: INITIATIVE_CONTEXT_TTL }, 'Cached initiative context');
+    } catch (err) {
+      logger.warn({ err }, 'Failed to cache initiative context');
+    }
+  }
+
+  // Always fetch fresh team status (it's fast and changes frequently)
+  const teamStatus = await getTeamStatus();
 
   const teamStatusStr = Object.entries(teamStatus)
     .map(([agent, status]) => `- ${agent}: ${status}`)

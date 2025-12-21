@@ -19,8 +19,8 @@ import type { AgentType, WorkerTask, WorkerResult } from '../lib/types.js';
 
 const logger = createLogger('worker');
 
-// Servers that can modify external state (write operations)
-const WRITE_CAPABLE_SERVERS = ['telegram', 'twitter', 'directus'];
+// TASK-019: Servers that can modify external state (blocked in DRY_RUN mode)
+const WRITE_CAPABLE_SERVERS = ['telegram', 'twitter', 'directus', 'imagen', 'filesystem'];
 
 // Servers that only read data (safe in DRY_RUN)
 const READ_ONLY_SERVERS = ['fetch', 'etherscan', 'time'];
@@ -66,18 +66,66 @@ Write-capable servers in your task: ${writeServers.join(', ')}
 `;
 }
 
-function generateDynamicMCPConfig(servers: string[], taskId: string): { configPath: string; serverConfigs: Record<string, MCPServerConfig> } {
+// TASK-021: Config file cache to avoid I/O for every worker
+// Key: sorted server names + dryRun flag, Value: { path, serverConfigs }
+const configCache = new Map<string, { configPath: string; serverConfigs: Record<string, MCPServerConfig> }>();
+
+function generateDynamicMCPConfig(servers: string[], _taskId: string): { configPath: string; serverConfigs: Record<string, MCPServerConfig> } {
+  // TASK-019: In DRY-RUN mode, filter out write-capable servers entirely
+  // This provides actual security, not just prompt instructions
+  let effectiveServers = servers;
+  if (isDryRun) {
+    const originalServers = [...servers];
+    effectiveServers = servers.filter(s => !WRITE_CAPABLE_SERVERS.includes(s));
+    const removedServers = originalServers.filter(s => WRITE_CAPABLE_SERVERS.includes(s));
+    if (removedServers.length > 0) {
+      logger.info({ removedServers, remaining: effectiveServers }, '🔸 DRY-RUN: Write-capable servers removed from config');
+    }
+  }
+
+  // TASK-021: Use cache key based on sorted server names + dryRun flag
+  const cacheKey = [...effectiveServers].sort().join(',') + (isDryRun ? ':dry' : '');
+
+  // Check cache first
+  const cached = configCache.get(cacheKey);
+  if (cached && existsSync(cached.configPath)) {
+    logger.debug({ configPath: cached.configPath, servers: effectiveServers, cacheHit: true }, 'Using cached MCP config');
+    return cached;
+  }
+
+  // Generate new config
   const fullConfig = loadMCPConfig();
   const filteredConfig: Record<string, MCPServerConfig> = {};
-  for (const s of servers) { if (fullConfig[s]) filteredConfig[s] = fullConfig[s]; }
-  const configPath = '/tmp/mcp-worker-' + taskId + '.json';
+  for (const s of effectiveServers) { if (fullConfig[s]) filteredConfig[s] = fullConfig[s]; }
+
+  // Use consistent path based on cache key (not taskId)
+  const configPath = '/tmp/mcp-config-' + cacheKey.replace(/,/g, '-').replace(':', '-') + '.json';
   writeFileSync(configPath, JSON.stringify({ mcpServers: filteredConfig }, null, 2));
-  logger.debug({ configPath, servers: Object.keys(filteredConfig) }, 'Generated MCP config');
-  return { configPath, serverConfigs: filteredConfig };
+
+  // Cache the config
+  const result = { configPath, serverConfigs: filteredConfig };
+  configCache.set(cacheKey, result);
+
+  logger.debug({ configPath, servers: Object.keys(filteredConfig), cacheHit: false, dryRun: isDryRun }, 'Generated and cached MCP config');
+  return result;
 }
 
-function cleanupMCPConfig(configPath: string): void {
-  try { if (existsSync(configPath)) unlinkSync(configPath); } catch {}
+function cleanupMCPConfig(_configPath: string): void {
+  // TASK-021: Don't cleanup individual configs anymore - they're cached and reused
+  // Cleanup happens at process shutdown via cleanupAllConfigs()
+}
+
+// TASK-021: Cleanup all cached configs at shutdown
+export function cleanupAllConfigs(): void {
+  for (const [key, { configPath }] of configCache.entries()) {
+    try {
+      if (existsSync(configPath)) {
+        unlinkSync(configPath);
+        logger.debug({ configPath, key }, 'Cleaned up cached config');
+      }
+    } catch {}
+  }
+  configCache.clear();
 }
 
 async function logToolCalls(task: WorkerTask, toolsUsed: string[], result: WorkerResult): Promise<void> {

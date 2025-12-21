@@ -9,14 +9,18 @@ import {
   subscriber,
   publisher,
   channels,
+  streams,
   setAgentStatus,
   redis,
   claimTasks,
   acknowledgeTasks,
   recoverOrphanedTasks,
   getTaskCount,
+  createConsumerGroup,
+  readFromStream,
+  acknowledgeMessages,
 } from '../lib/redis.js';
-import { agentRepo, historyRepo, eventRepo, decisionRepo, settingsRepo } from '../lib/db.js';
+import { agentRepo, historyRepo, eventRepo, decisionRepo, settingsRepo, auditRepo } from '../lib/db.js';
 import { rag } from '../lib/rag.js';
 import { workspaceConfig } from '../lib/config.js';
 import { workspace } from './workspace.js';
@@ -178,6 +182,9 @@ export class AgentDaemon {
       await this.subscribeToEvents();
       logger.info('Event subscriptions active');
 
+      // 4.5 TASK-016 Phase 2: Initialize Redis Streams consumer group for guaranteed delivery
+      await this.initializeStreamConsumer();
+
       // 5. Schedule loop (if enabled)
       if (this.config.loopEnabled) {
         this.scheduleLoop();
@@ -246,6 +253,124 @@ export class AgentDaemon {
       const errMsg = error instanceof Error ? error.message : String(error);
       logger.error({ error: errMsg }, 'Error during shutdown');
     }
+  }
+
+  /**
+   * TASK-016 Phase 2: Initialize Redis Streams consumer for guaranteed message delivery
+   * Creates consumer group and recovers any pending messages from previous crashes
+   */
+  private async initializeStreamConsumer(): Promise<void> {
+    const streamKey = streams.agent(this.config.agentId);
+    const groupName = `agent-${this.config.agentType}`;
+    const consumerName = `${this.config.agentType}-${process.pid}`;
+
+    try {
+      // 1. Create consumer group (or reuse existing)
+      await createConsumerGroup(streamKey, groupName, '$');
+      logger.info({ streamKey, groupName }, 'Stream consumer group initialized');
+
+      // 2. Check for pending messages (from previous crash)
+      const pendingMessages = await this.recoverPendingStreamMessages(streamKey, groupName, consumerName);
+      if (pendingMessages > 0) {
+        logger.info({ pendingMessages, agentType: this.config.agentType },
+          'Recovered pending stream messages from previous run');
+      }
+
+      // 3. Start background stream consumer loop
+      this.startStreamConsumerLoop(streamKey, groupName, consumerName);
+
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.warn({ error: errMsg }, 'Failed to initialize stream consumer, continuing with Pub/Sub only');
+      // Non-fatal - Pub/Sub still works as fallback
+    }
+  }
+
+  /**
+   * Recover pending messages from previous crash
+   * Claims messages that were delivered but not acknowledged
+   */
+  private async recoverPendingStreamMessages(
+    streamKey: string,
+    groupName: string,
+    consumerName: string
+  ): Promise<number> {
+    const { getPendingMessages, claimPendingMessages } = await import('../lib/redis.js');
+
+    // Get pending messages older than 30 seconds (likely from crashed consumer)
+    const pending = await getPendingMessages(streamKey, groupName);
+    if (pending.length === 0) return 0;
+
+    // Filter for messages idle > 30 seconds (crashed consumer)
+    const staleMessages = pending.filter(m => m.idleMs > 30000);
+    if (staleMessages.length === 0) return 0;
+
+    // Claim and process stale messages
+    const messageIds = staleMessages.map(m => m.id);
+    const claimed = await claimPendingMessages(streamKey, groupName, consumerName, 30000, messageIds);
+
+    // Process recovered messages
+    for (const { id, message } of claimed) {
+      try {
+        logger.info({ id, messageType: message.type }, 'Processing recovered stream message');
+        await this.handleMessage(message, streamKey);
+        // Acknowledge after successful processing
+        await acknowledgeMessages(streamKey, groupName, [id]);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        logger.error({ error: errMsg, id }, 'Failed to process recovered message');
+        // Message stays pending for retry
+      }
+    }
+
+    return claimed.length;
+  }
+
+  /**
+   * Background loop to read from stream with guaranteed delivery
+   * Runs continuously, processing messages as they arrive
+   */
+  private startStreamConsumerLoop(
+    streamKey: string,
+    groupName: string,
+    consumerName: string
+  ): void {
+    const processLoop = async () => {
+      while (this.isRunning) {
+        try {
+          // Read new messages (blocks for 5 seconds if none available)
+          const messages = await readFromStream(streamKey, groupName, consumerName, 10, 5000);
+
+          for (const { id, message } of messages) {
+            try {
+              // Process the message
+              await this.handleMessage(message, streamKey);
+              // Acknowledge on success
+              await acknowledgeMessages(streamKey, groupName, [id]);
+            } catch (err) {
+              const errMsg = err instanceof Error ? err.message : String(err);
+              logger.error({ error: errMsg, id, messageType: message.type },
+                'Failed to process stream message - will retry');
+              // Don't acknowledge - message will be redelivered
+            }
+          }
+        } catch (err) {
+          const errMsg = err instanceof Error ? err.message : String(err);
+          logger.warn({ error: errMsg }, 'Stream consumer loop error, retrying...');
+          // Wait a bit before retrying to avoid tight error loops
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
+      logger.info('Stream consumer loop stopped');
+    };
+
+    // Start the loop in background (don't await)
+    processLoop().catch(err => {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error({ error: errMsg }, 'Stream consumer loop crashed');
+    });
+
+    logger.info({ streamKey, consumerName }, 'Started stream consumer loop');
   }
 
   /**
@@ -1344,6 +1469,19 @@ export class AgentDaemon {
         };
         await publisher.publish('channel:orchestrator', JSON.stringify(voteMessage));
         logger.info({ decisionId: actionData?.decisionId, vote: actionData?.vote }, 'Vote cast');
+
+        // TASK-007: Audit log for sensitive action
+        await auditRepo.log({
+          agentId: this.config.agentId,
+          agentType: this.config.agentType,
+          actionType: 'vote',
+          actionData: {
+            decisionId: actionData?.decisionId,
+            vote: actionData?.vote || 'abstain',
+            reason: actionData?.reason,
+          },
+        }).catch(err => logger.warn({ err }, 'Failed to log audit entry for vote'));
+
         break;
       }
 
@@ -1429,6 +1567,19 @@ export class AgentDaemon {
           timeout
         );
         logger.info({ task: task.slice(0, 50), servers }, 'Worker spawned');
+
+        // TASK-007: Audit log for sensitive action
+        await auditRepo.log({
+          agentId: this.config.agentId,
+          agentType: this.config.agentType,
+          actionType: 'spawn_worker',
+          actionData: {
+            task: task.slice(0, 200), // Truncate for storage
+            servers,
+            timeout: timeout || 'default',
+          },
+        }).catch(err => logger.warn({ err }, 'Failed to log audit entry for spawn_worker'));
+
         break;
       }
 
@@ -1554,13 +1705,42 @@ export class AgentDaemon {
               payload: { prNumber, mergedBy: this.config.agentType, category },
             });
 
+            // TASK-007: Audit log for sensitive action (success)
+            await auditRepo.log({
+              agentId: this.config.agentId,
+              agentType: this.config.agentType,
+              actionType: 'merge_pr',
+              actionData: { prNumber, category, summary },
+              success: true,
+            }).catch(err => logger.warn({ err }, 'Failed to log audit entry for merge_pr'));
+
             logger.info({ prNumber, category }, 'pr_merged event emitted to orchestrator');
           } else {
             logger.warn({ prNumber }, 'Failed to merge PR');
+
+            // TASK-007: Audit log for sensitive action (failure)
+            await auditRepo.log({
+              agentId: this.config.agentId,
+              agentType: this.config.agentType,
+              actionType: 'merge_pr',
+              actionData: { prNumber, category },
+              success: false,
+              errorMessage: 'Merge returned false',
+            }).catch(err => logger.warn({ err }, 'Failed to log audit entry for merge_pr'));
           }
         } catch (mergeError) {
           const errMsg = mergeError instanceof Error ? mergeError.message : String(mergeError);
           logger.error({ error: errMsg, prNumber }, 'Error merging PR');
+
+          // TASK-007: Audit log for sensitive action (error)
+          await auditRepo.log({
+            agentId: this.config.agentId,
+            agentType: this.config.agentType,
+            actionType: 'merge_pr',
+            actionData: { prNumber, category },
+            success: false,
+            errorMessage: errMsg,
+          }).catch(err => logger.warn({ err }, 'Failed to log audit entry for merge_pr'));
         }
         break;
       }
