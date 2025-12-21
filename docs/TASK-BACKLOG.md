@@ -824,6 +824,13 @@ export function useWebSocket() {
   - triage.test.ts: 25 Tests (Focus-based triage, keyword matching)
   - Coverage: 40.23% → 42.96% Lines
 
+**Sprint 11 (Extended Coverage):** ✅ KOMPLETT
+- ~~Weitere Tests für 0%/niedrige Coverage~~ ✅ 68 neue Tests (699/744 total)
+  - websocket.test.ts: 15 Tests (WebSocket server, Redis subscriptions)
+  - llm/router.test.ts: 31 Tests (LLM routing strategies, fallback)
+  - llm/quota.test.ts: 22 Tests (Quota tracking, usage stats, warnings)
+  - Coverage: 42.96% → 46.53% Lines
+
 ---
 
 ## Referenzen
