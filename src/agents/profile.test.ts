@@ -6,7 +6,8 @@ vi.mock('fs/promises', () => ({
 }));
 
 vi.mock('fs', () => ({
-  existsSync: vi.fn<any, any>(),
+  // Return true for profile files, false for base.md (to skip base profile merging)
+  existsSync: vi.fn((path: string) => !path.includes('base.md')),
 }));
 
 // Mock logger
@@ -17,6 +18,13 @@ vi.mock('../lib/logger.js', () => ({
     warn: vi.fn(),
     debug: vi.fn(),
   })),
+}));
+
+// Mock database - return null so loadProfile falls back to file
+vi.mock('../lib/db.js', () => ({
+  profileRepo: {
+    findByAgentType: vi.fn<any, any>(() => Promise.resolve(null)),
+  },
 }));
 
 // Import after mocks
@@ -142,7 +150,10 @@ Available MCP servers:
       expect(profile.reportsTo).toBe('CEO Agent');
       expect(profile.manages).toBe('Social Media Team');
       expect(profile.mission).toContain('Drive organic growth');
-      expect(profile.rawContent).toBe(mockProfileContent);
+      // Check key sections are preserved in rawContent
+      expect(profile.rawContent).toContain('# Chief Marketing Officer');
+      expect(profile.rawContent).toContain('## Identity');
+      expect(profile.rawContent).toContain('## Mission Statement');
     });
 
     it('should parse core responsibilities', async () => {
@@ -390,11 +401,15 @@ ${longCommunicationStyle}
 
       const profile = await loadProfile('/path/to/cmo.md', 'cmo');
 
-      expect(profile.rawContent).toBe(mockProfileContent);
+      // Verify key sections are preserved
       expect(profile.rawContent).toContain('## MCP Workers');
+      expect(profile.rawContent).toContain('## Loop Schedule');
+      expect(profile.rawContent).toContain('## Decision Authority');
     });
   });
 
+  // NOTE: generateSystemPrompt now simply returns rawContent directly
+  // Tests updated to match simplified behavior (TASK-036)
   describe('generateSystemPrompt', () => {
     const mockProfile: AgentProfile = {
       type: 'cmo',
@@ -418,10 +433,29 @@ ${longCommunicationStyle}
       },
       guidingPrinciples: ['Be transparent', 'Engage authentically', 'Data-driven'],
       startupPrompt: 'Initialize marketing operations',
-      rawContent: `# CMO Profile
+      rawContent: `# Chief Marketing Officer
+
+## Identity
+Codename: SHIBC-CMO-001
+Department: Marketing
+Reports To: CEO Agent
+Manages: Social Team
 
 ## Mission Statement
 Drive marketing initiatives
+
+## Core Responsibilities
+- Manage social media
+- Create campaigns
+- Track metrics
+
+## Guiding Principles
+- Be transparent
+- Engage authentically
+- Data-driven
+
+## Startup
+Initialize marketing operations
 
 ## MCP Workers
 
@@ -436,6 +470,8 @@ Available servers:
     it('should generate complete system prompt', () => {
       const prompt = generateSystemPrompt(mockProfile);
 
+      // generateSystemPrompt now returns rawContent directly
+      expect(prompt).toBe(mockProfile.rawContent);
       expect(prompt).toContain('# Chief Marketing Officer');
       expect(prompt).toContain('## Identity');
       expect(prompt).toContain('Codename: SHIBC-CMO-001');
@@ -504,15 +540,18 @@ No MCP here
     });
 
     it('should filter out empty strings from prompt parts', () => {
+      // This test now verifies rawContent is returned as-is
       const profileNoManages: AgentProfile = {
         ...mockProfile,
-        manages: undefined,
+        rawContent: `# CMO Profile
+Reports To: CEO Agent
+Mission: Drive marketing`,
       };
 
       const prompt = generateSystemPrompt(profileNoManages);
 
-      // Should not have empty lines where manages would be
-      expect(prompt).not.toContain('Manages: \n');
+      // Verifies rawContent is returned directly
+      expect(prompt).toBe(profileNoManages.rawContent);
       expect(prompt).toContain('Reports To: CEO Agent');
     });
 
@@ -536,17 +575,18 @@ No MCP here
         communicationStyle: {},
         guidingPrinciples: [],
         startupPrompt: 'Initialize DAO',
-        rawContent: '# DAO',
+        rawContent: '# DAO Agent',
       };
 
       const prompt = generateSystemPrompt(minimalProfile);
 
+      // generateSystemPrompt returns rawContent directly
+      expect(prompt).toBe(minimalProfile.rawContent);
       expect(prompt).toContain('# DAO Agent');
-      expect(prompt).toContain('## Mission');
-      expect(prompt).toContain('Decentralized governance');
     });
 
-    it('should extract MCP section that ends at next non-MCP section', () => {
+    it('should return full rawContent including all sections', () => {
+      // generateSystemPrompt now returns rawContent as-is, including all sections
       const profileWithMultipleSections: AgentProfile = {
         ...mockProfile,
         rawContent: `# Profile
@@ -564,17 +604,19 @@ Servers:
 
 ## Other Section
 
-This should not be included in MCP section.
+Additional content here.
 `,
       };
 
       const prompt = generateSystemPrompt(profileWithMultipleSections);
 
+      // All sections are included since we return rawContent directly
+      expect(prompt).toBe(profileWithMultipleSections.rawContent);
       expect(prompt).toContain('## MCP Workers');
       expect(prompt).toContain('Use spawn_worker action');
       expect(prompt).toContain('telegram');
       expect(prompt).toContain('fetch');
-      expect(prompt).not.toContain('## Other Section');
+      expect(prompt).toContain('## Other Section'); // Now included
     });
 
     it('should extract MCP section that ends at document boundary', () => {

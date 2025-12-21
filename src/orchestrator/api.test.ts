@@ -474,7 +474,7 @@ describe('API', () => {
           .send({
             title: 'New task',
             description: 'Task description',
-            assignedTo: 'agent-1',
+            assignedTo: '00000000-0000-0000-0000-000000000001', // TASK-024: Zod requires valid UUID
           });
 
         expect(res.status).toBe(201);
@@ -482,9 +482,18 @@ describe('API', () => {
       });
 
       it('should use defaults for optional fields', async () => {
+        mockTaskRepo.create.mockResolvedValue({
+          id: 'task-2',
+          title: 'Task',
+          status: 'pending',
+        });
+
         await request(app)
           .post('/tasks')
-          .send({ title: 'Task' });
+          .send({
+            title: 'Task',
+            assignedTo: '00000000-0000-0000-0000-000000000001', // TASK-024: Zod requires assignedTo
+          });
 
         expect(mockTaskRepo.create).toHaveBeenCalledWith(
           expect.objectContaining({

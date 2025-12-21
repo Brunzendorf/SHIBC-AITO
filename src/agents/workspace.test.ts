@@ -20,6 +20,12 @@ vi.mock('../lib/logger.js', () => ({
   })),
 }));
 
+// Mock executeClaudeAgent for PR creation (workspace now uses pr-creator agent)
+const mockExecuteClaudeAgent = vi.fn<any, any>();
+vi.mock('./claude.js', () => ({
+  executeClaudeAgent: mockExecuteClaudeAgent,
+}));
+
 vi.mock('../lib/config.js', () => ({
   config: {
     GITHUB_TOKEN: 'ghp_test_token_123',
@@ -51,6 +57,7 @@ describe('Workspace Manager', () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mockExecuteClaudeAgent.mockReset();
     const childProcess = await import('child_process');
     const fs = await import('fs');
     exec = childProcess.exec;
@@ -398,43 +405,58 @@ describe('Workspace Manager', () => {
       );
     });
 
-    it('should create PR with correct title and body', async () => {
+    it('should create PR with correct title via pr-creator agent', async () => {
       exec.mockImplementation((cmd: string, options: any, callback: any) => {
         const cb = typeof options === 'function' ? options : callback;
         if (cmd.includes('git status --porcelain')) {
           process.nextTick(() => cb(null, { stdout: ' M file1.ts\n', stderr: '' }));
         } else if (cmd.includes('git rev-parse --short HEAD')) {
           process.nextTick(() => cb(null, { stdout: 'mno345\n', stderr: '' }));
-        } else if (cmd.includes('gh pr create')) {
-          process.nextTick(() => cb(null, { stdout: 'https://github.com/test/repo/pull/10\n', stderr: '' }));
         } else {
           process.nextTick(() => cb(null, { stdout: '', stderr: '' }));
         }
       });
 
+      // Workspace now uses pr-creator agent for PR creation
+      mockExecuteClaudeAgent.mockResolvedValue({
+        success: true,
+        output: 'PR_CREATED: https://github.com/test/repo/pull/10',
+      });
+
       const result = await workspaceModule.commitAndCreatePR('cmo', 'Add new content strategy', 5);
 
+      // Verify commit message format
       expect(exec).toHaveBeenCalledWith(
         expect.stringContaining('[CMO] Add new content strategy'),
-        expect.anything(),
         expect.anything()
+      );
+      // Verify pr-creator agent was called
+      expect(mockExecuteClaudeAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: 'pr-creator',
+          prompt: expect.stringContaining('Add new content strategy'),
+        })
       );
       expect(result.prNumber).toBe(10);
       expect(result.prUrl).toBe('https://github.com/test/repo/pull/10');
     });
 
-    it('should extract PR number from URL', async () => {
+    it('should extract PR number from agent output', async () => {
       exec.mockImplementation((cmd: string, options: any, callback: any) => {
         const cb = typeof options === 'function' ? options : callback;
         if (cmd.includes('git status --porcelain')) {
           process.nextTick(() => cb(null, { stdout: ' M file.ts\n', stderr: '' }));
         } else if (cmd.includes('git rev-parse --short HEAD')) {
           process.nextTick(() => cb(null, { stdout: 'pqr678\n', stderr: '' }));
-        } else if (cmd.includes('gh pr create')) {
-          process.nextTick(() => cb(null, { stdout: 'https://github.com/test/repo/pull/99\n', stderr: '' }));
         } else {
           process.nextTick(() => cb(null, { stdout: '', stderr: '' }));
         }
+      });
+
+      // Workspace parses PR URL from pr-creator agent output
+      mockExecuteClaudeAgent.mockResolvedValue({
+        success: true,
+        output: 'Done! PR_CREATED: https://github.com/test/repo/pull/99',
       });
 
       const result = await workspaceModule.commitAndCreatePR('cto', 'Deploy feature', 2);

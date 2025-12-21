@@ -7,6 +7,14 @@ vi.mock('child_process', () => ({
   spawn: vi.fn<any, any>(),
 }));
 
+// Mock fs to make /app/workspace exist in tests
+vi.mock('fs', () => ({
+  existsSync: vi.fn((path: string) => path === '/app/workspace'),
+  readFileSync: vi.fn(),
+  writeFileSync: vi.fn(),
+  unlinkSync: vi.fn(),
+}));
+
 // Mock logger
 vi.mock('../lib/logger.js', () => ({
   createLogger: vi.fn(() => ({
@@ -67,7 +75,8 @@ describe('claude', () => {
       const mockProc = new EventEmitter() as ChildProcess;
       mockSpawn.mockReturnValue(mockProc as any);
 
-      const promise = isClaudeAvailable();
+      // Use retries=1 to avoid retry delays that complicate timer tests
+      const promise = isClaudeAvailable(1, 0);
 
       setTimeout(() => mockProc.emit('close', 1), 10);
       vi.advanceTimersByTime(10);
@@ -80,7 +89,8 @@ describe('claude', () => {
       const mockProc = new EventEmitter() as ChildProcess;
       mockSpawn.mockReturnValue(mockProc as any);
 
-      const promise = isClaudeAvailable();
+      // Use retries=1 to avoid retry delays that complicate timer tests
+      const promise = isClaudeAvailable(1, 0);
 
       setTimeout(() => mockProc.emit('error', new Error('Command not found')), 10);
       vi.advanceTimersByTime(10);
@@ -94,7 +104,8 @@ describe('claude', () => {
       mockProc.kill = vi.fn();
       mockSpawn.mockReturnValue(mockProc as any);
 
-      const promise = isClaudeAvailable();
+      // Use retries=1 to avoid retry delays that complicate timer tests
+      const promise = isClaudeAvailable(1, 0);
 
       // Advance past the 5 second timeout
       vi.advanceTimersByTime(5000);

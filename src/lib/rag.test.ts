@@ -448,7 +448,7 @@ describe('RAG System', () => {
 
   describe('indexDecision', () => {
     beforeEach(async () => {
-      mockBasicInit();
+      await mockBasicInit();
     });
 
     it('should index a decision', async () => {
@@ -484,7 +484,7 @@ describe('RAG System', () => {
 
   describe('indexAgentOutput', () => {
     beforeEach(async () => {
-      mockBasicInit();
+      await mockBasicInit();
     });
 
     it('should index agent output', async () => {

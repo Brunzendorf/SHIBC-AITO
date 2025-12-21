@@ -1,5 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
+// Mock multi transaction
+// ioredis multi.exec() returns array of [error, result] tuples
+const mockMulti = {
+  lpush: vi.fn().mockReturnThis(),
+  publish: vi.fn().mockReturnThis(),
+  exec: vi.fn(() => Promise.resolve([[null, 1], [null, 1]])), // [error, result] pairs
+};
+
 // Mock ioredis
 const mockRedis = {
   set: vi.fn(() => Promise.resolve<'OK' | null>('OK')),
@@ -18,6 +26,7 @@ const mockRedis = {
   unsubscribe: vi.fn(() => Promise.resolve(1)),
   publish: vi.fn(() => Promise.resolve(1)),
   on: vi.fn(),
+  multi: vi.fn(() => mockMulti),
 };
 
 vi.mock('ioredis', () => ({
@@ -167,16 +176,19 @@ describe('Redis', () => {
   });
 
   describe('pushTask', () => {
-    it('should push task to queue', async () => {
+    it('should push task to queue atomically with notification', async () => {
       const { pushTask } = await import('./redis.js');
       const task = { title: 'Test task' };
 
       await pushTask('agent-1', task);
 
-      expect(mockRedis.lpush).toHaveBeenCalledWith(
+      // TASK-017: pushTask uses multi() for atomic LPUSH + PUBLISH
+      expect(mockRedis.multi).toHaveBeenCalled();
+      expect(mockMulti.lpush).toHaveBeenCalledWith(
         'queue:tasks:agent-1',
         JSON.stringify(task)
       );
+      expect(mockMulti.exec).toHaveBeenCalled();
     });
   });
 
