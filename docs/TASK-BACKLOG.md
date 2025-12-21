@@ -115,19 +115,19 @@
 
 ---
 
-#### TASK-007: Kein Audit-Log für sensitive Actions
-**Status:** ✨ FEATURE
+#### TASK-007: Kein Audit-Log für sensitive Actions ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 3h
-**Datei:** `src/agents/daemon.ts:1085+`
+**Datei:** `src/agents/daemon.ts`, `src/lib/db.ts`, `docker/migrations/006_audit_logs.sql`
 
 **Problem:**
 - `merge_pr`, `vote`, `spawn_worker` werden nicht separat geloggt
 - Kein Audit-Trail für Compliance
 
-**Fix:**
-1. `auditRepo.log()` für kritische Actions
-2. Separate `audit_log` Tabelle
-3. Immutable entries
+**Lösung:**
+1. Migration `006_audit_logs.sql` mit immutable audit table (PostgreSQL Trigger verhindert UPDATE/DELETE)
+2. `auditRepo` in db.ts: log(), getRecent(), getByAgentType(), getByActionType(), getFailed()
+3. daemon.ts: Audit-Logging für vote, spawn_worker, merge_pr (mit success/failure tracking)
 
 ---
 
@@ -176,10 +176,10 @@
 
 ### 🟡 MITTEL
 
-#### TASK-011: buildInitiativeContext() blockiert
-**Status:** 🔧 IMPROVEMENT
+#### TASK-011: buildInitiativeContext() blockiert ✅ DONE
+**Status:** 🔧 IMPROVEMENT → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 3h
-**Datei:** `src/agents/initiative.ts:520-524`
+**Datei:** `src/agents/initiative.ts`
 
 **Problem:**
 ```typescript
@@ -187,10 +187,11 @@ Promise.all([fetchGitHubIssues, getTeamStatus, buildDataContext])
 // buildDataContext kann 30+ Sekunden dauern
 ```
 
-**Fix:**
-1. Cache results in Redis mit 15min TTL
-2. Background-Refresh statt blocking
-3. Fallback zu cached data wenn API langsam
+**Lösung:**
+1. Redis Cache mit 15min TTL für githubIssues + dataContext
+2. Team Status wird immer frisch geladen (ändert sich häufig)
+3. Cache Key: `initiative:context:${agentType}`
+4. Fallback: Bei Cache-Miss werden Daten geholt und gecached
 
 ---
 
@@ -263,9 +264,9 @@ Promise.all([fetchGitHubIssues, getTeamStatus, buildDataContext])
 
 ### 🟠 HOCH
 
-#### TASK-016: Pub/Sub keine Message Garantie ✅ PARTIAL
-**Status:** 🔧 IMPROVEMENT → ✅ INFRASTRUKTUR ERLEDIGT (2025-12-20)
-**Aufwand:** 6h (Phase 1: 3h erledigt)
+#### TASK-016: Pub/Sub keine Message Garantie ✅ DONE
+**Status:** 🔧 IMPROVEMENT → ✅ ERLEDIGT (2025-12-21)
+**Aufwand:** 6h (Phase 1: 3h, Phase 2: 3h)
 
 **Problem:**
 - Pub/Sub ist fire-and-forget
@@ -283,10 +284,13 @@ Promise.all([fetchGitHubIssues, getTeamStatus, buildDataContext])
 - `claimPendingMessages()` - XCLAIM für Dead Consumer Recovery
 - `publishWithGuarantee()` - Hybrid Pub/Sub + Stream
 
-**TODO (Phase 2 - Daemon Migration):**
-- Daemon auf Consumer Groups umstellen
-- Recovery-Loop für pending Messages
-- Events.ts auf Streams migrieren
+**Lösung (Phase 2 - Daemon Migration):**
+`src/agents/daemon.ts` - Stream Consumer implementiert:
+- `initializeStreamConsumer()` - Consumer Group Setup bei Start
+- `recoverPendingStreamMessages()` - Crash Recovery für unbearbeitete Messages
+- `startStreamConsumerLoop()` - Background Loop für guaranteed delivery
+- Messages >30s idle werden als crashed betrachtet und geclaimed
+- XACK nach erfolgreicher Verarbeitung
 
 ---
 
@@ -325,10 +329,10 @@ Promise.all([fetchGitHubIssues, getTeamStatus, buildDataContext])
 
 ---
 
-#### TASK-019: DRY-RUN nur als Text-Instruktion
-**Status:** ⚠️ SECURITY
+#### TASK-019: DRY-RUN nur als Text-Instruktion ✅ DONE
+**Status:** ⚠️ SECURITY → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 4h
-**Datei:** `src/workers/worker.ts:34-66`
+**Datei:** `src/workers/worker.ts`
 
 **Problem:**
 ```typescript
@@ -336,10 +340,10 @@ getDryRunInstructions() // Nur Text!
 // Claude könnte Instructions ignorieren und doch schreiben
 ```
 
-**Fix:**
-1. MCP-Server im Read-Only-Mode starten
-2. Filesystem: Mount als read-only
-3. Telegram: Nur getUpdates, kein sendMessage
+**Lösung:**
+1. `WRITE_CAPABLE_SERVERS` Liste definiert: telegram, twitter, directus, imagen, filesystem
+2. `generateDynamicMCPConfig()` filtert write-capable Server komplett raus im DRY-RUN Mode
+3. Echte Sicherheit statt nur Prompt-Instructions - Server werden gar nicht gestartet
 
 ---
 
@@ -355,10 +359,10 @@ getDryRunInstructions() // Nur Text!
 
 ---
 
-#### TASK-021: Config-File I/O bei jedem Call
-**Status:** 🔧 IMPROVEMENT
+#### TASK-021: Config-File I/O bei jedem Call ✅ DONE
+**Status:** 🔧 IMPROVEMENT → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 2h
-**Datei:** `src/workers/worker.ts:73-80`
+**Datei:** `src/workers/worker.ts`
 
 **Problem:**
 ```typescript
@@ -367,10 +371,12 @@ getDryRunInstructions() // Nur Text!
 // Bei 1000 workers = viele I/O operations
 ```
 
-**Fix:**
-1. Config in memory halten
-2. Oder: Shared config mit Template-Variablen
-3. Oder: Redis-basierter Config-Store
+**Lösung:**
+1. `configCache` Map speichert Configs nach Server-Kombination
+2. Cache Key = sortierte Server-Namen + dryRun Flag (z.B. "fetch,telegram:dry")
+3. Config-Files werden nur bei Cache-Miss erstellt
+4. `cleanupMCPConfig()` no-op, `cleanupAllConfigs()` für Shutdown
+5. Gleiche Server-Kombination = gleiche Config-Datei wiederverwendet
 
 ---
 
@@ -530,36 +536,40 @@ export function useWebSocket() {
 
 ### 🟡 MITTEL
 
-#### TASK-029: Settings nicht persistent
-**Status:** 🐛 BUG
-**Aufwand:** 3h
-**Datei:** `dashboard/src/app/settings/page.tsx`
+#### TASK-029: Settings nicht persistent ✅ ALREADY DONE
+**Status:** 🐛 BUG → ✅ BEREITS IMPLEMENTIERT
+**Aufwand:** 0h (war bereits erledigt)
+**Datei:** `dashboard/src/components/settings/FocusPanel.tsx`
 
 **Problem:**
 - Focus Slider existiert
 - Settings verschwinden bei Page Reload
 - Kein Save-Button mit API Call
 
-**Fix:**
-1. Settings Hook mit API Integration
-2. Auto-Save oder Save-Button
-3. Loading/Success States
+**Lösung (bereits vorhanden):**
+1. FocusPanel lädt Settings bei Mount via `loadSettings()` API Call
+2. Save-Button speichert via `updateAgentFocus()` API Call
+3. Loading und Success States bereits implementiert
+4. Settings API Endpoints in orchestrator existieren und funktionieren
 
 ---
 
-#### TASK-030: Decision Voting UI fehlt
-**Status:** ✨ FEATURE
+#### TASK-030: Decision Voting UI fehlt ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 4h
-**Datei:** `dashboard/src/app/decisions/page.tsx`
+**Datei:** `dashboard/src/app/(dashboard)/decisions/page.tsx`, `dashboard/src/components/decisions/VotingDialog.tsx`
 
 **Problem:**
 - Decisions werden angezeigt
 - Aber kein Voting-Interface für Humans
 
-**Fix:**
-1. Voting Buttons (Approve/Reject/Escalate)
-2. Reason-TextField
-3. API Call zu `/decisions/:id/vote`
+**Lösung:**
+1. `VotingDialog.tsx` Komponente mit Approve/Reject Buttons
+2. Reason-TextField für Begründung
+3. 3-Tab Layout: Eskaliert (mit Voting), Ausstehend, History
+4. Roter Badge für eskalierte Entscheidungen
+5. Success-Snackbar nach Abstimmung
+6. API Call zu `/decisions/:id/human-decision`
 
 ---
 
@@ -567,20 +577,24 @@ export function useWebSocket() {
 
 ### 🔴 KRITISCH
 
-#### TASK-031: Single Redis ist SPOF
-**Status:** 🔧 IMPROVEMENT
+#### TASK-031: Single Redis ist SPOF ✅ DONE
+**Status:** 🔧 IMPROVEMENT → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 16h
-**Datei:** `docker-compose.yml`, `src/lib/redis.ts`
+**Datei:** `src/lib/redis.ts`, `docker-compose.redis-ha.yml`, `docker/redis/sentinel.conf`
 
 **Problem:**
 - Alle agents hängen von Redis ab
 - Wenn Redis down → all agents stuck
 - Kein Failover
 
-**Fix:**
-1. Redis Sentinel für HA
-2. Oder: Redis Cluster
-3. Connection retry mit circuit breaker
+**Lösung:**
+1. `docker-compose.redis-ha.yml` - Redis Sentinel Setup (1 Master, 2 Replicas, 3 Sentinels)
+2. `src/lib/redis.ts` - Sentinel-aware Client mit automatischem Failover
+3. Unterstützt URL-Format: `redis-sentinel://host1:26379,host2:26379/mymaster`
+4. Alternativ: `REDIS_SENTINELS` + `REDIS_MASTER_NAME` Umgebungsvariablen
+5. Automatische Reconnection bei READONLY-Error (Master-Switch)
+6. `getRedisHealth()` - Extended Health Check mit HA-Status
+7. Nutzung: `docker compose -f docker-compose.yml -f docker-compose.redis-ha.yml up -d`
 
 ---
 
@@ -626,19 +640,25 @@ export function useWebSocket() {
 
 ---
 
-#### TASK-034: Secrets Rotation fehlt
-**Status:** ⚠️ SECURITY
+#### TASK-034: Secrets Rotation fehlt ✅ DONE
+**Status:** ⚠️ SECURITY → ✅ ERLEDIGT (2025-12-21)
 **Aufwand:** 8h
+**Datei:** `src/lib/secrets.ts`
 
 **Problem:**
 - GitHub token, API keys in .env forever
 - Kein Rotation
 - Kompromittierte Keys bleiben aktiv
 
-**Fix:**
-1. HashiCorp Vault Integration
-2. Oder: AWS Secrets Manager
-3. Automated rotation schedules
+**Lösung:**
+1. `SecretsManager` Abstraktion für verschiedene Backends
+2. Unterstützte Backends (in Prioritätsreihenfolge):
+   - Docker Secrets (`/run/secrets/<key>`) - sicherste Option
+   - File-based Secrets (`SECRETS_PATH` Verzeichnis)
+   - Environment Variables (Fallback)
+3. 5-Minuten Cache mit `invalidate()` für Rotation
+4. Helper-Funktionen: `getGitHubToken()`, `getApiKey('anthropic')`, etc.
+5. Vorbereitet für Vault-Integration (Backend-Interface)
 
 ---
 
@@ -701,33 +721,28 @@ export function useWebSocket() {
 
 | Priorität | Anzahl Tasks | Offen | Geschätzter Aufwand |
 |-----------|--------------|-------|---------------------|
-| 🔴 KRITISCH | 8 | 1 | ~24h |
-| 🟠 HOCH | 14 | 9 | ~48h |
-| 🟡 MITTEL | 10 | 8 | ~30h |
+| 🔴 KRITISCH | 8 | 0 | ~0h |
+| 🟠 HOCH | 14 | 1 | ~8h |
+| 🟡 MITTEL | 10 | 1 | ~4h |
 | 🟢 NIEDRIG | 4 | 4 | ~12h |
-| **GESAMT** | **36** | **22 offen** | **~114h** |
+| **GESAMT** | **36** | **6 offen** | **~24h** |
 
-> **Update 2025-12-20:**
-> - 4 Quick Wins erledigt (TASK-003, TASK-010, TASK-014, TASK-020)
-> - TASK-022 erledigt (Supabase Auth + 2FA + API JWT)
-> - TASK-023 übersprungen (Rate Limiting nicht benötigt bei 1-1 Whitelabel)
-> - TASK-018 erledigt (fetch-validated MCP Server)
-> - TASK-001 erledigt (Atomic Queue Pattern mit RPOPLPUSH)
-> - **Sprint 1 komplett!** Alle Security & Critical Bugs erledigt
-> - TASK-012 erledigt (Git Merge Conflict Handling)
-> - TASK-016 erledigt (Redis Streams Infrastruktur)
-> - TASK-032 erledigt (Circuit Breaker für GitHub API)
-> - TASK-027 erledigt (Dashboard Error Handling)
-> - **Sprint 2 komplett!** Alle Stability-Tasks erledigt
+> **Update 2025-12-21:**
+> - **Sprint 7 komplett!** HA & Security Tasks erledigt
+> - TASK-030: Decision Voting UI mit VotingDialog
+> - TASK-031: Redis HA mit Sentinel Support
+> - TASK-034: SecretsManager für sichere Secret-Verwaltung
+>
+> **Gesamt:** 30 von 36 Tasks erledigt (83%)
 
 ### Nach Kategorie
 
 | Kategorie | Anzahl | Offen | Erledigt |
 |-----------|--------|-------|----------|
-| 🐛 BUG | 15 | 7 | 8 |
-| ⚠️ SECURITY | 6 | 2 | 4 |
-| 🔧 IMPROVEMENT | 10 | 8 | 2 |
-| ✨ FEATURE | 5 | 5 | 0 |
+| 🐛 BUG | 15 | 1 | 14 |
+| ⚠️ SECURITY | 6 | 0 | 6 |
+| 🔧 IMPROVEMENT | 10 | 2 | 8 |
+| ✨ FEATURE | 5 | 3 | 2 |
 
 ### Quick Wins (< 2h) ✅ ALLE ERLEDIGT
 
@@ -763,6 +778,27 @@ export function useWebSocket() {
 - ~~TASK-017: Task Queue atomic~~ ✅ Redis MULTI/EXEC Transaction
 - ~~TASK-035: Logger Secrets Sanitization~~ ✅ Pino Serializers + Redact Middleware
 - ~~TASK-024: Request Validation (Zod)~~ ✅ 9 kritische Endpoints validiert
+
+**Sprint 5 (Performance & Error Handling):** ✅ KOMPLETT
+- ~~TASK-005: Initiative Phase für C-Level~~ ✅ canRunInitiative() + erweiterte Trigger-Logik
+- ~~TASK-006: Performance State Query~~ ✅ getEssential() mit 6 Essential Keys
+- ~~TASK-009: GitHub Rate-Limit Handling~~ ✅ Assume duplicate bei Rate-Limit
+- ~~TASK-013: Stash-Logik sicher~~ ✅ WIP-Commits statt Stash
+- ~~TASK-015: PR-Workflow Cleanup~~ ✅ Dangling Branch Cleanup bei Push-Fehler
+- ~~TASK-025: Unbounded Queries~~ ✅ MAX_QUERY_LIMIT + parseLimit()
+
+**Sprint 6 (Optimization & Compliance):** ✅ KOMPLETT
+- ~~TASK-007: Audit-Log für sensitive Actions~~ ✅ Immutable audit_logs Table + auditRepo
+- ~~TASK-011: buildInitiativeContext() Caching~~ ✅ Redis Cache mit 15min TTL
+- ~~TASK-016: Pub/Sub Message Garantie Phase 2~~ ✅ Stream Consumer + Crash Recovery
+- ~~TASK-019: DRY-RUN Read-Only~~ ✅ Write-capable Server im DRY-RUN entfernt
+- ~~TASK-021: Config-File I/O Optimierung~~ ✅ configCache statt File pro Task
+- ~~TASK-029: Settings Persistenz~~ ✅ Bereits implementiert (FocusPanel + API)
+
+**Sprint 7 (HA & Security):** ✅ KOMPLETT
+- ~~TASK-030: Decision Voting UI~~ ✅ VotingDialog + 3-Tab Layout
+- ~~TASK-031: Redis HA~~ ✅ Sentinel Support + docker-compose.redis-ha.yml
+- ~~TASK-034: Secrets Rotation~~ ✅ SecretsManager mit Docker Secrets + File Backend
 
 ---
 

@@ -16,14 +16,24 @@ import {
   Tabs,
   Tab,
   Tooltip,
+  IconButton,
+  Snackbar,
+  Alert,
 } from '@mui/material';
-import { usePendingDecisions, useAllDecisions } from '@/hooks/useDecisions';
+import {
+  HowToVote as DecisionIcon,
+  History as HistoryIcon,
+  CheckCircle as ApproveIcon,
+  Cancel as RejectIcon,
+} from '@mui/icons-material';
+import { usePendingDecisions, useAllDecisions, useEscalatedDecisions } from '@/hooks/useDecisions';
 import { useAgents } from '@/hooks/useAgents';
 import { formatDistanceToNow } from '@/lib/utils';
 import Loading from '@/components/common/Loading';
 import ErrorDisplay from '@/components/common/ErrorDisplay';
 import EmptyState from '@/components/common/EmptyState';
-import { HowToVote as DecisionIcon, History as HistoryIcon } from '@mui/icons-material';
+import VotingDialog from '@/components/decisions/VotingDialog';
+import type { Decision } from '@/lib/api';
 
 const statusColors: Record<string, string> = {
   pending: '#ffa502',
@@ -56,7 +66,12 @@ const statusLabels: Record<string, string> = {
 
 export default function DecisionsPage() {
   const [tab, setTab] = useState(0);
+  const [selectedDecision, setSelectedDecision] = useState<Decision | null>(null);
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+
   const { data: pending, error: pendingError, isLoading: pendingLoading, mutate: mutatePending } = usePendingDecisions();
+  const { data: escalated, error: escalatedError, isLoading: escalatedLoading, mutate: mutateEscalated } = useEscalatedDecisions();
   const { data: all, error: allError, isLoading: allLoading, mutate: mutateAll } = useAllDecisions(100);
   const { data: agents } = useAgents();
 
@@ -67,13 +82,33 @@ export default function DecisionsPage() {
     return agent ? agent.type.toUpperCase() : id.substring(0, 8);
   };
 
-  const isLoading = tab === 0 ? pendingLoading : allLoading;
-  const error = tab === 0 ? pendingError : allError;
-  const mutate = tab === 0 ? mutatePending : mutateAll;
-  const decisions = tab === 0 ? pending : all;
+  // Tab 0: Escalated (requires human decision)
+  // Tab 1: Pending (AI is voting)
+  // Tab 2: History
+  const tabConfig = [
+    { label: 'Eskaliert', data: escalated, error: escalatedError, loading: escalatedLoading, mutate: mutateEscalated },
+    { label: 'Ausstehend', data: pending, error: pendingError, loading: pendingLoading, mutate: mutatePending },
+    { label: 'History', data: all, error: allError, loading: allLoading, mutate: mutateAll },
+  ];
 
-  if (isLoading) return <Loading message="Lade Entscheidungen..." />;
-  if (error) return <ErrorDisplay error={error} onRetry={() => mutate()} />;
+  const currentTab = tabConfig[tab];
+  const decisions = currentTab.data;
+
+  const handleVoteClick = (decision: Decision) => {
+    setSelectedDecision(decision);
+    setDialogOpen(true);
+  };
+
+  const handleVoteSuccess = () => {
+    setSuccessMessage('Entscheidung erfolgreich abgestimmt!');
+    // Refresh all lists
+    mutatePending();
+    mutateEscalated();
+    mutateAll();
+  };
+
+  if (currentTab.loading) return <Loading message="Lade Entscheidungen..." />;
+  if (currentTab.error) return <ErrorDisplay error={currentTab.error} onRetry={() => currentTab.mutate()} />;
 
   return (
     <Box>
@@ -81,7 +116,7 @@ export default function DecisionsPage() {
         Entscheidungen
       </Typography>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Alle Governance-Entscheidungen im System
+        Governance-Entscheidungen im System. Eskalierte Entscheidungen erfordern menschliche Intervention.
       </Typography>
 
       <Tabs
@@ -89,14 +124,56 @@ export default function DecisionsPage() {
         onChange={(_, v) => setTab(v)}
         sx={{ mb: 3, '& .MuiTab-root': { color: 'rgba(255,255,255,0.7)' }, '& .Mui-selected': { color: '#ffd700' } }}
       >
-        <Tab icon={<DecisionIcon />} iconPosition="start" label={`Ausstehend (${pending?.length || 0})`} />
+        <Tab
+          icon={<DecisionIcon />}
+          iconPosition="start"
+          label={
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <span>Eskaliert</span>
+              {(escalated?.length || 0) > 0 && (
+                <Chip
+                  label={escalated?.length}
+                  size="small"
+                  sx={{ backgroundColor: '#ff0055', color: '#fff', height: 20, fontSize: '0.7rem' }}
+                />
+              )}
+            </Box>
+          }
+        />
+        <Tab
+          icon={<DecisionIcon />}
+          iconPosition="start"
+          label={`Ausstehend (${pending?.length || 0})`}
+        />
         <Tab icon={<HistoryIcon />} iconPosition="start" label="History" />
       </Tabs>
 
+      {/* Info banner for escalated tab */}
+      {tab === 0 && (escalated?.length || 0) > 0 && (
+        <Alert
+          severity="warning"
+          sx={{
+            mb: 2,
+            backgroundColor: 'rgba(255,165,2,0.1)',
+            border: '1px solid rgba(255,165,2,0.3)',
+          }}
+        >
+          Diese Entscheidungen erfordern Ihre Abstimmung. CEO und DAO konnten sich nicht einigen.
+        </Alert>
+      )}
+
       {!decisions?.length ? (
         <EmptyState
-          title={tab === 0 ? "Keine ausstehenden Entscheidungen" : "Keine Entscheidungen"}
-          description={tab === 0 ? "Alle Entscheidungen wurden bearbeitet." : "Noch keine Entscheidungen im System."}
+          title={
+            tab === 0 ? "Keine eskalierten Entscheidungen" :
+            tab === 1 ? "Keine ausstehenden Entscheidungen" :
+            "Keine Entscheidungen"
+          }
+          description={
+            tab === 0 ? "Keine Entscheidungen erfordern menschliche Intervention." :
+            tab === 1 ? "Alle Entscheidungen wurden bearbeitet." :
+            "Noch keine Entscheidungen im System."
+          }
           icon={<DecisionIcon sx={{ fontSize: 64 }} />}
         />
       ) : (
@@ -113,6 +190,7 @@ export default function DecisionsPage() {
                     <TableCell>CEO</TableCell>
                     <TableCell>DAO</TableCell>
                     <TableCell>Erstellt</TableCell>
+                    {tab === 0 && <TableCell align="center">Aktion</TableCell>}
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -123,6 +201,7 @@ export default function DecisionsPage() {
                       sx={{
                         opacity: decision.status === 'pending' || decision.status === 'escalated' ? 1 : 0.7,
                         '&:hover': { opacity: 1 },
+                        backgroundColor: decision.status === 'escalated' ? 'rgba(255,0,85,0.05)' : 'transparent',
                       }}
                     >
                       <TableCell sx={{ maxWidth: 300 }}>
@@ -199,6 +278,36 @@ export default function DecisionsPage() {
                           {formatDistanceToNow(decision.createdAt)}
                         </Typography>
                       </TableCell>
+                      {tab === 0 && (
+                        <TableCell align="center">
+                          <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>
+                            <Tooltip title="Genehmigen">
+                              <IconButton
+                                size="small"
+                                onClick={() => handleVoteClick(decision)}
+                                sx={{
+                                  color: '#00ff88',
+                                  '&:hover': { backgroundColor: 'rgba(0,255,136,0.1)' },
+                                }}
+                              >
+                                <ApproveIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                            <Tooltip title="Ablehnen">
+                              <IconButton
+                                size="small"
+                                onClick={() => handleVoteClick(decision)}
+                                sx={{
+                                  color: '#ff0055',
+                                  '&:hover': { backgroundColor: 'rgba(255,0,85,0.1)' },
+                                }}
+                              >
+                                <RejectIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          </Box>
+                        </TableCell>
+                      )}
                     </TableRow>
                   ))}
                 </TableBody>
@@ -207,6 +316,26 @@ export default function DecisionsPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Voting Dialog */}
+      <VotingDialog
+        decision={selectedDecision}
+        open={dialogOpen}
+        onClose={() => setDialogOpen(false)}
+        onSuccess={handleVoteSuccess}
+      />
+
+      {/* Success Snackbar */}
+      <Snackbar
+        open={!!successMessage}
+        autoHideDuration={4000}
+        onClose={() => setSuccessMessage(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert severity="success" onClose={() => setSuccessMessage(null)}>
+          {successMessage}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

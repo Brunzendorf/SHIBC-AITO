@@ -1,0 +1,150 @@
+# AITO Redis High Availability Configuration
+# Redis Sentinel setup with 1 master, 2 replicas, 3 sentinels
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.redis-ha.yml up -d
+#
+# This overrides the single redis instance with a HA setup.
+
+version: '3.8'
+
+services:
+  # ============================================
+  # REDIS MASTER
+  # ============================================
+  redis-master:
+    image: redis:7-alpine
+    container_name: aito-redis-master
+    restart: unless-stopped
+    command: redis-server --appendonly yes --replica-announce-ip redis-master
+    volumes:
+      - redis_master_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - aito-network
+
+  # ============================================
+  # REDIS REPLICAS
+  # ============================================
+  redis-replica-1:
+    image: redis:7-alpine
+    container_name: aito-redis-replica-1
+    restart: unless-stopped
+    command: redis-server --appendonly yes --replicaof redis-master 6379 --replica-announce-ip redis-replica-1
+    volumes:
+      - redis_replica1_data:/data
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - aito-network
+
+  redis-replica-2:
+    image: redis:7-alpine
+    container_name: aito-redis-replica-2
+    restart: unless-stopped
+    command: redis-server --appendonly yes --replicaof redis-master 6379 --replica-announce-ip redis-replica-2
+    volumes:
+      - redis_replica2_data:/data
+    depends_on:
+      redis-master:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - aito-network
+
+  # ============================================
+  # REDIS SENTINELS (3 for quorum)
+  # ============================================
+  redis-sentinel-1:
+    image: redis:7-alpine
+    container_name: aito-redis-sentinel-1
+    restart: unless-stopped
+    command: redis-sentinel /etc/redis/sentinel.conf
+    volumes:
+      - ./docker/redis/sentinel.conf:/etc/redis/sentinel.conf:ro
+      - redis_sentinel1_data:/data
+    ports:
+      - "26379:26379"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica-1:
+        condition: service_healthy
+      redis-replica-2:
+        condition: service_healthy
+    networks:
+      - aito-network
+
+  redis-sentinel-2:
+    image: redis:7-alpine
+    container_name: aito-redis-sentinel-2
+    restart: unless-stopped
+    command: redis-sentinel /etc/redis/sentinel.conf
+    volumes:
+      - ./docker/redis/sentinel.conf:/etc/redis/sentinel.conf:ro
+      - redis_sentinel2_data:/data
+    ports:
+      - "26380:26379"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica-1:
+        condition: service_healthy
+      redis-replica-2:
+        condition: service_healthy
+    networks:
+      - aito-network
+
+  redis-sentinel-3:
+    image: redis:7-alpine
+    container_name: aito-redis-sentinel-3
+    restart: unless-stopped
+    command: redis-sentinel /etc/redis/sentinel.conf
+    volumes:
+      - ./docker/redis/sentinel.conf:/etc/redis/sentinel.conf:ro
+      - redis_sentinel3_data:/data
+    ports:
+      - "26381:26379"
+    depends_on:
+      redis-master:
+        condition: service_healthy
+      redis-replica-1:
+        condition: service_healthy
+      redis-replica-2:
+        condition: service_healthy
+    networks:
+      - aito-network
+
+  # ============================================
+  # OVERRIDE: Disable single redis instance
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    deploy:
+      replicas: 0
+    profiles:
+      - disabled
+
+volumes:
+  redis_master_data:
+  redis_replica1_data:
+  redis_replica2_data:
+  redis_sentinel1_data:
+  redis_sentinel2_data:
+  redis_sentinel3_data:

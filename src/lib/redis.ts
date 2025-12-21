@@ -5,29 +5,127 @@ import type { AgentMessage, HealthStatus } from './types.js';
 
 const logger = createLogger('redis');
 
-// Main Redis client (for commands)
-export const redis = new Redis(config.REDIS_URL, {
-  maxRetriesPerRequest: 3,
-  retryStrategy: (times) => {
+// =============================================================================
+// TASK-031: Redis High Availability with Sentinel Support
+// =============================================================================
+
+/**
+ * Parse Redis URL or Sentinel configuration
+ * Supports:
+ * - Standard: redis://host:port
+ * - Sentinel: redis-sentinel://sentinel1:26379,sentinel2:26379/mymaster
+ */
+interface RedisConfig {
+  mode: 'standalone' | 'sentinel';
+  url?: string;
+  sentinels?: Array<{ host: string; port: number }>;
+  masterName?: string;
+}
+
+function parseRedisConfig(): RedisConfig {
+  const url = config.REDIS_URL;
+
+  // Check for Sentinel URL format
+  if (url.startsWith('redis-sentinel://')) {
+    const parsed = new URL(url.replace('redis-sentinel://', 'http://'));
+    const masterName = parsed.pathname.slice(1) || 'mymaster';
+    const sentinelHosts = parsed.host.split(',');
+
+    const sentinels = sentinelHosts.map(hostPort => {
+      const [host, port] = hostPort.split(':');
+      return { host, port: parseInt(port || '26379', 10) };
+    });
+
+    logger.info({ sentinels, masterName }, 'Using Redis Sentinel mode');
+    return { mode: 'sentinel', sentinels, masterName };
+  }
+
+  // Check for REDIS_SENTINELS environment variable
+  const sentinelsEnv = process.env.REDIS_SENTINELS;
+  if (sentinelsEnv) {
+    const masterName = process.env.REDIS_MASTER_NAME || 'mymaster';
+    const sentinels = sentinelsEnv.split(',').map(hostPort => {
+      const [host, port] = hostPort.trim().split(':');
+      return { host, port: parseInt(port || '26379', 10) };
+    });
+
+    logger.info({ sentinels, masterName }, 'Using Redis Sentinel mode (from env)');
+    return { mode: 'sentinel', sentinels, masterName };
+  }
+
+  // Standard standalone mode
+  return { mode: 'standalone', url };
+}
+
+/**
+ * Create Redis client with retry strategy and event handlers
+ */
+function createRedisClient(name: string): Redis {
+  const redisConfig = parseRedisConfig();
+
+  const retryStrategy = (times: number) => {
     if (times > 10) {
-      logger.error('Redis connection failed after 10 retries');
+      logger.error({ client: name }, 'Redis connection failed after 10 retries');
       return null;
     }
-    return Math.min(times * 100, 3000);
-  },
-});
+    const delay = Math.min(times * 100, 3000);
+    logger.warn({ client: name, attempt: times, delayMs: delay }, 'Redis reconnecting...');
+    return delay;
+  };
+
+  let client: Redis;
+
+  if (redisConfig.mode === 'sentinel') {
+    client = new Redis({
+      sentinels: redisConfig.sentinels,
+      name: redisConfig.masterName,
+      maxRetriesPerRequest: 3,
+      retryStrategy,
+      // Sentinel-specific options
+      sentinelRetryStrategy: retryStrategy,
+      enableReadyCheck: true,
+      // On failover, reconnect to new master
+      reconnectOnError: (err) => {
+        const targetError = 'READONLY';
+        if (err.message.includes(targetError)) {
+          logger.warn({ client: name }, 'Redis READONLY detected, reconnecting to new master...');
+          return true;
+        }
+        return false;
+      },
+    });
+  } else {
+    client = new Redis(redisConfig.url!, {
+      maxRetriesPerRequest: 3,
+      retryStrategy,
+    });
+  }
+
+  // Event handlers
+  client.on('error', (err) => logger.error({ err, client: name }, 'Redis error'));
+  client.on('connect', () => logger.info({ client: name }, 'Redis connected'));
+  client.on('ready', () => logger.info({ client: name }, 'Redis ready'));
+  client.on('close', () => logger.warn({ client: name }, 'Redis connection closed'));
+  client.on('reconnecting', () => logger.info({ client: name }, 'Redis reconnecting...'));
+
+  // Sentinel-specific events
+  if (redisConfig.mode === 'sentinel') {
+    client.on('+switch-master', (masterName: string) => {
+      logger.warn({ client: name, masterName }, 'Redis Sentinel: Master switched!');
+    });
+  }
+
+  return client;
+}
+
+// Main Redis client (for commands)
+export const redis = createRedisClient('main');
 
 // Subscriber client (dedicated for Pub/Sub)
-export const subscriber = new Redis(config.REDIS_URL);
+export const subscriber = createRedisClient('subscriber');
 
 // Publisher client (dedicated for Pub/Sub)
-export const publisher = new Redis(config.REDIS_URL);
-
-redis.on('error', (err) => logger.error({ err }, 'Redis error'));
-redis.on('connect', () => logger.info('Redis connected'));
-
-subscriber.on('error', (err) => logger.error({ err }, 'Redis subscriber error'));
-publisher.on('error', (err) => logger.error({ err }, 'Redis publisher error'));
+export const publisher = createRedisClient('publisher');
 
 // Channel names
 export const channels = {
@@ -349,6 +447,54 @@ export async function checkConnection(): Promise<boolean> {
     return pong === 'PONG';
   } catch {
     return false;
+  }
+}
+
+/**
+ * TASK-031: Extended health check with HA status
+ */
+export interface RedisHealthStatus {
+  connected: boolean;
+  mode: 'standalone' | 'sentinel';
+  latencyMs: number;
+  role?: string; // 'master' or 'slave'
+  connectedSlaves?: number;
+  sentinelMaster?: string;
+}
+
+export async function getRedisHealth(): Promise<RedisHealthStatus> {
+  const startTime = Date.now();
+  const redisConfig = parseRedisConfig();
+
+  try {
+    const pong = await redis.ping();
+    const latencyMs = Date.now() - startTime;
+
+    if (pong !== 'PONG') {
+      return { connected: false, mode: redisConfig.mode, latencyMs };
+    }
+
+    // Get server info for role detection
+    const info = await redis.info('replication');
+    const roleMatch = info.match(/role:(\w+)/);
+    const role = roleMatch?.[1];
+    const slavesMatch = info.match(/connected_slaves:(\d+)/);
+    const connectedSlaves = slavesMatch ? parseInt(slavesMatch[1], 10) : undefined;
+
+    return {
+      connected: true,
+      mode: redisConfig.mode,
+      latencyMs,
+      role,
+      connectedSlaves,
+      sentinelMaster: redisConfig.masterName,
+    };
+  } catch {
+    return {
+      connected: false,
+      mode: redisConfig.mode,
+      latencyMs: Date.now() - startTime,
+    };
   }
 }
 
