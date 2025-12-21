@@ -269,6 +269,7 @@ describe('Worker', () => {
       expect(result.duration).toBeGreaterThanOrEqual(0);
     });
 
+    // TASK-021: Config path uses cache key format: /tmp/mcp-config-{servers}.json
     it('should generate MCP config file', async () => {
       const { executeWorker } = await import('./worker.js');
 
@@ -276,37 +277,37 @@ describe('Worker', () => {
       await executeWorker(task);
 
       expect(mockFs.writeFileSync).toHaveBeenCalledWith(
-        expect.stringContaining('/tmp/mcp-worker-task-123.json'),
+        expect.stringContaining('/tmp/mcp-config-'),
         expect.stringContaining('telegram')
       );
     });
 
-    it('should cleanup MCP config file after execution', async () => {
+    // TASK-021: Config caching - cleanup is now a no-op, configs are cached and reused
+    it('should NOT cleanup MCP config file after execution (cached)', async () => {
       const { executeWorker } = await import('./worker.js');
 
       const task = createValidTask();
       await executeWorker(task);
 
-      expect(mockFs.unlinkSync).toHaveBeenCalledWith(
-        expect.stringContaining('/tmp/mcp-worker-task-123.json')
-      );
+      // Config is cached, not deleted per task
+      expect(mockFs.unlinkSync).not.toHaveBeenCalled();
     });
 
-    it('should cleanup config even on error', async () => {
+    it('should reuse cached config for same server combination', async () => {
+      const { executeWorker } = await import('./worker.js');
+
+      const task1 = createValidTask();
+      const task2 = { ...createValidTask(), taskId: 'task-456' };
+
+      await executeWorker(task1);
+      await executeWorker(task2);
+
+      // writeFileSync should only be called once (cached)
+      expect(mockFs.writeFileSync).toHaveBeenCalledTimes(1);
+    });
+
+    it('should handle execution errors gracefully', async () => {
       mockExecuteClaudeCodeWithMCP.mockRejectedValue(new Error('Claude failed'));
-
-      const { executeWorker } = await import('./worker.js');
-
-      const task = createValidTask();
-      await executeWorker(task);
-
-      expect(mockFs.unlinkSync).toHaveBeenCalled();
-    });
-
-    it('should handle cleanup errors gracefully', async () => {
-      mockFs.unlinkSync.mockImplementation(() => {
-        throw new Error('File not found');
-      });
 
       const { executeWorker } = await import('./worker.js');
 
@@ -386,6 +387,7 @@ describe('Worker', () => {
       expect(call.prompt).not.toContain('Context');
     });
 
+    // TASK-021: Config path uses cache key format: /tmp/mcp-config-{servers}.json
     it('should pass MCP config path to Claude', async () => {
       const { executeWorker } = await import('./worker.js');
 
@@ -394,7 +396,7 @@ describe('Worker', () => {
 
       expect(mockExecuteClaudeCodeWithMCP).toHaveBeenCalledWith(
         expect.objectContaining({
-          mcpConfigPath: expect.stringContaining('/tmp/mcp-worker-task-123.json'),
+          mcpConfigPath: expect.stringContaining('/tmp/mcp-config-'),
         })
       );
     });

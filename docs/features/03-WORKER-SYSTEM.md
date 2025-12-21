@@ -40,7 +40,7 @@ Das Worker-System ermöglicht Agents den Zugriff auf externe Tools via MCP (Mode
 │                                                              │
 │  ┌─────────────────────────────────────────────────────┐    │
 │  │  Claude Code CLI                                     │    │
-│  │  + MCP Config (/tmp/mcp-worker-{id}.json)           │    │
+│  │  + MCP Config (/tmp/mcp-config-{servers}.json)      │    │
 │  │  + Domain Whitelist                                  │    │
 │  │  + API Knowledge                                     │    │
 │  └─────────────────────────────────────────────────────┘    │
@@ -875,12 +875,21 @@ CMS-Integration.
 
 ## Bekannte Probleme
 
-| ID | Problem | Priorität |
-|----|---------|-----------|
-| TASK-018 | Domain-Whitelist nur auf Server-Level | 🔴 Kritisch |
-| TASK-019 | DRY-RUN nur Text-Instruktion | ⚠️ Security |
-| TASK-020 | Kein Timeout-Enforcement | 🟠 Hoch |
-| TASK-021 | Config-File I/O bei jedem Call | 🟡 Performance |
+| ID | Problem | Priorität | Status |
+|----|---------|-----------|--------|
+| TASK-018 | Domain-Whitelist nur auf Server-Level | 🔴 Kritisch | ✅ Erledigt - fetch-validated MCP Server |
+| TASK-019 | DRY-RUN nur Text-Instruktion | ⚠️ Security | ✅ Erledigt - Write-Server werden gefiltert |
+| TASK-020 | Kein Timeout-Enforcement | 🟠 Hoch | ✅ Erledigt - SIGTERM bei Timeout |
+| TASK-021 | Config-File I/O bei jedem Call | 🟡 Performance | ✅ Erledigt - Config-Caching |
+
+### TASK-019: DRY-RUN Security (2025-12-21)
+Write-capable Server (`telegram`, `twitter`, `directus`, `imagen`, `filesystem`) werden im DRY-RUN Modus komplett aus der MCP-Config entfernt - nicht nur per Prompt-Instruktion.
+
+### TASK-021: Config Caching (2025-12-21)
+Config-Files werden nach Server-Kombination gecached statt pro Task neu erstellt:
+- Cache-Key: sortierte Server (z.B. `fetch,telegram`)
+- Config-Pfad: `/tmp/mcp-config-{servers}.json`
+- Cleanup per `cleanupAllConfigs()` bei Shutdown
 
 ---
 

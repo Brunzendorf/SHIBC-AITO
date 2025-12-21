@@ -1003,6 +1003,65 @@ interface BenchmarkResult {
 
 ---
 
+## 8. Audit Log Repository (TASK-007)
+
+### Zweck
+Immutable Audit-Trail für compliance-relevante Agent-Actions (vote, spawn_worker, merge_pr).
+
+### Tabelle: `audit_logs`
+```sql
+CREATE TABLE audit_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    agent_id UUID REFERENCES agents(id),
+    agent_type VARCHAR(50) NOT NULL,
+    action_type VARCHAR(50) NOT NULL,  -- merge_pr, vote, spawn_worker
+    action_data JSONB NOT NULL,
+    success BOOLEAN NOT NULL DEFAULT true,
+    error_message TEXT,
+    correlation_id VARCHAR(100),
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+-- Immutability trigger prevents UPDATE/DELETE
+CREATE TRIGGER audit_logs_immutable
+    BEFORE UPDATE OR DELETE ON audit_logs
+    EXECUTE FUNCTION prevent_audit_modification();
+```
+
+### Funktionen
+
+#### `auditRepo.log(entry)`
+Loggt eine sensitive Action.
+
+**Signatur:**
+```typescript
+async log(entry: {
+  agentId?: string;
+  agentType: string;
+  actionType: string;
+  actionData: Record<string, unknown>;
+  success?: boolean;
+  errorMessage?: string;
+  correlationId?: string;
+}): Promise<AuditLogEntry>
+```
+
+#### `auditRepo.getRecent(limit)`
+Liefert die letzten N Audit-Einträge.
+
+#### `auditRepo.getByAgentType(agentType, limit)`
+Filtert nach Agent-Typ (z.B. alle CEO-Actions).
+
+#### `auditRepo.getByActionType(actionType, limit)`
+Filtert nach Action-Typ (z.B. alle merge_pr).
+
+#### `auditRepo.getFailed(limit)`
+Liefert alle fehlgeschlagenen Actions.
+
+**Status:** ✅ Vollständig implementiert (2025-12-21)
+
+---
+
 ## Bekannte Probleme
 
 ### 1. JSON Parsing nicht geschützt

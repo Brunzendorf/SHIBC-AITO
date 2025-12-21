@@ -512,15 +512,26 @@ function useLatestBenchmark(): SWRResponse<BenchmarkResult>
 
 ---
 
-### `/decisions` - Decision-Management
+### `/decisions` - Decision-Management (TASK-030)
 
 **Features:**
-- Pending Decisions Liste
-- Vote-Status Anzeige
-- Human-Decision Submit
-- Decision-History
+- 3-Tab Layout: Eskaliert, Ausstehend, History
+- Eskaliert-Tab: Decisions die Human-Intervention erfordern
+- VotingDialog: Approve/Reject mit Begründung
+- Vote-Status Anzeige (CEO, DAO)
+- Roter Badge für eskalierte Decisions
+- Success-Snackbar nach Abstimmung
 
-**Status:** ✅ Vollständig implementiert
+**Komponenten:**
+- `decisions/page.tsx` - Hauptseite mit Tabs
+- `VotingDialog.tsx` - Modal für Human-Decision
+
+**API-Integration:**
+```typescript
+submitHumanDecision(id, 'approve' | 'reject', reason?)
+```
+
+**Status:** ✅ Vollständig implementiert (2025-12-21)
 
 ---
 
