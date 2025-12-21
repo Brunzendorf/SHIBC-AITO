@@ -679,9 +679,99 @@ export function useWebSocket() {
 
 ---
 
-## 9. Testing
+## 9. Refactoring
+
+### 🟡 MITTEL
+
+#### TASK-037: Initiative.ts Modularisierung
+**Status:** 🔧 IMPROVEMENT
+**Aufwand:** 8h
+**Datei:** `src/agents/initiative.ts` (1474 Zeilen)
+
+**Problem:** Zu große Datei mit zu vielen Verantwortlichkeiten:
+- GitHub API Wrappers + Circuit Breakers
+- Initiative Types & Interfaces
+- Scoring & Deduplication
+- Context Building (RAG, Data)
+- Initiative Generation
+- Issue Lifecycle Management
+- Backlog Caching
+
+**Lösung:** Aufteilung in Module:
+```
+src/agents/initiative/
+├── index.ts          # Main exports, runInitiativePhase
+├── types.ts          # Interfaces (Initiative, FocusSettings, etc.)
+├── github.ts         # GitHub API + circuit breakers
+├── scoring.ts        # Initiative scoring, similarity, dedup
+├── context.ts        # Context building (RAG scan, team status)
+├── generation.ts     # Prompt building, proposal parsing
+└── issues.ts         # Issue lifecycle (create/claim/complete)
+```
+
+**Phasen:**
+1. [ ] PLANEN: Module-Grenzen definieren, exports identifizieren
+2. [ ] ANALYSIEREN: Abhängigkeiten zwischen Funktionen prüfen
+3. [ ] IMPLEMENTIEREN: Schrittweise in Module aufteilen
+4. [ ] TESTEN: Bestehende Tests anpassen, neue Tests hinzufügen
+5. [ ] DOKU UPDATEN: FEATURE-REFERENCE.md aktualisieren
+6. [ ] FINALISIEREN: Commit mit TASK-037
+
+---
+
+## 10. Testing
 
 ### 🟠 HOCH
+
+#### TASK-038: Test Coverage für 0% Files
+**Status:** 🔧 IMPROVEMENT
+**Aufwand:** 16h
+**Ziel:** Alle Dateien mit 0% Coverage testen
+
+**Files mit 0% Coverage:**
+- [ ] `src/agents/initiative.ts` - Initiative system (1474 Zeilen)
+- [ ] `src/agents/index.ts` - Agent module entry (106 Zeilen)
+- [ ] `src/lib/image-rag.ts` - Image RAG (408 Zeilen)
+- [ ] `src/lib/tools/image-cache.ts` - Image caching (225 Zeilen)
+- [ ] `src/lib/tools/image-quota.ts` - Image quotas (190 Zeilen)
+- [ ] `src/lib/tools/image-storage.ts` - Image storage (164 Zeilen)
+- [ ] `src/lib/tools/image-tools.ts` - Image tools (447 Zeilen)
+- [ ] `src/lib/tools/imagen-tools.ts` - Imagen API (140 Zeilen)
+- [ ] `src/lib/tools/text-overlay.ts` - Text overlay (314 Zeilen)
+
+**Phasen:**
+1. [ ] ANALYSIEREN: Jedes File verstehen, testbare Funktionen identifizieren
+2. [ ] IMPLEMENTIEREN: Test-Files erstellen mit Mocks
+3. [ ] TESTEN: Tests ausführen, Coverage prüfen
+4. [ ] FINALISIEREN: Commit pro File-Gruppe
+
+**Aktueller Stand:**
+- Coverage: 46.53% Lines (Ziel: 60%+)
+- 699 Tests passing, 45 skipped
+
+---
+
+#### TASK-039: Low Coverage Files verbessern
+**Status:** 🔧 IMPROVEMENT
+**Aufwand:** 12h
+**Ziel:** Files mit <50% Coverage verbessern
+
+**Files mit niedriger Coverage:**
+- [ ] `src/agents/daemon.ts` - 24.52% (Hauptloop, message handling)
+- [ ] `src/lib/llm/gemini.ts` - 25% (Gemini provider)
+- [ ] `src/lib/llm/openai.ts` - 25.44% (OpenAI provider)
+- [ ] `src/lib/data-fetcher.ts` - 39.42% (External data fetching)
+- [ ] `src/lib/db.ts` - 49.72% (Database repositories)
+
+**Phasen:**
+1. [ ] ANALYSIEREN: Untested paths identifizieren
+2. [ ] IMPLEMENTIEREN: Zusätzliche Tests für edge cases
+3. [ ] TESTEN: Coverage auf 60%+ bringen
+4. [ ] FINALISIEREN: Commits mit Coverage-Verbesserung
+
+---
+
+### 🟠 HOCH (Legacy)
 
 #### TASK-036: Test Coverage zu niedrig ✅ DONE
 **Status:** 🔧 IMPROVEMENT → ✅ Vollständig erledigt (2025-12-21)
@@ -724,17 +814,17 @@ export function useWebSocket() {
 | Priorität | Anzahl Tasks | Offen | Geschätzter Aufwand |
 |-----------|--------------|-------|---------------------|
 | 🔴 KRITISCH | 8 | 0 | ~0h |
-| 🟠 HOCH | 14 | 1 | ~8h |
-| 🟡 MITTEL | 10 | 1 | ~4h |
+| 🟠 HOCH | 16 | 3 | ~36h |
+| 🟡 MITTEL | 11 | 2 | ~12h |
 | 🟢 NIEDRIG | 4 | 4 | ~12h |
-| **GESAMT** | **36** | **6 offen** | **~24h** |
+| **GESAMT** | **39** | **9 offen** | **~60h** |
 
 > **Update 2025-12-21:**
-> - **Sprint 8 komplett!** Alle Tests bestehen (100%)
-> - TASK-036 Rest: 19 Test-Issues komplett behoben
-> - Coverage: Lines 39.87%, Branches 78.83%
+> - **Sprint 11 komplett!** 699 Tests bestehen, 45 skipped
+> - Coverage: 46.53% Lines (+6.5% seit Sprint 8)
+> - Neue Tasks: TASK-037 (Refactoring), TASK-038/039 (Coverage)
 >
-> **Gesamt:** 31 von 36 Tasks erledigt (86%)
+> **Gesamt:** 31 von 39 Tasks erledigt (79%)
 
 ### Nach Kategorie
 
