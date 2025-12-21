@@ -197,3 +197,33 @@ export {
   createRunner,
   runner,
 } from './runner.js';
+
+// =============================================================================
+// PROVIDERS
+// =============================================================================
+
+export {
+  // Base
+  AGENT_FOCUS_CONFIGS,
+  BOOTSTRAP_INITIATIVES,
+  getBootstrapInitiatives,
+  DEFAULT_CONTEXT_SOURCES,
+  createBaseProvider,
+
+  // Individual providers
+  ceoProvider,
+  cmoProvider,
+  ctoProvider,
+  cfoProvider,
+  cooProvider,
+  ccoProvider,
+  daoProvider,
+
+  // Collections
+  allProviders,
+  providersByType,
+
+  // Registration helpers
+  registerAllProviders,
+  registerProvider,
+} from './providers/index.js';
