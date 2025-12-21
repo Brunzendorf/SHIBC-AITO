@@ -160,3 +160,29 @@ export {
   type BacklogData,
   type CachedContextData,
 } from './github/index.js';
+
+// =============================================================================
+// CONTEXT
+// =============================================================================
+
+export {
+  // Builder
+  getFocusSettings,
+  setFocusSettings,
+  getBuiltInSource,
+  buildContext,
+  formatContextAsPrompt,
+  buildInitiativePrompt,
+  type ContextBuilderOptions,
+
+  // Sources
+  RAGContextSource,
+  createRAGSource,
+  getScanTopics,
+  TeamStatusContextSource,
+  createTeamStatusSource,
+  MarketDataContextSource,
+  createMarketDataSource,
+  GitHubContextSource,
+  createGitHubSource,
+} from './context/index.js';
