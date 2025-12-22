@@ -100,6 +100,101 @@ export const updateSettingSchema = z.object({
   description: z.string().max(500).optional(),
 });
 
+// === Project Planning Schemas ===
+
+export const projectStatusSchema = z.enum(['planning', 'active', 'paused', 'completed', 'cancelled']);
+export const projectPrioritySchema = z.enum(['critical', 'high', 'medium', 'low']);
+export const taskStatusSchema = z.enum(['todo', 'in_progress', 'review', 'done', 'blocked']);
+export const storyPointsSchema = z.coerce.number().refine(v => [1, 2, 3, 5, 8].includes(v), {
+  message: 'Story points must be 1, 2, 3, 5, or 8 (Fibonacci)',
+});
+
+export const createProjectSchema = z.object({
+  title: z.string().min(1).max(255),
+  description: z.string().max(5000).optional(),
+  status: projectStatusSchema.optional().default('planning'),
+  priority: projectPrioritySchema.optional().default('medium'),
+  owner: agentTypeSchema,
+  collaborators: z.array(agentTypeSchema).optional().default([]),
+  tokenBudget: z.coerce.number().int().min(0).optional().default(0),
+  budgetPriority: z.coerce.number().int().min(1).max(10).optional().default(5),
+  githubIssueUrl: z.string().url().optional(),
+  githubIssueNumber: z.coerce.number().int().optional(),
+  tags: z.array(z.string().max(50)).optional().default([]),
+});
+
+export const updateProjectSchema = z.object({
+  title: z.string().min(1).max(255).optional(),
+  description: z.string().max(5000).optional(),
+  status: projectStatusSchema.optional(),
+  priority: projectPrioritySchema.optional(),
+  owner: agentTypeSchema.optional(),
+  collaborators: z.array(agentTypeSchema).optional(),
+  progress: z.coerce.number().int().min(0).max(100).optional(),
+  tokenBudget: z.coerce.number().int().min(0).optional(),
+  tokensUsed: z.coerce.number().int().min(0).optional(),
+  budgetPriority: z.coerce.number().int().min(1).max(10).optional(),
+  githubIssueUrl: z.string().url().optional(),
+  githubIssueNumber: z.coerce.number().int().optional(),
+  tags: z.array(z.string().max(50)).optional(),
+});
+
+export const createProjectTaskSchema = z.object({
+  projectId: z.string().uuid(),
+  phaseId: z.string().uuid().optional(),
+  title: z.string().min(1).max(255),
+  description: z.string().max(5000).optional(),
+  assignee: agentTypeSchema.optional(),
+  status: taskStatusSchema.optional().default('todo'),
+  storyPoints: storyPointsSchema.optional().default(2),
+  dependencies: z.array(z.string().uuid()).optional().default([]),
+  githubIssueNumber: z.coerce.number().int().optional(),
+  githubIssueUrl: z.string().url().optional(),
+});
+
+export const updateProjectTaskSchema = z.object({
+  title: z.string().min(1).max(255).optional(),
+  description: z.string().max(5000).optional(),
+  assignee: agentTypeSchema.optional(),
+  status: taskStatusSchema.optional(),
+  storyPoints: storyPointsSchema.optional(),
+  dependencies: z.array(z.string().uuid()).optional(),
+  tokensUsed: z.coerce.number().int().min(0).optional(),
+});
+
+export const eventTypeSchema = z.enum(['post', 'ama', 'release', 'milestone', 'meeting', 'deadline', 'other']);
+export const platformSchema = z.enum(['twitter', 'telegram', 'discord', 'website']).optional();
+export const eventStatusSchema = z.enum(['scheduled', 'published', 'cancelled', 'failed']);
+
+export const createScheduledEventSchema = z.object({
+  projectId: z.string().uuid().optional(),
+  title: z.string().min(1).max(255),
+  description: z.string().max(5000).optional(),
+  eventType: eventTypeSchema,
+  scheduledAt: z.string().datetime(),
+  durationMinutes: z.coerce.number().int().min(0).optional(),
+  isAllDay: z.boolean().optional().default(false),
+  recurrenceRule: z.object({
+    frequency: z.enum(['daily', 'weekly', 'monthly']),
+    interval: z.coerce.number().int().min(1).optional().default(1),
+    daysOfWeek: z.array(z.coerce.number().int().min(0).max(6)).optional(),
+    until: z.string().datetime().optional(),
+  }).optional(),
+  agent: agentTypeSchema,
+  platform: platformSchema,
+  content: z.string().max(10000).optional(),
+  mediaUrls: z.array(z.string().url()).optional().default([]),
+});
+
+export const updateScheduledEventSchema = z.object({
+  title: z.string().min(1).max(255).optional(),
+  description: z.string().max(5000).optional(),
+  scheduledAt: z.string().datetime().optional(),
+  status: eventStatusSchema.optional(),
+  content: z.string().max(10000).optional(),
+  mediaUrls: z.array(z.string().url()).optional(),
+});
+
 // === Benchmark Schemas ===
 
 export const runBenchmarkSchema = z.object({

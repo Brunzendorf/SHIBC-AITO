@@ -40,6 +40,7 @@ export const MCP_SERVERS_BY_AGENT: Record<string, string[]> = {
   cfo: ['etherscan', 'filesystem'],
   coo: ['telegram', 'filesystem'],
   cco: ['filesystem', 'fetch'],
+  test: ['filesystem', 'fetch', 'imagen'],  // Test agent for E2E testing with image generation
 };
 
 /**

@@ -23,6 +23,7 @@ export { cfoProvider } from './cfo.js';
 export { cooProvider } from './coo.js';
 export { ccoProvider } from './cco.js';
 export { daoProvider } from './dao.js';
+export { testProvider } from './test.js';
 
 // All providers
 import { ceoProvider } from './ceo.js';
@@ -32,6 +33,7 @@ import { cfoProvider } from './cfo.js';
 import { cooProvider } from './coo.js';
 import { ccoProvider } from './cco.js';
 import { daoProvider } from './dao.js';
+import { testProvider } from './test.js';
 
 /**
  * All available providers
@@ -44,6 +46,7 @@ export const allProviders: InitiativeProvider[] = [
   cooProvider,
   ccoProvider,
   daoProvider,
+  testProvider,
 ];
 
 /**
@@ -57,6 +60,7 @@ export const providersByType: Record<AgentType, InitiativeProvider> = {
   coo: cooProvider,
   cco: ccoProvider,
   dao: daoProvider,
+  test: testProvider,
 };
 
 /**

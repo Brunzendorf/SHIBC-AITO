@@ -45,6 +45,7 @@ import {
   ViewColumn as KanbanIcon,
   Assessment as BenchmarkIcon,
   Settings as SettingsIcon,
+  Folder as ProjectsIcon,
 } from '@mui/icons-material';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
@@ -90,6 +91,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   const navItems: NavItem[] = [
     { label: 'Overview', href: '/', icon: <DashboardIcon /> },
+    { label: 'Projects', href: '/projects', icon: <ProjectsIcon /> },
     { label: 'Kanban', href: '/kanban', icon: <KanbanIcon /> },
     { label: 'Network', href: '/network', icon: <NetworkIcon /> },
     { label: 'Agents', href: '/agents', icon: <AgentIcon /> },

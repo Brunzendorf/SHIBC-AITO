@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { createLogger } from '../lib/logger.js';
 import { numericConfig } from '../lib/config.js';
-import { agentRepo, eventRepo, taskRepo, decisionRepo, escalationRepo, historyRepo, domainApprovalRepo, domainWhitelistRepo, settingsRepo, stateRepo } from '../lib/db.js';
+import { agentRepo, eventRepo, taskRepo, decisionRepo, escalationRepo, historyRepo, domainApprovalRepo, domainWhitelistRepo, settingsRepo, stateRepo, projectRepo } from '../lib/db.js';
 import { publisher, channels, redis } from '../lib/redis.js';
 import { startAgent, stopAgent, restartAgent, getAgentContainerStatus, listManagedContainers } from './container.js';
 import { getScheduledJobs, pauseJob, resumeJob } from './scheduler.js';
@@ -24,6 +24,12 @@ import {
   focusSettingsSchema,
   addDomainWhitelistSchema,
   runBenchmarkSchema,
+  createProjectSchema,
+  updateProjectSchema,
+  createProjectTaskSchema,
+  updateProjectTaskSchema,
+  createScheduledEventSchema,
+  updateScheduledEventSchema,
 } from './validation.js';
 
 const logger = createLogger('api');
@@ -139,6 +145,28 @@ app.get('/health/full', asyncHandler(async (_req, res) => {
   const health = await getSystemHealth();
   const status = health.status === 'healthy' ? 200 : health.status === 'degraded' ? 200 : 503;
   sendResponse(res, health, status);
+}));
+
+// Session pool status (EXPERIMENTAL feature)
+app.get('/health/sessions', asyncHandler(async (_req, res) => {
+  const enabled = process.env.SESSION_POOL_ENABLED === 'true';
+  if (!enabled) {
+    return sendResponse(res, {
+      enabled: false,
+      message: 'Session pool is disabled. Set SESSION_POOL_ENABLED=true to enable.',
+    });
+  }
+
+  // Note: Session pool runs in agent containers, not orchestrator
+  // This endpoint shows configuration only
+  sendResponse(res, {
+    enabled: true,
+    config: {
+      maxLoops: parseInt(process.env.SESSION_MAX_LOOPS || '50', 10),
+      idleTimeoutMs: parseInt(process.env.SESSION_IDLE_TIMEOUT_MS || '1800000', 10),
+    },
+    description: 'Session pool reduces token usage by ~80% using persistent Claude CLI sessions',
+  });
 }));
 
 // === Agent Endpoints ===
@@ -1014,6 +1042,340 @@ app.post('/backlog/refresh', asyncHandler(async (_req, res) => {
   runBacklogGrooming().catch(err => logger.error({ err }, 'Backlog grooming failed'));
 
   sendResponse(res, { message: 'Backlog grooming started', timestamp: new Date().toISOString() });
+}));
+
+// === Project Planning Endpoints ===
+
+// Get all projects (dashboard view)
+app.get('/projects', asyncHandler(async (req, res) => {
+  const status = req.query.status as string | undefined;
+  const owner = req.query.owner as string | undefined;
+
+  let projects;
+  if (status || owner) {
+    // Filter by status or owner
+    const allProjects = await projectRepo.findAll();
+    projects = allProjects.filter(p => {
+      if (status && p.status !== status) return false;
+      if (owner && p.owner !== owner) return false;
+      return true;
+    });
+  } else {
+    projects = await projectRepo.getDashboardProjects();
+  }
+
+  sendResponse(res, projects);
+}));
+
+// Get project by ID
+app.get('/projects/:id', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const project = await projectRepo.findById(id);
+
+  if (!project) {
+    return sendError(res, 'Project not found', 404);
+  }
+
+  // Also fetch tasks and events for this project
+  const tasks = await projectRepo.findTasksByProject(id);
+  const events = await projectRepo.findEventsByProject(id);
+
+  sendResponse(res, { ...project, tasks, events });
+}));
+
+// Create new project
+app.post('/projects', validate(createProjectSchema), asyncHandler(async (req, res) => {
+  const projectData = req.body;
+
+  const project = await projectRepo.create(projectData);
+
+  // Log event
+  await eventRepo.log({
+    eventType: 'project_created',
+    sourceAgent: undefined,
+    payload: { projectId: project.id, title: project.title, owner: project.owner },
+  });
+
+  // Notify owner agent
+  const ownerAgent = await agentRepo.findByType(projectData.owner);
+  if (ownerAgent) {
+    await publisher.publish(channels.agent(ownerAgent.id), JSON.stringify({
+      type: 'project_assigned',
+      from: 'orchestrator',
+      payload: {
+        projectId: project.id,
+        title: project.title,
+        description: project.description,
+        priority: project.priority,
+      },
+    }));
+  }
+
+  logger.info({ projectId: project.id, title: project.title }, 'Project created');
+  sendResponse(res, project, 201);
+}));
+
+// Update project
+app.patch('/projects/:id', validate(updateProjectSchema), asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const updates = req.body;
+
+  const existing = await projectRepo.findById(id);
+  if (!existing) {
+    return sendError(res, 'Project not found', 404);
+  }
+
+  const project = await projectRepo.update(id, updates);
+
+  // Broadcast status change if relevant
+  if (updates.status && updates.status !== existing.status) {
+    await publisher.publish(channels.broadcast, JSON.stringify({
+      type: 'project_status_changed',
+      from: 'orchestrator',
+      payload: {
+        projectId: id,
+        title: project!.title,
+        oldStatus: existing.status,
+        newStatus: updates.status,
+      },
+    }));
+  }
+
+  logger.info({ projectId: id, updates }, 'Project updated');
+  sendResponse(res, project);
+}));
+
+// Delete project
+app.delete('/projects/:id', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  const existing = await projectRepo.findById(id);
+  if (!existing) {
+    return sendError(res, 'Project not found', 404);
+  }
+
+  await projectRepo.delete(id);
+
+  logger.info({ projectId: id, title: existing.title }, 'Project deleted');
+  sendResponse(res, { id, status: 'deleted' });
+}));
+
+// Get project stats (aggregated view for dashboard)
+app.get('/projects/stats/summary', asyncHandler(async (_req, res) => {
+  const stats = await projectRepo.getProjectStats();
+  sendResponse(res, stats);
+}));
+
+// Get agent workload
+app.get('/projects/stats/workload', asyncHandler(async (_req, res) => {
+  const workload = await projectRepo.getAgentWorkload();
+  sendResponse(res, workload);
+}));
+
+// === Project Tasks Endpoints ===
+
+// Get tasks for a project
+app.get('/projects/:projectId/tasks', asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const tasks = await projectRepo.findTasksByProject(projectId);
+  sendResponse(res, tasks);
+}));
+
+// Get single task
+app.get('/project-tasks/:id', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const task = await projectRepo.findTaskById(id);
+
+  if (!task) {
+    return sendError(res, 'Task not found', 404);
+  }
+
+  // Check if task can be started (all dependencies done)
+  const canStart = await projectRepo.canStartTask(id);
+
+  sendResponse(res, { ...task, canStart });
+}));
+
+// Create project task
+app.post('/project-tasks', validate(createProjectTaskSchema), asyncHandler(async (req, res) => {
+  const taskData = req.body;
+
+  // Verify project exists
+  const project = await projectRepo.findById(taskData.projectId);
+  if (!project) {
+    return sendError(res, 'Project not found', 404);
+  }
+
+  const task = await projectRepo.createTask(taskData);
+
+  // Notify assignee if set
+  if (taskData.assignee) {
+    const assigneeAgent = await agentRepo.findByType(taskData.assignee);
+    if (assigneeAgent) {
+      await publisher.publish(channels.agent(assigneeAgent.id), JSON.stringify({
+        type: 'task_assigned',
+        from: 'orchestrator',
+        payload: {
+          taskId: task.id,
+          projectId: project.id,
+          projectTitle: project.title,
+          title: task.title,
+          description: task.description,
+          storyPoints: task.storyPoints,
+        },
+      }));
+    }
+  }
+
+  logger.info({ taskId: task.id, projectId: taskData.projectId }, 'Project task created');
+  sendResponse(res, task, 201);
+}));
+
+// Update project task
+app.patch('/project-tasks/:id', validate(updateProjectTaskSchema), asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const updates = req.body;
+
+  const existing = await projectRepo.findTaskById(id);
+  if (!existing) {
+    return sendError(res, 'Task not found', 404);
+  }
+
+  // Use updateTaskStatus for status changes, otherwise generic update
+  if (updates.status && updates.status !== existing.status) {
+    await projectRepo.updateTaskStatus(id, updates.status, updates.tokensUsed);
+  }
+
+  // For other updates, we need a generic update (not in current repo, use SQL)
+  // For now, status changes are the main concern
+
+  const task = await projectRepo.findTaskById(id);
+
+  logger.info({ taskId: id, updates }, 'Project task updated');
+  sendResponse(res, task);
+}));
+
+// Get blocked tasks (tasks waiting on dependencies)
+app.get('/project-tasks/blocked/all', asyncHandler(async (_req, res) => {
+  const blockedTasks = await projectRepo.getAllBlockedTasks();
+  sendResponse(res, blockedTasks);
+}));
+
+// === Scheduled Events Endpoints ===
+
+// Get upcoming events (next 14 days by default)
+app.get('/scheduled-events', asyncHandler(async (req, res) => {
+  const days = parseInt(req.query.days as string) || 14;
+  const platform = req.query.platform as string | undefined;
+  const agent = req.query.agent as string | undefined;
+
+  let events = await projectRepo.findUpcomingEvents(days);
+
+  // Filter by platform or agent if specified
+  if (platform) {
+    events = events.filter(e => e.platform === platform);
+  }
+  if (agent) {
+    events = events.filter(e => e.agent === agent);
+  }
+
+  sendResponse(res, events);
+}));
+
+// Get events by date range (for calendar view)
+app.get('/scheduled-events/range', asyncHandler(async (req, res) => {
+  const start = req.query.start as string;
+  const end = req.query.end as string;
+
+  if (!start || !end) {
+    return sendError(res, 'start and end query parameters required', 400);
+  }
+
+  const events = await projectRepo.findEventsByDateRange(new Date(start), new Date(end));
+  sendResponse(res, events);
+}));
+
+// Get events for a project
+app.get('/projects/:projectId/events', asyncHandler(async (req, res) => {
+  const { projectId } = req.params;
+  const events = await projectRepo.findEventsByProject(projectId);
+  sendResponse(res, events);
+}));
+
+// Get single event
+app.get('/scheduled-events/:id', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  // Get from upcoming events (no findById in current repo)
+  const allEvents = await projectRepo.findUpcomingEvents(365);
+  const event = allEvents.find(e => e.id === id);
+
+  if (!event) {
+    return sendError(res, 'Event not found', 404);
+  }
+
+  sendResponse(res, event);
+}));
+
+// Create scheduled event
+app.post('/scheduled-events', validate(createScheduledEventSchema), asyncHandler(async (req, res) => {
+  const eventData = req.body;
+
+  // Verify project exists if specified
+  if (eventData.projectId) {
+    const project = await projectRepo.findById(eventData.projectId);
+    if (!project) {
+      return sendError(res, 'Project not found', 404);
+    }
+  }
+
+  const event = await projectRepo.createEvent({
+    ...eventData,
+    scheduledAt: new Date(eventData.scheduledAt),
+  });
+
+  // Notify responsible agent
+  const agentRecord = await agentRepo.findByType(eventData.agent);
+  if (agentRecord) {
+    await publisher.publish(channels.agent(agentRecord.id), JSON.stringify({
+      type: 'event_scheduled',
+      from: 'orchestrator',
+      payload: {
+        eventId: event.id,
+        title: event.title,
+        eventType: event.eventType,
+        scheduledAt: event.scheduledAt,
+        platform: event.platform,
+      },
+    }));
+  }
+
+  logger.info({ eventId: event.id, type: event.eventType, scheduledAt: event.scheduledAt }, 'Event scheduled');
+  sendResponse(res, event, 201);
+}));
+
+// Update scheduled event
+app.patch('/scheduled-events/:id', validate(updateScheduledEventSchema), asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const updates = req.body;
+
+  // Update status if provided
+  if (updates.status) {
+    await projectRepo.updateEventStatus(id, updates.status, updates.status === 'published' ? { executedAt: new Date() } : undefined);
+  }
+
+  // Get updated event
+  const allEvents = await projectRepo.findUpcomingEvents(365);
+  const event = allEvents.find(e => e.id === id);
+
+  logger.info({ eventId: id, updates }, 'Event updated');
+  sendResponse(res, event);
+}));
+
+// Get due events (for scheduler to execute)
+app.get('/scheduled-events/due/now', asyncHandler(async (_req, res) => {
+  const dueEvents = await projectRepo.findDueEvents();
+  sendResponse(res, dueEvents);
 }));
 
 // === LLM Benchmark Endpoints ===

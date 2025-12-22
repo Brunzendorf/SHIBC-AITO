@@ -83,7 +83,7 @@ ARG INSTALL_CLAUDE_CLI=true
 ARG INSTALL_GEMINI_CLI=true
 ARG INSTALL_CODEX_CLI=false
 
-# Install runtime tools
+# Install runtime tools + fonts for SVG text rendering (imagen branding)
 RUN apt-get update && apt-get install -y \
     procps \
     curl \
@@ -91,7 +91,10 @@ RUN apt-get update && apt-get install -y \
     git \
     jq \
     ca-certificates \
+    fontconfig \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/* \
+    && fc-cache -f -v \
     && ln -sf /usr/bin/dash /bin/sh
 
 # Install CLI tools based on feature flags

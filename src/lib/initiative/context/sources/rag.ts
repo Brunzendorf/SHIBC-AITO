@@ -20,6 +20,7 @@ const AGENT_SCAN_TOPICS: Record<AgentType, string[]> = {
   coo: ['operations', 'partnerships', 'efficiency'],
   cco: ['crypto regulations', 'compliance', 'legal'],
   dao: ['governance', 'voting', 'dao management'],
+  test: ['testing', 'validation', 'integration'],
 };
 
 /**

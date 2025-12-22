@@ -2,6 +2,22 @@
 const { GoogleGenAI, PersonGeneration } = require('@google/genai');
 import * as readline from 'readline';
 import * as fs from 'fs';
+import * as path from 'path';
+import sharp from 'sharp';
+
+// --- SHIBC Brand Constants ---
+const SHIBC_BRAND = {
+  colors: {
+    primary: '#fda92d',      // Orange/Gold
+    dark: '#141A21',         // Dark Background
+    light: '#F7F8F9',        // Light text
+  },
+  social: {
+    telegram: '@shibc_cto',
+    twitter: '@shibc_cto',
+    website: 'shibaclassic.io',
+  },
+};
 
 // --- Rate Limiter Configuration ---
 const RATE_LIMITS = {
@@ -135,8 +151,215 @@ const TOOLS = [
       },
       required: ['modelId', 'prompt']
     }
+  },
+  {
+    name: 'imagen_apply_branding',
+    description: 'Applies SHIBC branding (logo watermark and/or text footer with social handles) to an existing image. Use this AFTER generating an image to add official branding.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        imageBase64: { type: 'string', description: 'The base64-encoded image to apply branding to.' },
+        brandingType: {
+          type: 'string',
+          description: "Type of branding to apply. Options: 'logo-watermark' (logo only), 'text-footer' (social handles only), 'logo-and-text' (both), 'none' (no branding).",
+          enum: ['logo-watermark', 'text-footer', 'logo-and-text', 'none']
+        },
+        logoPosition: {
+          type: 'string',
+          description: "Position for logo watermark. Options: 'top-left', 'top-right', 'bottom-left', 'bottom-right', 'center'. Default: 'bottom-right'.",
+          enum: ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'center']
+        },
+        logoOpacity: { type: 'number', description: 'Opacity for logo watermark (0.0-1.0). Default: 0.85.' },
+        customHandles: {
+          type: 'object',
+          description: 'Optional custom social handles. Default uses @shibc_cto.',
+          properties: {
+            telegram: { type: 'string' },
+            twitter: { type: 'string' }
+          }
+        }
+      },
+      required: ['imageBase64', 'brandingType']
+    }
   }
 ];
+
+// --- Branding Functions ---
+
+async function addTextFooter(imageBuffer: Buffer, handles?: { telegram?: string; twitter?: string }): Promise<Buffer> {
+  const metadata = await sharp(imageBuffer).metadata();
+  if (!metadata.width || !metadata.height) {
+    throw new Error('Could not determine image dimensions');
+  }
+
+  const tg = handles?.telegram || SHIBC_BRAND.social.telegram;
+  const tw = handles?.twitter || SHIBC_BRAND.social.twitter;
+
+  // Smart text: If handles are the same, show handle + website
+  // Otherwise show both X (Twitter) and TG (Telegram) handles
+  const text = (tg === tw)
+    ? `𝕏 ${tw}  •  ${SHIBC_BRAND.social.website}`
+    : `𝕏 ${tw}  •  TG ${tg}`;
+
+  // Increased font size for better visibility (was 1.8%, now 3.5%)
+  const fontSize = Math.max(18, Math.floor(metadata.width * 0.035));
+  const padding = Math.floor(fontSize * 1.0);
+  const footerHeight = fontSize + padding * 2;
+
+  // Escape text for XML/SVG safety
+  const escapedText = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+
+  const textSvg = `
+    <svg width="${metadata.width}" height="${footerHeight}" xmlns="http://www.w3.org/2000/svg">
+      <rect width="100%" height="100%" fill="${SHIBC_BRAND.colors.dark}" fill-opacity="0.9"/>
+      <text
+        x="50%"
+        y="55%"
+        text-anchor="middle"
+        dominant-baseline="middle"
+        font-family="sans-serif"
+        font-size="${fontSize}px"
+        font-weight="600"
+        fill="${SHIBC_BRAND.colors.light}"
+      >${escapedText}</text>
+    </svg>
+  `;
+
+  return sharp(imageBuffer)
+    .composite([{
+      input: Buffer.from(textSvg),
+      top: metadata.height - footerHeight,
+      left: 0,
+    }])
+    .toBuffer();
+}
+
+async function addLogoWatermark(
+  imageBuffer: Buffer,
+  position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center' = 'bottom-right',
+  opacity: number = 0.85
+): Promise<Buffer> {
+  const metadata = await sharp(imageBuffer).metadata();
+  if (!metadata.width || !metadata.height) {
+    throw new Error('Could not determine image dimensions');
+  }
+
+  // Look for logo in workspace
+  const workspaceDir = process.env.WORKSPACE_DIR || '/app/workspace';
+  const logoPaths = [
+    path.join(workspaceDir, 'assets', 'brand', 'SHIBC-logo.png'),
+    path.join(workspaceDir, 'SHIBC-logo.png'),
+    '/app/workspace/assets/brand/SHIBC-logo.png',
+  ];
+
+  let logoPath: string | null = null;
+  for (const p of logoPaths) {
+    if (fs.existsSync(p)) {
+      logoPath = p;
+      break;
+    }
+  }
+
+  if (!logoPath) {
+    // Create a simple text-based logo as fallback
+    const logoSize = Math.floor(metadata.width * 0.12);
+    const logoSvg = `
+      <svg width="${logoSize}" height="${logoSize}">
+        <rect width="100%" height="100%" fill="${SHIBC_BRAND.colors.primary}" rx="10"/>
+        <text
+          x="50%"
+          y="55%"
+          text-anchor="middle"
+          dominant-baseline="middle"
+          font-family="Arial, sans-serif"
+          font-size="${Math.floor(logoSize * 0.35)}"
+          font-weight="bold"
+          fill="${SHIBC_BRAND.colors.dark}"
+        >SHIBC</text>
+      </svg>
+    `;
+
+    const logoBuffer = await sharp(Buffer.from(logoSvg))
+      .png()
+      .toBuffer();
+
+    const logoMeta = await sharp(logoBuffer).metadata();
+    const logoWidth = logoMeta.width || logoSize;
+    const logoHeight = logoMeta.height || logoSize;
+    const padding = 20;
+
+    let left = 0, top = 0;
+    switch (position) {
+      case 'top-left': left = padding; top = padding; break;
+      case 'top-right': left = metadata.width - logoWidth - padding; top = padding; break;
+      case 'bottom-left': left = padding; top = metadata.height - logoHeight - padding; break;
+      case 'bottom-right': left = metadata.width - logoWidth - padding; top = metadata.height - logoHeight - padding; break;
+      case 'center': left = Math.floor((metadata.width - logoWidth) / 2); top = Math.floor((metadata.height - logoHeight) / 2); break;
+    }
+
+    return sharp(imageBuffer)
+      .composite([{ input: logoBuffer, left, top }])
+      .toBuffer();
+  }
+
+  // Use actual logo file
+  const logoWidth = Math.floor(metadata.width * 0.15);
+  const logo = await sharp(logoPath)
+    .resize(logoWidth, null, { fit: 'inside', withoutEnlargement: true })
+    .toBuffer();
+
+  const logoMeta = await sharp(logo).metadata();
+  const logoHeight = logoMeta.height || 0;
+  const padding = 20;
+
+  let left = 0, top = 0;
+  switch (position) {
+    case 'top-left': left = padding; top = padding; break;
+    case 'top-right': left = metadata.width - logoWidth - padding; top = padding; break;
+    case 'bottom-left': left = padding; top = metadata.height - logoHeight - padding; break;
+    case 'bottom-right': left = metadata.width - logoWidth - padding; top = metadata.height - logoHeight - padding; break;
+    case 'center': left = Math.floor((metadata.width - logoWidth) / 2); top = Math.floor((metadata.height - logoHeight) / 2); break;
+  }
+
+  return sharp(imageBuffer)
+    .composite([{ input: logo, left, top }])
+    .toBuffer();
+}
+
+async function applyBranding(
+  imageBase64: string,
+  brandingType: 'logo-watermark' | 'text-footer' | 'logo-and-text' | 'none',
+  options?: {
+    logoPosition?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center';
+    logoOpacity?: number;
+    customHandles?: { telegram?: string; twitter?: string };
+  }
+): Promise<string> {
+  if (brandingType === 'none') {
+    return imageBase64;
+  }
+
+  let buffer: Buffer = Buffer.from(imageBase64, 'base64');
+
+  switch (brandingType) {
+    case 'logo-watermark':
+      buffer = Buffer.from(await addLogoWatermark(buffer, options?.logoPosition || 'bottom-right', options?.logoOpacity || 0.85));
+      break;
+    case 'text-footer':
+      buffer = Buffer.from(await addTextFooter(buffer, options?.customHandles));
+      break;
+    case 'logo-and-text':
+      buffer = Buffer.from(await addLogoWatermark(buffer, options?.logoPosition || 'top-right', options?.logoOpacity || 0.85));
+      buffer = Buffer.from(await addTextFooter(buffer, options?.customHandles));
+      break;
+  }
+
+  return buffer.toString('base64');
+}
 
 // --- Utility Functions ---
 
@@ -161,22 +384,40 @@ function sendError(id: number, message: string) {
   process.stdout.write(JSON.stringify(response) + '\n');
 }
 
+// --- Logging Helper (logs to stderr, not stdout) ---
+function log(level: 'info' | 'warn' | 'error' | 'debug', message: string, data?: any) {
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    component: 'imagen-mcp',
+    msg: message,
+    ...data
+  };
+  console.error(JSON.stringify(entry));
+}
+
 // --- Tool Implementation ---
 
 async function handleToolCall(request: JsonRpcRequest) {
   const { name, arguments: args } = request.params;
-  
+  const startTime = Date.now();
+
+  log('info', `Tool called: ${name}`, { tool: name, argsKeys: args ? Object.keys(args) : [] });
+
   try {
     switch (name) {
       case 'imagen_list_models':
+        log('debug', 'Returning model catalog');
         sendResponse(request.id, { content: [{ type: 'text', text: JSON.stringify(MODEL_CATALOG, null, 2) }] });
         break;
 
       case 'imagen_get_prompt_guide':
+        log('debug', 'Returning prompt guide');
         sendResponse(request.id, { content: [{ type: 'text', text: JSON.stringify(PROMPT_GUIDE, null, 2) }] });
         break;
 
       case 'imagen_check_quota':
+        log('debug', 'Checking quota');
         const hourlyUsage = getUsageInWindow(60 * 60 * 1000);
         const dailyUsage = getUsageInWindow(24 * 60 * 60 * 1000);
         sendResponse(request.id, {
@@ -197,22 +438,28 @@ async function handleToolCall(request: JsonRpcRequest) {
       case 'imagen_generate_image':
         const { modelId, prompt, negativePrompt, ...configArgs } = args;
 
+        log('info', 'Starting image generation', { modelId, promptLen: prompt?.length });
+
         // Check rate limits FIRST
         const rateLimitCheck = checkRateLimit(modelId);
         if (!rateLimitCheck.allowed) {
+          log('warn', 'Rate limit exceeded', { reason: rateLimitCheck.reason });
           throw new Error(`Image generation blocked: ${rateLimitCheck.reason}`);
         }
 
         const modelInfo = MODEL_CATALOG.find(m => m.model_id === modelId);
         if (!modelInfo) {
+          log('error', 'Model not found', { modelId });
           throw new Error(`Model with id '${modelId}' not found in catalog.`);
         }
-        
+
         const apiKey = process.env.GEMINI_API_KEY;
         if (!apiKey) {
+            log('error', 'Missing GEMINI_API_KEY');
             throw new Error("GEMINI_API_KEY environment variable is not set.");
         }
 
+        log('debug', 'Calling Google GenAI API', { model: modelInfo.technical_id });
         const ai = new GoogleGenAI({ apiKey });
 
         // Dynamically build the config object from provided arguments
@@ -233,13 +480,16 @@ async function handleToolCall(request: JsonRpcRequest) {
         }
 
 
+        const genStart = Date.now();
         const response = await ai.models.generateImages({
             model: modelInfo.technical_id,
             prompt: prompt,
             negativePrompt: negativePrompt,
             config: config,
           });
-        
+
+        log('info', 'API response received', { durationMs: Date.now() - genStart, hasImages: !!response?.generatedImages });
+
         if (!response?.generatedImages) {
             throw new Error('API did not return any generated images.');
         }
@@ -249,6 +499,8 @@ async function handleToolCall(request: JsonRpcRequest) {
         // Record successful usage for rate limiting
         const imageCount = imagesBase64.length || 1;
         recordUsage(modelId, modelInfo.price_per_image * imageCount);
+
+        log('info', 'Image generation completed', { imageCount, cost: modelInfo.price_per_image * imageCount, totalDurationMs: Date.now() - startTime });
 
         sendResponse(request.id, {
             content: [{ type: 'text', text: JSON.stringify({
@@ -264,15 +516,51 @@ async function handleToolCall(request: JsonRpcRequest) {
         });
         break;
 
+      case 'imagen_apply_branding':
+        const { imageBase64, brandingType, logoPosition, logoOpacity, customHandles } = args;
+
+        log('info', 'Applying branding', { brandingType, logoPosition, hasImage: !!imageBase64 });
+
+        if (!imageBase64) {
+          throw new Error('imageBase64 is required');
+        }
+        if (!brandingType || !['logo-watermark', 'text-footer', 'logo-and-text', 'none'].includes(brandingType)) {
+          throw new Error("Invalid brandingType. Must be one of: 'logo-watermark', 'text-footer', 'logo-and-text', 'none'");
+        }
+
+        const brandStart = Date.now();
+        const brandedImage = await applyBranding(imageBase64, brandingType, {
+          logoPosition: logoPosition || 'bottom-right',
+          logoOpacity: logoOpacity || 0.85,
+          customHandles: customHandles,
+        });
+
+        log('info', 'Branding applied', { brandingType, durationMs: Date.now() - brandStart });
+
+        sendResponse(request.id, {
+          content: [{ type: 'text', text: JSON.stringify({
+            message: `Branding applied successfully: ${brandingType}`,
+            branding_type: brandingType,
+            logo_position: logoPosition || 'bottom-right',
+            image_base64: brandedImage,
+          })}]
+        });
+        break;
+
       default:
         throw new Error(`Tool '${name}' not found.`);
     }
+
+    log('debug', `Tool completed: ${name}`, { durationMs: Date.now() - startTime });
   } catch (error: any) {
+    log('error', `Tool failed: ${name}`, { error: error.message, durationMs: Date.now() - startTime });
     sendError(request.id, `Tool call failed: ${error.message}`);
   }
 }
 
 // --- Main Server Logic ---
+
+log('info', 'Imagen MCP Server starting', { rateLimits: RATE_LIMITS });
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -283,15 +571,19 @@ const rl = readline.createInterface({
 rl.on('line', async (line) => {
   try {
     const request: JsonRpcRequest = JSON.parse(line);
-    
+
     if ('result' in request || 'error' in request) return;
+
+    log('debug', `Received request: ${request.method}`, { id: request.id });
 
     switch (request.method) {
       case 'initialize':
+        log('info', 'MCP Initialize called');
         sendResponse(request.id, { capabilities: {} });
         break;
-      
+
       case 'tools/list':
+        log('debug', 'Returning tools list');
         sendResponse(request.id, { tools: TOOLS });
         break;
         

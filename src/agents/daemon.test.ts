@@ -1098,6 +1098,11 @@ describe('AgentDaemon', () => {
         loopCount: 0,
         lastLoopAt: null,
         claudeAvailable: false,
+        sessionPool: {
+          enabled: false,
+          totalSessions: undefined,
+          sessionState: undefined,
+        },
       });
     });
 

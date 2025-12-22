@@ -16,7 +16,7 @@
 /**
  * Agent types in the AITO system
  */
-export type AgentType = 'ceo' | 'cmo' | 'cto' | 'cfo' | 'coo' | 'cco' | 'dao';
+export type AgentType = 'ceo' | 'cmo' | 'cto' | 'cfo' | 'coo' | 'cco' | 'dao' | 'test';
 
 /**
  * Priority levels for initiatives

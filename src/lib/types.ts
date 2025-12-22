@@ -1,5 +1,5 @@
 // Agent Types
-export type AgentType = 'ceo' | 'dao' | 'cmo' | 'cto' | 'cfo' | 'coo' | 'cco';
+export type AgentType = 'ceo' | 'dao' | 'cmo' | 'cto' | 'cfo' | 'coo' | 'cco' | 'test';
 export type AgentStatus = 'inactive' | 'starting' | 'active' | 'stopping' | 'error';
 export type AgentTier = 'head' | 'clevel' | 'worker';
 
@@ -142,7 +142,12 @@ export type EventType =
   | 'pr_merged'
   | 'pr_rejected'
   | 'issue_claimed'
-  | 'issue_completed';
+  | 'issue_completed'
+  | 'project_created'
+  | 'project_status_changed'
+  | 'project_assigned'
+  | 'task_assigned'
+  | 'event_scheduled';
 
 export interface Event {
   id: string;

@@ -176,6 +176,11 @@ export const agentConfigs = {
     tier: 'clevel' as const,
     gitFilter: 'legal/*',
   },
+  test: {
+    name: 'Test Agent',
+    loopInterval: 60, // 1 minute - for testing
+    tier: 'clevel' as const,
+  },
 };
 
 // LLM Router configuration

@@ -686,6 +686,303 @@ export async function getLLMConfig() {
   }>('/settings/llm/config');
 }
 
+// ============================================================
+// PROJECT PLANNING TYPES & API
+// ============================================================
+
+export type ProjectStatus = 'planning' | 'active' | 'paused' | 'completed' | 'cancelled';
+export type ProjectPriority = 'critical' | 'high' | 'medium' | 'low';
+export type TaskStatus = 'todo' | 'in_progress' | 'review' | 'done' | 'blocked';
+export type EventType = 'post' | 'ama' | 'release' | 'milestone' | 'meeting' | 'deadline' | 'other';
+export type Platform = 'twitter' | 'telegram' | 'discord' | 'website' | null;
+export type EventStatus = 'scheduled' | 'published' | 'cancelled' | 'failed';
+
+// Story Points mapping (Fibonacci-like complexity)
+export const STORY_POINTS = {
+  XS: 1,
+  S: 2,
+  M: 3,
+  L: 5,
+  XL: 8,
+} as const;
+
+// Token estimates per story point
+export const STORY_POINT_TOKENS: Record<number, number> = {
+  1: 2000,   // XS
+  2: 5000,   // S
+  3: 15000,  // M
+  5: 40000,  // L
+  8: 100000, // XL
+};
+
+export interface Project {
+  id: string;
+  title: string;
+  description?: string;
+  status: ProjectStatus;
+  priority: ProjectPriority;
+  owner: string;
+  collaborators: string[];
+  progress: number;
+  totalStoryPoints: number;
+  completedStoryPoints: number;
+  tokenBudget: number;
+  tokensUsed: number;
+  budgetPriority: number;
+  githubIssueUrl?: string;
+  githubIssueNumber?: number;
+  initiativeId?: string;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  // Optional aggregations from dashboard view
+  totalTasks?: number;
+  completedTasks?: number;
+  blockedTasks?: number;
+  upcomingEvents?: number;
+  tokenUsagePercent?: number;
+}
+
+export interface ProjectWithDetails extends Project {
+  tasks: ProjectTask[];
+  events: ScheduledEvent[];
+}
+
+export interface ProjectTask {
+  id: string;
+  projectId: string;
+  phaseId?: string;
+  title: string;
+  description?: string;
+  assignee?: string;
+  status: TaskStatus;
+  storyPoints: number;
+  tokenEstimate: number;
+  tokensUsed: number;
+  completedAt?: string;
+  dependencies: string[];
+  githubIssueNumber?: number;
+  githubIssueUrl?: string;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+  // Extended info
+  canStart?: boolean;
+}
+
+export interface ScheduledEvent {
+  id: string;
+  projectId?: string;
+  title: string;
+  description?: string;
+  eventType: EventType;
+  scheduledAt: string;
+  durationMinutes?: number;
+  isAllDay: boolean;
+  recurrenceRule?: {
+    frequency: 'daily' | 'weekly' | 'monthly';
+    interval: number;
+    daysOfWeek?: number[];
+    until?: string;
+  };
+  agent: string;
+  platform?: Platform;
+  status: EventStatus;
+  content?: string;
+  mediaUrls: string[];
+  executedAt?: string;
+  executionResult?: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  // Optional join data
+  projectTitle?: string;
+  projectStatus?: string;
+}
+
+export interface ProjectStats {
+  totalProjects: number;
+  activeProjects: number;
+  completedProjects: number;
+  totalTasks: number;
+  completedTasks: number;
+  totalStoryPoints: number;
+  completedStoryPoints: number;
+  totalTokenBudget: number;
+  tokensUsed: number;
+  byPriority: Record<ProjectPriority, number>;
+  byOwner: Record<string, number>;
+}
+
+export interface AgentWorkload {
+  agent: string;
+  totalTasks: number;
+  inProgress: number;
+  pending: number;
+  blocked: number;
+  projectIds: string[];
+  projectTitles: string[];
+}
+
+// Project API functions
+export async function getProjects(status?: ProjectStatus, owner?: string) {
+  const params = new URLSearchParams();
+  if (status) params.append('status', status);
+  if (owner) params.append('owner', owner);
+  const query = params.toString() ? `?${params}` : '';
+  return fetchApi<Project[]>(`/projects${query}`);
+}
+
+export async function getProject(id: string) {
+  return fetchApi<ProjectWithDetails>(`/projects/${id}`);
+}
+
+export async function createProject(project: {
+  title: string;
+  description?: string;
+  status?: ProjectStatus;
+  priority?: ProjectPriority;
+  owner: string;
+  collaborators?: string[];
+  tokenBudget?: number;
+  budgetPriority?: number;
+  githubIssueUrl?: string;
+  githubIssueNumber?: number;
+  tags?: string[];
+}) {
+  return fetchApi<Project>('/projects', {
+    method: 'POST',
+    body: JSON.stringify(project),
+  });
+}
+
+export async function updateProject(id: string, updates: Partial<Omit<Project, 'id' | 'createdAt' | 'updatedAt' | 'createdBy'>>) {
+  return fetchApi<Project>(`/projects/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function deleteProject(id: string) {
+  return fetchApi<{ id: string; status: string }>(`/projects/${id}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function getProjectStats() {
+  return fetchApi<ProjectStats>('/projects/stats/summary');
+}
+
+export async function getAgentWorkload() {
+  return fetchApi<AgentWorkload[]>('/projects/stats/workload');
+}
+
+// Project Tasks API
+export async function getProjectTasks(projectId: string) {
+  return fetchApi<ProjectTask[]>(`/projects/${projectId}/tasks`);
+}
+
+export async function getProjectTask(id: string) {
+  return fetchApi<ProjectTask & { canStart: boolean }>(`/project-tasks/${id}`);
+}
+
+export async function createProjectTask(task: {
+  projectId: string;
+  phaseId?: string;
+  title: string;
+  description?: string;
+  assignee?: string;
+  status?: TaskStatus;
+  storyPoints?: number;
+  dependencies?: string[];
+  githubIssueNumber?: number;
+  githubIssueUrl?: string;
+}) {
+  return fetchApi<ProjectTask>('/project-tasks', {
+    method: 'POST',
+    body: JSON.stringify(task),
+  });
+}
+
+export async function updateProjectTask(id: string, updates: {
+  title?: string;
+  description?: string;
+  assignee?: string;
+  status?: TaskStatus;
+  storyPoints?: number;
+  dependencies?: string[];
+  tokensUsed?: number;
+}) {
+  return fetchApi<ProjectTask>(`/project-tasks/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function getBlockedTasks() {
+  return fetchApi<ProjectTask[]>('/project-tasks/blocked/all');
+}
+
+// Scheduled Events API
+export async function getScheduledEvents(days = 14, platform?: string, agent?: string) {
+  const params = new URLSearchParams({ days: String(days) });
+  if (platform) params.append('platform', platform);
+  if (agent) params.append('agent', agent);
+  return fetchApi<ScheduledEvent[]>(`/scheduled-events?${params}`);
+}
+
+export async function getScheduledEventsByRange(start: string, end: string) {
+  const params = new URLSearchParams({ start, end });
+  return fetchApi<ScheduledEvent[]>(`/scheduled-events/range?${params}`);
+}
+
+export async function getProjectEvents(projectId: string) {
+  return fetchApi<ScheduledEvent[]>(`/projects/${projectId}/events`);
+}
+
+export async function getScheduledEvent(id: string) {
+  return fetchApi<ScheduledEvent>(`/scheduled-events/${id}`);
+}
+
+export async function createScheduledEvent(event: {
+  projectId?: string;
+  title: string;
+  description?: string;
+  eventType: EventType;
+  scheduledAt: string;
+  durationMinutes?: number;
+  isAllDay?: boolean;
+  recurrenceRule?: ScheduledEvent['recurrenceRule'];
+  agent: string;
+  platform?: Platform;
+  content?: string;
+  mediaUrls?: string[];
+}) {
+  return fetchApi<ScheduledEvent>('/scheduled-events', {
+    method: 'POST',
+    body: JSON.stringify(event),
+  });
+}
+
+export async function updateScheduledEvent(id: string, updates: {
+  title?: string;
+  description?: string;
+  scheduledAt?: string;
+  status?: EventStatus;
+  content?: string;
+  mediaUrls?: string[];
+}) {
+  return fetchApi<ScheduledEvent>(`/scheduled-events/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+}
+
+export async function getDueEvents() {
+  return fetchApi<ScheduledEvent[]>('/scheduled-events/due/now');
+}
+
 // API object wrapper for convenience
 export const api = {
   get: async <T>(endpoint: string) => fetchApi<T>(endpoint),

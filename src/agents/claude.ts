@@ -809,9 +809,25 @@ export async function executeClaudeCodeWithMCP(session: ClaudeSessionWithMCP): P
 
     let stdout = '';
     let stderr = '';
+    let lastLogTime = Date.now();
+    const LOG_INTERVAL = 5000; // Log progress every 5 seconds
 
-    proc.stdout?.on('data', (data) => { stdout += data.toString(); });
-    proc.stderr?.on('data', (data) => { stderr += data.toString(); });
+    proc.stdout?.on('data', (data) => {
+      const chunk = data.toString();
+      stdout += chunk;
+      // Stream log: show first 200 chars of new data
+      const now = Date.now();
+      if (now - lastLogTime > LOG_INTERVAL) {
+        logger.debug({ elapsed: now - startTime, totalLen: stdout.length, chunk: chunk.slice(0, 200) }, 'Claude MCP stdout chunk');
+        lastLogTime = now;
+      }
+    });
+    proc.stderr?.on('data', (data) => {
+      const chunk = data.toString();
+      stderr += chunk;
+      // Always log stderr immediately
+      logger.warn({ elapsed: Date.now() - startTime, stderr: chunk.slice(0, 500) }, 'Claude MCP stderr');
+    });
 
     proc.on('close', (code) => {
       const durationMs = Date.now() - startTime;
@@ -832,6 +848,7 @@ export async function executeClaudeCodeWithMCP(session: ClaudeSessionWithMCP): P
 
     const timeoutId = setTimeout(() => {
       proc.kill('SIGTERM');
+      logger.warn({ elapsed: Date.now() - startTime, stdoutLen: stdout.length }, 'Claude MCP timeout - killing process');
       resolve({ success: false, output: stdout.trim(), error: 'Execution timed out', durationMs: Date.now() - startTime });
     }, timeout);
 

@@ -1,0 +1,270 @@
+# AITO E2E Testing Environment
+# Isolated test infrastructure - no live agents, no orchestrator
+#
+# Usage:
+#   docker compose -f docker-compose.test.yml up -d    # Start test infra
+#   docker compose -f docker-compose.test.yml run test-agent  # Run tests
+#   docker compose -f docker-compose.test.yml down     # Cleanup
+#
+# For Session Pool testing:
+#   docker compose -f docker-compose.test.yml run -e SESSION_POOL_ENABLED=true test-agent
+
+version: '3.8'
+
+services:
+  # ============================================
+  # TEST INFRASTRUCTURE
+  # ============================================
+
+  # PostgreSQL for testing (separate from production)
+  test-postgres:
+    image: pgvector/pgvector:pg15
+    container_name: aito-test-postgres
+    environment:
+      POSTGRES_DB: aito_test
+      POSTGRES_USER: aito_test
+      POSTGRES_PASSWORD: test_password
+    volumes:
+      - ./docker/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5433:5432"  # Different port from production
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aito_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - aito-test-network
+
+  # Redis for testing (separate from production)
+  test-redis:
+    image: redis:7-alpine
+    container_name: aito-test-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6380:6379"  # Different port from production
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - aito-test-network
+
+  # Qdrant for testing (optional, for RAG tests)
+  test-qdrant:
+    image: qdrant/qdrant:latest
+    container_name: aito-test-qdrant
+    ports:
+      - "6335:6333"  # Different port from production
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333 && echo OK'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - aito-test-network
+
+  # Ollama for testing (optional, for LLM tests)
+  test-ollama:
+    image: ollama/ollama:latest
+    container_name: aito-test-ollama
+    ports:
+      - "11435:11434"  # Different port from production
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+    networks:
+      - aito-test-network
+    profiles:
+      - ollama  # Only start when needed
+
+  # ============================================
+  # TEST AGENT
+  # ============================================
+
+  test-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+      args:
+        INSTALL_CLAUDE_CLI: ${INSTALL_CLAUDE_CLI:-true}
+        INSTALL_GEMINI_CLI: ${INSTALL_GEMINI_CLI:-false}
+        INSTALL_CODEX_CLI: false
+    container_name: aito-test-agent
+    environment:
+      # Core config
+      NODE_ENV: test
+      LOG_LEVEL: debug
+      DRY_RUN: ${DRY_RUN:-true}  # Default dry run, can override
+
+      # Agent config
+      AGENT_TYPE: test
+      AGENT_PROFILE: /app/profiles/test.md
+      LOOP_INTERVAL: 60
+
+      # Database (test instance)
+      POSTGRES_URL: postgresql://aito_test:test_password@test-postgres:5432/aito_test
+
+      # Redis (test instance)
+      REDIS_URL: redis://test-redis:6379
+
+      # Vector DB (test instance)
+      QDRANT_URL: http://test-qdrant:6333
+
+      # LLM (test instance)
+      OLLAMA_URL: http://test-ollama:11434
+
+      # Session Pool Testing
+      SESSION_POOL_ENABLED: ${SESSION_POOL_ENABLED:-false}
+      SESSION_MAX_LOOPS: ${SESSION_MAX_LOOPS:-10}
+      SESSION_IDLE_TIMEOUT_MS: ${SESSION_IDLE_TIMEOUT_MS:-60000}
+
+      # Test configuration
+      TEST_MODE: "true"
+      TEST_TASKS_JSON: ${TEST_TASKS_JSON:-}
+      TEST_MAX_LOOPS: ${TEST_MAX_LOOPS:-5}
+      TEST_TIMEOUT_MS: ${TEST_TIMEOUT_MS:-120000}
+
+      # No external integrations for tests
+      GITHUB_TOKEN: ""
+      TELEGRAM_BOT_TOKEN: ""
+      WORKSPACE_SKIP_PR: "true"
+
+      # Image Generation (optional - for Imagen tests)
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
+      # LLM Routing (use claude-only for tests, dry-run prevents actual calls)
+      LLM_ROUTING_STRATEGY: claude-only
+      LLM_ENABLE_FALLBACK: "false"
+
+    volumes:
+      - ./profiles:/app/profiles:ro
+      - test_agent_memory:/app/memory
+      - shared_claude_config:/app/.claude
+      - ./workspace:/app/workspace
+    depends_on:
+      test-postgres:
+        condition: service_healthy
+      test-redis:
+        condition: service_healthy
+    networks:
+      - aito-test-network
+
+  # ============================================
+  # TEST RUNNER (Alternative to test-agent)
+  # ============================================
+
+  # Run unit tests against test infrastructure
+  test-runner:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.orchestrator
+      args:
+        INSTALL_CLAUDE_CLI: "false"
+        INSTALL_GEMINI_CLI: "false"
+        INSTALL_CODEX_CLI: "false"
+    container_name: aito-test-runner
+    entrypoint: ["npm", "test"]
+    environment:
+      NODE_ENV: test
+      POSTGRES_URL: postgresql://aito_test:test_password@test-postgres:5432/aito_test
+      REDIS_URL: redis://test-redis:6379
+      QDRANT_URL: http://test-qdrant:6333
+    depends_on:
+      test-postgres:
+        condition: service_healthy
+      test-redis:
+        condition: service_healthy
+    networks:
+      - aito-test-network
+    profiles:
+      - runner
+
+  # ============================================
+  # SESSION POOL TEST SUITE
+  # ============================================
+
+  # Specific test for Session Pool feature
+  session-pool-test:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+      args:
+        INSTALL_CLAUDE_CLI: "true"
+        INSTALL_GEMINI_CLI: "false"
+        INSTALL_CODEX_CLI: "false"
+    container_name: aito-session-pool-test
+    environment:
+      NODE_ENV: test
+      LOG_LEVEL: debug
+      DRY_RUN: "true"
+      AGENT_TYPE: test
+      AGENT_PROFILE: /app/profiles/test.md
+      LOOP_INTERVAL: 30
+      POSTGRES_URL: postgresql://aito_test:test_password@test-postgres:5432/aito_test
+      REDIS_URL: redis://test-redis:6379
+
+      # Enable Session Pool for this test
+      SESSION_POOL_ENABLED: "true"
+      SESSION_MAX_LOOPS: 5
+      SESSION_IDLE_TIMEOUT_MS: 30000
+
+      # Test configuration
+      TEST_MODE: "true"
+      TEST_MAX_LOOPS: 5
+      TEST_TASKS_JSON: |
+        {
+          "testTasks": [
+            {
+              "id": "sp-1",
+              "name": "Session Start Test",
+              "type": "session",
+              "action": "session_start"
+            },
+            {
+              "id": "sp-2",
+              "name": "Session Loop Test",
+              "type": "session",
+              "action": "session_loop",
+              "loops": 3
+            },
+            {
+              "id": "sp-3",
+              "name": "Session Recycle Test",
+              "type": "session",
+              "action": "session_recycle"
+            }
+          ]
+        }
+    volumes:
+      - ./profiles:/app/profiles:ro
+      - shared_claude_config:/app/.claude
+    depends_on:
+      test-postgres:
+        condition: service_healthy
+      test-redis:
+        condition: service_healthy
+    networks:
+      - aito-test-network
+    profiles:
+      - session-pool
+
+# ============================================
+# NETWORKS
+# ============================================
+
+networks:
+  aito-test-network:
+    driver: bridge
+    name: aito-test-network
+
+# ============================================
+# VOLUMES
+# ============================================
+
+volumes:
+  test_agent_memory:
+  shared_claude_config:
+    external: true  # Use existing Claude auth from main compose

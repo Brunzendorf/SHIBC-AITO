@@ -129,13 +129,13 @@ describe('Config', () => {
       expect(agentConfigs.cco.gitFilter).toBe('legal/*');
     });
 
-    it('should have all 7 agent types', async () => {
+    it('should have all 8 agent types', async () => {
       process.env.POSTGRES_URL = 'postgresql://test:test@localhost:5432/test';
 
       const { agentConfigs } = await import('./config.js');
 
       const agentTypes = Object.keys(agentConfigs);
-      expect(agentTypes).toHaveLength(7);
+      expect(agentTypes).toHaveLength(8);
       expect(agentTypes).toContain('ceo');
       expect(agentTypes).toContain('dao');
       expect(agentTypes).toContain('cmo');
@@ -143,6 +143,7 @@ describe('Config', () => {
       expect(agentTypes).toContain('cfo');
       expect(agentTypes).toContain('coo');
       expect(agentTypes).toContain('cco');
+      expect(agentTypes).toContain('test');
     });
   });
 

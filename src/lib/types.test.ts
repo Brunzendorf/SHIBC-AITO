@@ -125,7 +125,7 @@ describe('Types', () => {
         vetoRound: 2,
         ceoVote: 'approve',
         daoVote: 'veto',
-        cLevelVotes: { ceo: 'approve', dao: 'abstain', cmo: 'approve', cto: 'abstain', cfo: 'approve', coo: 'abstain', cco: 'abstain' },
+        cLevelVotes: { ceo: 'approve', dao: 'abstain', cmo: 'approve', cto: 'abstain', cfo: 'approve', coo: 'abstain', cco: 'abstain', test: 'abstain' },
         humanDecision: 'approve',
         resolvedAt: new Date(),
         createdAt: new Date(),

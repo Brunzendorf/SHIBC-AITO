@@ -112,6 +112,15 @@ export const AGENT_FOCUS_CONFIGS: Record<AgentType, AgentFocusConfig> = {
     ],
     scanTopics: ['governance', 'voting', 'dao management'],
   },
+  test: {
+    keyQuestions: [
+      'Are all system integrations working?',
+      'Which tests need to be run?',
+      'Are there any failures to investigate?',
+    ],
+    revenueAngles: [],
+    scanTopics: ['testing', 'validation', 'integration'],
+  },
 };
 
 // =============================================================================

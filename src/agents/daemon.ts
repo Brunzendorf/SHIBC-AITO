@@ -34,6 +34,12 @@ import {
   executeClaudeAgent,
   type PendingDecision,
 } from './claude.js';
+import {
+  executeWithSessionAndRetry,
+  buildSessionLoopPrompt,
+  shutdownExecutor,
+  getSessionPoolStats,
+} from './session-executor.js';
 import { llmRouter, type TaskContext } from '../lib/llm/index.js';
 import type { AgentType, AgentMessage, EventType } from '../lib/types.js';
 import { spawnWorkerAsync } from '../workers/spawner.js';
@@ -238,6 +244,12 @@ export class AgentDaemon {
 
       // Unsubscribe from Redis
       await subscriber.unsubscribe();
+
+      // Shutdown session pool if enabled
+      if (process.env.SESSION_POOL_ENABLED === 'true') {
+        logger.info('Shutting down session pool...');
+        await shutdownExecutor();
+      }
 
       // NOTE: We intentionally do NOT set status to 'inactive' on shutdown.
       // The 'active' status means the agent SHOULD be running, not that it IS running.
@@ -851,9 +863,58 @@ export class AgentDaemon {
 
       logger.debug({ systemPromptLength: systemPrompt.length, loopPromptLength: loopPrompt.length }, 'Prompt lengths');
 
-      // Execute AI with intelligent routing (Claude vs Gemini)
+      // Execute AI with intelligent routing (Claude vs Gemini) or Session Pool
       let result;
-      if (this.claudeAvailable) {
+      const sessionPoolEnabled = process.env.SESSION_POOL_ENABLED === 'true';
+
+      if (sessionPoolEnabled && this.claudeAvailable && this.profile) {
+        // SESSION POOL MODE: Use persistent Claude sessions
+        // This dramatically reduces token usage by keeping context between loops
+        logger.info({ agentType: this.config.agentType }, 'Using session pool mode');
+
+        // Build optimized prompt for session mode (no full profile needed)
+        const sessionPrompt = buildSessionLoopPrompt(
+          { type: trigger, data },
+          currentState,
+          {
+            pendingDecisions: pendingDecisions.map(d => ({
+              id: d.id,
+              title: d.title,
+              tier: d.tier,
+            })),
+            pendingTasks: pendingTasks.map(t => ({
+              title: t.title,
+              priority: t.priority,
+              from: t.from,
+            })),
+            ragContext: ragContext || undefined,
+            kanbanIssues: kanbanIssues ? {
+              inProgress: kanbanIssues.inProgress,
+              ready: kanbanIssues.ready,
+            } : undefined,
+          }
+        );
+
+        result = await executeWithSessionAndRetry(
+          {
+            agentType: this.config.agentType,
+            profile: this.profile,
+            mcpConfigPath: process.env.MCP_CONFIG_PATH || '/app/.claude/mcp_servers.json',
+          },
+          sessionPrompt,
+          systemPrompt,
+          300000, // 5 minutes
+          3 // maxRetries
+        );
+
+        logger.info({
+          sessionPoolEnabled: true,
+          promptLength: sessionPrompt.length,
+          savedTokens: loopPrompt.length - sessionPrompt.length,
+        }, 'Session execution completed');
+
+      } else if (this.claudeAvailable) {
+        // SINGLE-SHOT MODE: Use LLM router (Claude or Gemini)
         // Build task context for routing decision
         const taskContext: TaskContext = {
           taskType: 'loop',
@@ -2106,8 +2167,16 @@ export class AgentDaemon {
     loopCount: number;
     lastLoopAt: string | null;
     claudeAvailable: boolean;
+    sessionPool?: {
+      enabled: boolean;
+      totalSessions?: number;
+      sessionState?: string;
+    };
   }> {
     const currentState = await this.state?.getAll() || {};
+
+    // Get session pool stats if enabled
+    const sessionPoolStats = getSessionPoolStats();
 
     return {
       healthy: this.isRunning,
@@ -2116,6 +2185,13 @@ export class AgentDaemon {
       loopCount: (currentState[StateKeys.LOOP_COUNT] as number) || 0,
       lastLoopAt: (currentState[StateKeys.LAST_LOOP_AT] as string) || null,
       claudeAvailable: this.claudeAvailable,
+      sessionPool: {
+        enabled: sessionPoolStats.enabled,
+        totalSessions: sessionPoolStats.stats?.totalSessions,
+        sessionState: sessionPoolStats.stats?.sessionDetails?.find(
+          s => s.agentType === this.config.agentType
+        )?.state,
+      },
     };
   }
 }

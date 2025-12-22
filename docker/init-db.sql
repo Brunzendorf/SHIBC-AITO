@@ -8,6 +8,19 @@ CREATE EXTENSION IF NOT EXISTS "vector";
 CREATE EXTENSION IF NOT EXISTS "pg_trgm";
 
 -- ============================================
+-- FUNCTIONS (must be defined before triggers)
+-- ============================================
+
+-- Auto-update updated_at timestamp
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ language 'plpgsql';
+
+-- ============================================
 -- CORE TABLES
 -- ============================================
 
@@ -129,6 +142,50 @@ CREATE INDEX idx_escalations_created ON escalations(created_at DESC);
 -- ADDITIONAL TABLES
 -- ============================================
 
+-- Agent Profiles (parsed from markdown files, stored for caching/versioning)
+CREATE TABLE agent_profiles (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    agent_id UUID REFERENCES agents(id) ON DELETE CASCADE,
+    version INTEGER DEFAULT 1,
+    content TEXT NOT NULL,
+    identity JSONB,
+    mcp_servers JSONB,
+    capabilities JSONB,
+    constraints JSONB,
+    loop_actions JSONB,
+    decision_authority JSONB,
+    is_active BOOLEAN DEFAULT true,
+    created_by VARCHAR(50),
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_agent_profiles_agent ON agent_profiles(agent_id);
+CREATE INDEX idx_agent_profiles_active ON agent_profiles(is_active);
+
+CREATE TRIGGER update_agent_profiles_updated_at
+    BEFORE UPDATE ON agent_profiles
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- Audit Logs (tracking all agent actions)
+CREATE TABLE audit_logs (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    agent_id UUID REFERENCES agents(id) ON DELETE SET NULL,
+    agent_type VARCHAR(50) NOT NULL,
+    action_type VARCHAR(100) NOT NULL,
+    action_data JSONB NOT NULL DEFAULT '{}',
+    success BOOLEAN DEFAULT true,
+    error_message TEXT,
+    correlation_id VARCHAR(255),
+    created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX idx_audit_logs_agent ON audit_logs(agent_id);
+CREATE INDEX idx_audit_logs_type ON audit_logs(agent_type);
+CREATE INDEX idx_audit_logs_action ON audit_logs(action_type);
+CREATE INDEX idx_audit_logs_created ON audit_logs(created_at DESC);
+CREATE INDEX idx_audit_logs_correlation ON audit_logs(correlation_id);
+
 -- Translation Cache
 CREATE TABLE translations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -247,7 +304,8 @@ INSERT INTO agents (type, name, profile_path, loop_interval, status) VALUES
     ('cto', 'CTO Agent', '/profiles/cto.md', 3600, 'inactive'),
     ('cfo', 'CFO Agent', '/profiles/cfo.md', 21600, 'inactive'),
     ('coo', 'COO Agent', '/profiles/coo.md', 7200, 'inactive'),
-    ('cco', 'CCO Agent', '/profiles/cco.md', 86400, 'inactive');
+    ('cco', 'CCO Agent', '/profiles/cco.md', 86400, 'inactive'),
+    ('test', 'Test Agent', '/profiles/test.md', 60, 'inactive');
 
 -- ============================================
 -- SEED DATA: Domain Whitelist
@@ -376,17 +434,8 @@ INSERT INTO system_settings (category, setting_key, setting_value, description) 
     ('workspace', 'skip_pr', 'false', 'Bypass PR workflow - direct push');
 
 -- ============================================
--- FUNCTIONS
+-- TRIGGERS
 -- ============================================
-
--- Auto-update updated_at timestamp
-CREATE OR REPLACE FUNCTION update_updated_at_column()
-RETURNS TRIGGER AS $$
-BEGIN
-    NEW.updated_at = NOW();
-    RETURN NEW;
-END;
-$$ language 'plpgsql';
 
 CREATE TRIGGER update_agents_updated_at
     BEFORE UPDATE ON agents
@@ -412,7 +461,13 @@ $$ LANGUAGE plpgsql;
 -- GRANTS
 -- ============================================
 
--- Grant all privileges to aito user
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO aito;
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO aito;
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO aito;
+-- Grant all privileges to aito user (if exists)
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'aito') THEN
+    GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO aito;
+    GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO aito;
+    GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO aito;
+  END IF;
+END
+$$;

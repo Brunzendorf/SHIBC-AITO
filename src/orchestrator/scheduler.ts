@@ -1,7 +1,7 @@
 import cron from 'node-cron';
 import { v4 as uuid } from 'uuid';
 import { createLogger } from '../lib/logger.js';
-import { agentRepo, eventRepo } from '../lib/db.js';
+import { agentRepo, eventRepo, projectRepo } from '../lib/db.js';
 import { publish, channels } from '../lib/redis.js';
 import { agentConfigs, numericConfig } from '../lib/config.js';
 import { autoRestartUnhealthy } from './container.js';
@@ -266,6 +266,163 @@ export function scheduleBacklogGrooming(): string {
   return jobId;
 }
 
+// Schedule Event Executor - processes due scheduled events (posts, releases, etc.)
+export function scheduleEventExecutor(): string {
+  const jobId = 'event-executor';
+  const cronExpression = '* * * * *'; // Every minute
+
+  logger.info({ cronExpression }, 'Scheduling Event Executor');
+
+  const task = cron.schedule(cronExpression, async () => {
+    try {
+      await executeDueEvents();
+    } catch (err) {
+      logger.error({ err }, 'Event Executor failed');
+    }
+  });
+
+  jobs.set(jobId, task);
+  jobMetadata.set(jobId, {
+    id: jobId,
+    agentId: 'system',
+    cronExpression,
+    enabled: true,
+  });
+
+  return jobId;
+}
+
+// Execute due scheduled events
+async function executeDueEvents(): Promise<void> {
+  const dueEvents = await projectRepo.findDueEvents();
+
+  if (dueEvents.length === 0) {
+    return; // Nothing to execute
+  }
+
+  logger.info({ count: dueEvents.length }, 'Processing due scheduled events');
+
+  for (const event of dueEvents) {
+    try {
+      // Find the responsible agent
+      const agent = await agentRepo.findByType(event.agent as any);
+      if (!agent) {
+        logger.warn({ eventId: event.id, agent: event.agent }, 'Agent not found for event');
+        await projectRepo.updateEventStatus(event.id, 'failed', {
+          error: `Agent ${event.agent} not found`,
+          attemptedAt: new Date().toISOString(),
+        });
+        continue;
+      }
+
+      // Build the task message based on event type
+      let taskPayload: Record<string, unknown>;
+
+      switch (event.eventType) {
+        case 'post':
+          taskPayload = {
+            action: 'execute_scheduled_post',
+            eventId: event.id,
+            platform: event.platform,
+            content: event.content,
+            mediaUrls: event.mediaUrls || [],
+            title: event.title,
+          };
+          break;
+
+        case 'ama':
+          taskPayload = {
+            action: 'start_ama_session',
+            eventId: event.id,
+            platform: event.platform,
+            title: event.title,
+            description: event.description,
+            durationMinutes: event.durationMinutes,
+          };
+          break;
+
+        case 'release':
+          taskPayload = {
+            action: 'execute_release',
+            eventId: event.id,
+            title: event.title,
+            description: event.description,
+          };
+          break;
+
+        case 'milestone':
+        case 'deadline':
+          taskPayload = {
+            action: 'announce_milestone',
+            eventId: event.id,
+            title: event.title,
+            description: event.description,
+            projectId: event.projectId,
+          };
+          break;
+
+        default:
+          taskPayload = {
+            action: 'execute_scheduled_event',
+            eventId: event.id,
+            eventType: event.eventType,
+            title: event.title,
+            description: event.description,
+          };
+      }
+
+      // Send task to the responsible agent
+      const message: AgentMessage = {
+        id: uuid(),
+        type: 'task',
+        from: 'orchestrator',
+        to: agent.id,
+        payload: taskPayload,
+        priority: 'high', // Scheduled events are time-sensitive
+        timestamp: new Date(),
+        requiresResponse: true,
+        responseDeadline: new Date(Date.now() + 300000), // 5 min deadline
+      };
+
+      await publish(channels.agent(agent.id), message);
+
+      // Update event status to processing (we'll mark as published when agent confirms)
+      // For now, mark as published since we sent the task
+      await projectRepo.updateEventStatus(event.id, 'published', {
+        dispatchedAt: new Date().toISOString(),
+        messageId: message.id,
+      });
+
+      // Log the event execution
+      await eventRepo.log({
+        eventType: 'event_scheduled',
+        sourceAgent: 'orchestrator',
+        targetAgent: agent.id,
+        payload: {
+          scheduledEventId: event.id,
+          eventType: event.eventType,
+          platform: event.platform,
+          title: event.title,
+        },
+      });
+
+      logger.info({
+        eventId: event.id,
+        eventType: event.eventType,
+        agent: event.agent,
+        platform: event.platform,
+      }, 'Scheduled event dispatched to agent');
+
+    } catch (err) {
+      logger.error({ err, eventId: event.id }, 'Failed to execute scheduled event');
+      await projectRepo.updateEventStatus(event.id, 'failed', {
+        error: err instanceof Error ? err.message : String(err),
+        attemptedAt: new Date().toISOString(),
+      });
+    }
+  }
+}
+
 // Schedule daily digest
 export function scheduleDailyDigest(): string {
   const jobId = 'daily-digest';
@@ -388,6 +545,7 @@ export async function initialize(): Promise<void> {
   scheduleArchiveWorker();
   scheduleDataFetcher();
   scheduleBacklogGrooming();
+  scheduleEventExecutor();
 
   // Run data fetch immediately on startup
   logger.info('Running initial data fetch...');

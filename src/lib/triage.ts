@@ -71,6 +71,11 @@ export const AGENT_KEYWORDS: Record<AgentType, {
     secondary: ['quorum', 'delegate', 'snapshot', 'multisig'],
     category: 'governance',
   },
+  test: {
+    primary: ['test', 'testing', 'e2e', 'integration'],
+    secondary: ['validate', 'verify', 'check'],
+    category: 'tech',
+  },
 };
 
 // Priority keywords that indicate urgency

@@ -1414,6 +1414,455 @@ export const settingsRepo = {
   },
 };
 
+// =============================================================================
+// Project Planning Repository (TASK: Project Planning Feature)
+// =============================================================================
+
+// Story Points to Token mapping
+export const STORY_POINT_TOKENS: Record<number, number> = {
+  1: 2000,   // XS
+  2: 5000,   // S
+  3: 15000,  // M
+  5: 40000,  // L
+  8: 100000, // XL
+};
+
+export interface Project {
+  id: string;
+  title: string;
+  description: string | null;
+  status: 'planning' | 'active' | 'paused' | 'completed' | 'cancelled';
+  priority: 'critical' | 'high' | 'medium' | 'low';
+  owner: string;
+  collaborators: string[];
+  progress: number;
+  totalStoryPoints: number;
+  completedStoryPoints: number;
+  tokenBudget: number;
+  tokensUsed: number;
+  budgetPriority: number;
+  githubIssueUrl: string | null;
+  githubIssueNumber: number | null;
+  initiativeId: string | null;
+  tags: string[];
+  createdAt: Date;
+  updatedAt: Date;
+  createdBy: string;
+}
+
+export interface ProjectTask {
+  id: string;
+  projectId: string;
+  phaseId: string | null;
+  title: string;
+  description: string | null;
+  assignee: string | null;
+  status: 'todo' | 'in_progress' | 'review' | 'done' | 'blocked';
+  storyPoints: number;
+  tokenEstimate: number;
+  tokensUsed: number;
+  completedAt: Date | null;
+  dependencies: string[];
+  githubIssueNumber: number | null;
+  githubIssueUrl: string | null;
+  sortOrder: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface ScheduledEvent {
+  id: string;
+  projectId: string | null;
+  title: string;
+  description: string | null;
+  eventType: 'post' | 'ama' | 'release' | 'milestone' | 'meeting' | 'deadline' | 'other';
+  scheduledAt: Date;
+  durationMinutes: number | null;
+  isAllDay: boolean;
+  recurrenceRule: Record<string, unknown> | null;
+  agent: string;
+  platform: 'twitter' | 'telegram' | 'discord' | 'website' | null;
+  status: 'scheduled' | 'published' | 'cancelled' | 'failed';
+  content: string | null;
+  mediaUrls: string[];
+  executedAt: Date | null;
+  executionResult: Record<string, unknown> | null;
+  createdAt: Date;
+  updatedAt: Date;
+  createdBy: string;
+}
+
+export const projectRepo = {
+  // ===== PROJECTS =====
+  async findAll(status?: Project['status']): Promise<Project[]> {
+    if (status) {
+      return query<Project>(
+        `SELECT id, title, description, status, priority, owner, collaborators,
+                progress, total_story_points as "totalStoryPoints",
+                completed_story_points as "completedStoryPoints",
+                token_budget as "tokenBudget", tokens_used as "tokensUsed",
+                budget_priority as "budgetPriority", github_issue_url as "githubIssueUrl",
+                github_issue_number as "githubIssueNumber", initiative_id as "initiativeId",
+                tags, created_at as "createdAt", updated_at as "updatedAt", created_by as "createdBy"
+         FROM projects WHERE status = $1
+         ORDER BY CASE priority
+           WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4
+         END, total_story_points DESC`,
+        [status]
+      );
+    }
+    return query<Project>(
+      `SELECT id, title, description, status, priority, owner, collaborators,
+              progress, total_story_points as "totalStoryPoints",
+              completed_story_points as "completedStoryPoints",
+              token_budget as "tokenBudget", tokens_used as "tokensUsed",
+              budget_priority as "budgetPriority", github_issue_url as "githubIssueUrl",
+              github_issue_number as "githubIssueNumber", initiative_id as "initiativeId",
+              tags, created_at as "createdAt", updated_at as "updatedAt", created_by as "createdBy"
+       FROM projects WHERE status != 'cancelled'
+       ORDER BY CASE priority
+         WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4
+       END, total_story_points DESC`
+    );
+  },
+
+  async findById(id: string): Promise<Project | null> {
+    return queryOne<Project>(
+      `SELECT id, title, description, status, priority, owner, collaborators,
+              progress, total_story_points as "totalStoryPoints",
+              completed_story_points as "completedStoryPoints",
+              token_budget as "tokenBudget", tokens_used as "tokensUsed",
+              budget_priority as "budgetPriority", github_issue_url as "githubIssueUrl",
+              github_issue_number as "githubIssueNumber", initiative_id as "initiativeId",
+              tags, created_at as "createdAt", updated_at as "updatedAt", created_by as "createdBy"
+       FROM projects WHERE id = $1`,
+      [id]
+    );
+  },
+
+  async create(project: Pick<Project, 'title' | 'description' | 'owner' | 'priority' | 'tokenBudget' | 'tags' | 'createdBy'>): Promise<Project> {
+    const [result] = await query<Project>(
+      `INSERT INTO projects (title, description, owner, priority, token_budget, tags, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, title, description, status, priority, owner, collaborators,
+                 progress, total_story_points as "totalStoryPoints",
+                 completed_story_points as "completedStoryPoints",
+                 token_budget as "tokenBudget", tokens_used as "tokensUsed",
+                 budget_priority as "budgetPriority", github_issue_url as "githubIssueUrl",
+                 github_issue_number as "githubIssueNumber", initiative_id as "initiativeId",
+                 tags, created_at as "createdAt", updated_at as "updatedAt", created_by as "createdBy"`,
+      [project.title, project.description, project.owner, project.priority,
+       project.tokenBudget || 0, project.tags || [], project.createdBy]
+    );
+    return result;
+  },
+
+  async update(id: string, updates: Partial<Pick<Project, 'title' | 'description' | 'status' | 'priority' | 'owner' | 'collaborators' | 'tokenBudget' | 'budgetPriority' | 'tags'>>): Promise<Project | null> {
+    const setClause: string[] = [];
+    const values: unknown[] = [];
+    let paramIndex = 1;
+
+    if (updates.title !== undefined) { setClause.push(`title = $${paramIndex++}`); values.push(updates.title); }
+    if (updates.description !== undefined) { setClause.push(`description = $${paramIndex++}`); values.push(updates.description); }
+    if (updates.status !== undefined) { setClause.push(`status = $${paramIndex++}`); values.push(updates.status); }
+    if (updates.priority !== undefined) { setClause.push(`priority = $${paramIndex++}`); values.push(updates.priority); }
+    if (updates.owner !== undefined) { setClause.push(`owner = $${paramIndex++}`); values.push(updates.owner); }
+    if (updates.collaborators !== undefined) { setClause.push(`collaborators = $${paramIndex++}`); values.push(updates.collaborators); }
+    if (updates.tokenBudget !== undefined) { setClause.push(`token_budget = $${paramIndex++}`); values.push(updates.tokenBudget); }
+    if (updates.budgetPriority !== undefined) { setClause.push(`budget_priority = $${paramIndex++}`); values.push(updates.budgetPriority); }
+    if (updates.tags !== undefined) { setClause.push(`tags = $${paramIndex++}`); values.push(updates.tags); }
+
+    if (setClause.length === 0) return this.findById(id);
+
+    values.push(id);
+    const [result] = await query<Project>(
+      `UPDATE projects SET ${setClause.join(', ')}, updated_at = NOW()
+       WHERE id = $${paramIndex}
+       RETURNING id, title, description, status, priority, owner, collaborators,
+                 progress, total_story_points as "totalStoryPoints",
+                 completed_story_points as "completedStoryPoints",
+                 token_budget as "tokenBudget", tokens_used as "tokensUsed",
+                 budget_priority as "budgetPriority", github_issue_url as "githubIssueUrl",
+                 github_issue_number as "githubIssueNumber", initiative_id as "initiativeId",
+                 tags, created_at as "createdAt", updated_at as "updatedAt", created_by as "createdBy"`,
+      values
+    );
+    return result;
+  },
+
+  async delete(id: string): Promise<boolean> {
+    const result = await query(`DELETE FROM projects WHERE id = $1 RETURNING id`, [id]);
+    return result.length > 0;
+  },
+
+  async addTokensUsed(id: string, tokens: number): Promise<void> {
+    await query(`UPDATE projects SET tokens_used = tokens_used + $2, updated_at = NOW() WHERE id = $1`, [id, tokens]);
+  },
+
+  // ===== TASKS =====
+  async findTasksByProject(projectId: string): Promise<ProjectTask[]> {
+    return query<ProjectTask>(
+      `SELECT id, project_id as "projectId", phase_id as "phaseId", title, description,
+              assignee, status, story_points as "storyPoints", token_estimate as "tokenEstimate",
+              tokens_used as "tokensUsed", completed_at as "completedAt", dependencies,
+              github_issue_number as "githubIssueNumber", github_issue_url as "githubIssueUrl",
+              sort_order as "sortOrder", created_at as "createdAt", updated_at as "updatedAt"
+       FROM project_tasks WHERE project_id = $1
+       ORDER BY sort_order, created_at`,
+      [projectId]
+    );
+  },
+
+  async findTaskById(id: string): Promise<ProjectTask | null> {
+    return queryOne<ProjectTask>(
+      `SELECT id, project_id as "projectId", phase_id as "phaseId", title, description,
+              assignee, status, story_points as "storyPoints", token_estimate as "tokenEstimate",
+              tokens_used as "tokensUsed", completed_at as "completedAt", dependencies,
+              github_issue_number as "githubIssueNumber", github_issue_url as "githubIssueUrl",
+              sort_order as "sortOrder", created_at as "createdAt", updated_at as "updatedAt"
+       FROM project_tasks WHERE id = $1`,
+      [id]
+    );
+  },
+
+  async createTask(task: Pick<ProjectTask, 'projectId' | 'title' | 'description' | 'assignee' | 'storyPoints' | 'dependencies'>): Promise<ProjectTask> {
+    const tokenEstimate = STORY_POINT_TOKENS[task.storyPoints] || 5000;
+    const [result] = await query<ProjectTask>(
+      `INSERT INTO project_tasks (project_id, title, description, assignee, story_points, token_estimate, dependencies)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, project_id as "projectId", phase_id as "phaseId", title, description,
+                 assignee, status, story_points as "storyPoints", token_estimate as "tokenEstimate",
+                 tokens_used as "tokensUsed", completed_at as "completedAt", dependencies,
+                 github_issue_number as "githubIssueNumber", github_issue_url as "githubIssueUrl",
+                 sort_order as "sortOrder", created_at as "createdAt", updated_at as "updatedAt"`,
+      [task.projectId, task.title, task.description, task.assignee, task.storyPoints, tokenEstimate, task.dependencies || []]
+    );
+    return result;
+  },
+
+  async updateTaskStatus(id: string, status: ProjectTask['status'], tokensUsed?: number): Promise<ProjectTask | null> {
+    const completedAt = status === 'done' ? new Date() : null;
+    const [result] = await query<ProjectTask>(
+      `UPDATE project_tasks
+       SET status = $2, completed_at = $3, tokens_used = COALESCE($4, tokens_used), updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, project_id as "projectId", phase_id as "phaseId", title, description,
+                 assignee, status, story_points as "storyPoints", token_estimate as "tokenEstimate",
+                 tokens_used as "tokensUsed", completed_at as "completedAt", dependencies,
+                 github_issue_number as "githubIssueNumber", github_issue_url as "githubIssueUrl",
+                 sort_order as "sortOrder", created_at as "createdAt", updated_at as "updatedAt"`,
+      [id, status, completedAt, tokensUsed]
+    );
+    return result;
+  },
+
+  async getBlockedTasks(taskId: string): Promise<{ id: string; title: string; status: string }[]> {
+    const task = await this.findTaskById(taskId);
+    if (!task || task.dependencies.length === 0) return [];
+
+    return query<{ id: string; title: string; status: string }>(
+      `SELECT id, title, status FROM project_tasks WHERE id = ANY($1) AND status != 'done'`,
+      [task.dependencies]
+    );
+  },
+
+  async canStartTask(taskId: string): Promise<{ canStart: boolean; blockedBy: string[] }> {
+    const blockedTasks = await this.getBlockedTasks(taskId);
+    return {
+      canStart: blockedTasks.length === 0,
+      blockedBy: blockedTasks.map(t => t.title),
+    };
+  },
+
+  /**
+   * Get all tasks that are currently blocked (have incomplete dependencies)
+   */
+  async getAllBlockedTasks(): Promise<ProjectTask[]> {
+    return query<ProjectTask>(
+      `SELECT t.id, t.project_id as "projectId", t.phase_id as "phaseId",
+              t.title, t.description, t.assignee, t.status,
+              t.story_points as "storyPoints", t.token_estimate as "tokenEstimate",
+              t.tokens_used as "tokensUsed", t.completed_at as "completedAt",
+              t.dependencies, t.github_issue_number as "githubIssueNumber",
+              t.github_issue_url as "githubIssueUrl", t.sort_order as "sortOrder",
+              t.created_at as "createdAt", t.updated_at as "updatedAt"
+       FROM project_tasks t
+       WHERE t.status = 'todo'
+         AND array_length(t.dependencies, 1) > 0
+         AND EXISTS (
+           SELECT 1 FROM project_tasks d
+           WHERE d.id = ANY(t.dependencies) AND d.status != 'done'
+         )
+       ORDER BY t.created_at DESC`
+    );
+  },
+
+  // ===== SCHEDULED EVENTS =====
+  async findEventsByProject(projectId: string): Promise<ScheduledEvent[]> {
+    return query<ScheduledEvent>(
+      `SELECT id, project_id as "projectId", title, description, event_type as "eventType",
+              scheduled_at as "scheduledAt", duration_minutes as "durationMinutes",
+              is_all_day as "isAllDay", recurrence_rule as "recurrenceRule", agent,
+              platform, status, content, media_urls as "mediaUrls",
+              executed_at as "executedAt", execution_result as "executionResult",
+              created_at as "createdAt", updated_at as "updatedAt", created_by as "createdBy"
+       FROM scheduled_events WHERE project_id = $1
+       ORDER BY scheduled_at`,
+      [projectId]
+    );
+  },
+
+  async findUpcomingEvents(days = 7): Promise<ScheduledEvent[]> {
+    return query<ScheduledEvent>(
+      `SELECT id, project_id as "projectId", title, description, event_type as "eventType",
+              scheduled_at as "scheduledAt", duration_minutes as "durationMinutes",
+              is_all_day as "isAllDay", recurrence_rule as "recurrenceRule", agent,
+              platform, status, content, media_urls as "mediaUrls",
+              executed_at as "executedAt", execution_result as "executionResult",
+              created_at as "createdAt", updated_at as "updatedAt", created_by as "createdBy"
+       FROM scheduled_events
+       WHERE status = 'scheduled' AND scheduled_at BETWEEN NOW() AND NOW() + $1::interval
+       ORDER BY scheduled_at`,
+      [`${days} days`]
+    );
+  },
+
+  async findDueEvents(): Promise<ScheduledEvent[]> {
+    return query<ScheduledEvent>(
+      `SELECT id, project_id as "projectId", title, description, event_type as "eventType",
+              scheduled_at as "scheduledAt", duration_minutes as "durationMinutes",
+              is_all_day as "isAllDay", recurrence_rule as "recurrenceRule", agent,
+              platform, status, content, media_urls as "mediaUrls",
+              executed_at as "executedAt", execution_result as "executionResult",
+              created_at as "createdAt", updated_at as "updatedAt", created_by as "createdBy"
+       FROM scheduled_events
+       WHERE status = 'scheduled' AND scheduled_at <= NOW()
+       ORDER BY scheduled_at
+       LIMIT 10`
+    );
+  },
+
+  async createEvent(event: Pick<ScheduledEvent, 'projectId' | 'title' | 'description' | 'eventType' | 'scheduledAt' | 'agent' | 'platform' | 'content' | 'createdBy'>): Promise<ScheduledEvent> {
+    const [result] = await query<ScheduledEvent>(
+      `INSERT INTO scheduled_events (project_id, title, description, event_type, scheduled_at, agent, platform, content, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING id, project_id as "projectId", title, description, event_type as "eventType",
+                 scheduled_at as "scheduledAt", duration_minutes as "durationMinutes",
+                 is_all_day as "isAllDay", recurrence_rule as "recurrenceRule", agent,
+                 platform, status, content, media_urls as "mediaUrls",
+                 executed_at as "executedAt", execution_result as "executionResult",
+                 created_at as "createdAt", updated_at as "updatedAt", created_by as "createdBy"`,
+      [event.projectId, event.title, event.description, event.eventType, event.scheduledAt,
+       event.agent, event.platform, event.content, event.createdBy]
+    );
+    return result;
+  },
+
+  async updateEventStatus(id: string, status: ScheduledEvent['status'], executionResult?: Record<string, unknown>): Promise<ScheduledEvent | null> {
+    const executedAt = status === 'published' || status === 'failed' ? new Date() : null;
+    const [result] = await query<ScheduledEvent>(
+      `UPDATE scheduled_events
+       SET status = $2, executed_at = $3, execution_result = $4, updated_at = NOW()
+       WHERE id = $1
+       RETURNING id, project_id as "projectId", title, description, event_type as "eventType",
+                 scheduled_at as "scheduledAt", duration_minutes as "durationMinutes",
+                 is_all_day as "isAllDay", recurrence_rule as "recurrenceRule", agent,
+                 platform, status, content, media_urls as "mediaUrls",
+                 executed_at as "executedAt", execution_result as "executionResult",
+                 created_at as "createdAt", updated_at as "updatedAt", created_by as "createdBy"`,
+      [id, status, executedAt, executionResult ? JSON.stringify(executionResult) : null]
+    );
+    return result;
+  },
+
+  async findEventsByDateRange(start: Date, end: Date): Promise<ScheduledEvent[]> {
+    return query<ScheduledEvent>(
+      `SELECT id, project_id as "projectId", title, description, event_type as "eventType",
+              scheduled_at as "scheduledAt", duration_minutes as "durationMinutes",
+              is_all_day as "isAllDay", recurrence_rule as "recurrenceRule", agent,
+              platform, status, content, media_urls as "mediaUrls",
+              executed_at as "executedAt", execution_result as "executionResult",
+              created_at as "createdAt", updated_at as "updatedAt", created_by as "createdBy"
+       FROM scheduled_events
+       WHERE scheduled_at >= $1 AND scheduled_at < $2
+       ORDER BY scheduled_at`,
+      [start, end]
+    );
+  },
+
+  // ===== DASHBOARD VIEW =====
+  async getDashboardProjects(): Promise<Array<Project & {
+    totalTasks: number;
+    completedTasks: number;
+    blockedTasks: number;
+    tasksTotalSp: number;
+    tasksCompletedSp: number;
+    tasksTokenEstimate: number;
+    tasksTokensUsed: number;
+    tokenUsagePercent: number;
+    upcomingEvents: number;
+  }>> {
+    return query(
+      `SELECT * FROM v_projects_dashboard`
+    );
+  },
+
+  // ===== STATS =====
+  async getProjectStats(): Promise<{
+    total: number;
+    active: number;
+    completed: number;
+    totalStoryPoints: number;
+    completedStoryPoints: number;
+    totalTokenBudget: number;
+    totalTokensUsed: number;
+  }> {
+    const [result] = await query<{
+      total: string;
+      active: string;
+      completed: string;
+      totalStoryPoints: string;
+      completedStoryPoints: string;
+      totalTokenBudget: string;
+      totalTokensUsed: string;
+    }>(
+      `SELECT
+         COUNT(*)::text as total,
+         SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END)::text as active,
+         SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END)::text as completed,
+         COALESCE(SUM(total_story_points), 0)::text as "totalStoryPoints",
+         COALESCE(SUM(completed_story_points), 0)::text as "completedStoryPoints",
+         COALESCE(SUM(token_budget), 0)::text as "totalTokenBudget",
+         COALESCE(SUM(tokens_used), 0)::text as "totalTokensUsed"
+       FROM projects WHERE status != 'cancelled'`
+    );
+
+    return {
+      total: parseInt(result?.total || '0', 10),
+      active: parseInt(result?.active || '0', 10),
+      completed: parseInt(result?.completed || '0', 10),
+      totalStoryPoints: parseInt(result?.totalStoryPoints || '0', 10),
+      completedStoryPoints: parseInt(result?.completedStoryPoints || '0', 10),
+      totalTokenBudget: parseInt(result?.totalTokenBudget || '0', 10),
+      totalTokensUsed: parseInt(result?.totalTokensUsed || '0', 10),
+    };
+  },
+
+  async getAgentWorkload(): Promise<Array<{
+    agent: string;
+    totalTasks: number;
+    inProgress: number;
+    pending: number;
+    blocked: number;
+    projectIds: string[];
+    projectTitles: string[];
+  }>> {
+    return query(
+      `SELECT * FROM v_agent_workload`
+    );
+  },
+};
+
 // Health check
 export async function checkConnection(): Promise<boolean> {
   try {
