@@ -795,7 +795,9 @@ export async function executeClaudeCodeWithMCP(session: ClaudeSessionWithMCP): P
       args.push('--system-prompt', session.systemPrompt);
     }
 
-    args.push(session.prompt);
+    // CRITICAL: Add '--' separator before prompt to prevent --mcp-config from consuming the prompt
+    // Without this, --mcp-config <configs...> treats the prompt as additional config files
+    args.push('--', session.prompt);
 
     // Use /app/workspace if it exists (agents), otherwise use current directory (orchestrator)
     const workingDir = existsSync('/app/workspace') ? '/app/workspace' : process.cwd();

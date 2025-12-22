@@ -2,23 +2,33 @@
   "mcpServers": {
     "telegram": {
       "command": "npx",
-      "args": ["-y", "@chaindead/telegram-mcp"],
-      "description": "Telegram API for messages and channels"
+      "args": ["-y", "@iqai/mcp-telegram"],
+      "env": {
+        "TELEGRAM_BOT_TOKEN": "${TELEGRAM_BOT_TOKEN}"
+      },
+      "description": "Telegram Bot API - send messages, manage channels"
     },
     "etherscan": {
       "command": "npx",
       "args": ["-y", "etherscan-mcp"],
+      "env": {
+        "ETHERSCAN_API_KEY": "${ETHERSCAN_API_KEY}"
+      },
       "description": "Ethereum blockchain data"
     },
     "directus": {
       "command": "npx",
-      "args": ["@directus/content-mcp@latest"],
+      "args": ["-y", "@directus/content-mcp@latest"],
+      "env": {
+        "DIRECTUS_URL": "https://directus.shibaclassic.io",
+        "DIRECTUS_TOKEN": "${DIRECTUS_TOKEN}"
+      },
       "description": "Directus CMS via official @directus/content-mcp"
     },
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@anthropic-ai/mcp-server-filesystem", "/app/workspace"],
-      "description": "Local filesystem access"
+      "args": ["-y", "@agent-infra/mcp-server-filesystem", "--allowed-directories", "/app/workspace", "--allowed-directories", "/app/profiles"],
+      "description": "Local filesystem access for workspace and profiles"
     },
     "fetch": {
       "command": "node",
@@ -31,7 +41,7 @@
     "imagen": {
       "command": "node",
       "args": ["/app/mcp-servers/imagen-mcp/dist/index.js"],
-      "description": "Provides tools for Google Imagen to list models and generate images via GenAI API.",
+      "description": "Google Imagen image generation via GenAI API",
       "env": {
         "GEMINI_API_KEY": "${GEMINI_API_KEY}"
       }
