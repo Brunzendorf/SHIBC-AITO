@@ -20,10 +20,11 @@ import {
   readFromStream,
   acknowledgeMessages,
 } from '../lib/redis.js';
-import { agentRepo, historyRepo, eventRepo, decisionRepo, settingsRepo, auditRepo } from '../lib/db.js';
+import { agentRepo, historyRepo, eventRepo, decisionRepo, settingsRepo, auditRepo, brandConfigRepo, projectRepo } from '../lib/db.js';
 import { rag } from '../lib/rag.js';
 import { workspaceConfig } from '../lib/config.js';
 import { workspace } from './workspace.js';
+import { projects } from './projects.js';
 import { loadProfile, generateSystemPrompt, type AgentProfile } from './profile.js';
 import { createStateManager, StateKeys, type StateManager } from './state.js';
 import {
@@ -33,6 +34,7 @@ import {
   getKanbanIssuesForAgent,
   executeClaudeAgent,
   type PendingDecision,
+  type BrandConfigContext,
 } from './claude.js';
 import {
   executeWithSessionAndRetry,
@@ -178,6 +180,12 @@ export class AgentDaemon {
       // 2.6. Initialize workspace (git clone)
       const workspaceInitialized = await workspace.initialize(this.config.agentType);
       logger.info({ success: workspaceInitialized }, 'Workspace initialized');
+
+      // 2.7. Initialize projects directory (CTO only)
+      if (this.config.agentType === 'cto') {
+        const projectsInitialized = await projects.initialize();
+        logger.info({ success: projectsInitialized }, 'Projects directory initialized');
+      }
 
       // 3. Check LLM provider availability
       const availability = await llmRouter.checkAvailability();
@@ -779,12 +787,16 @@ export class AgentDaemon {
       try {
         claimedTasks = await claimTasks(this.config.agentType, 10);
         if (claimedTasks.length > 0) {
-          pendingTasks = claimedTasks.map(t => ({
-            title: (t.parsed.title as string) || 'Untitled Task',
-            description: (t.parsed.description as string) || '',
-            priority: (t.parsed.priority as string) || 'normal',
-            from: (t.parsed.from as string) || 'unknown',
-          }));
+          pendingTasks = claimedTasks.map(t => {
+            // Support both formats: direct fields OR nested in payload
+            const payload = t.parsed.payload as Record<string, unknown> | undefined;
+            return {
+              title: (t.parsed.title as string) || (payload?.title as string) || 'Untitled Task',
+              description: (t.parsed.description as string) || (payload?.description as string) || '',
+              priority: (t.parsed.priority as string) || 'normal',
+              from: (t.parsed.from as string) || 'unknown',
+            };
+          });
           logger.info({ count: pendingTasks.length, agentType: this.config.agentType }, 'Claimed pending tasks atomically');
         }
       } catch (taskError) {
@@ -827,6 +839,18 @@ export class AgentDaemon {
         logger.warn({ error: errMsg }, 'Failed to fetch Kanban issues, continuing without');
       }
 
+      // Fetch brand configuration (white-label CI from database)
+      let brandConfig: BrandConfigContext | null = null;
+      try {
+        brandConfig = await brandConfigRepo.getForAgent();
+        if (brandConfig) {
+          logger.debug({ projectName: brandConfig.name }, 'Brand config loaded from database');
+        }
+      } catch (brandErr) {
+        const errMsg = brandErr instanceof Error ? brandErr.message : String(brandErr);
+        logger.warn({ error: errMsg }, 'Failed to fetch brand config, continuing without');
+      }
+
       // TASK LIMIT: Max concurrent in-progress tasks per agent (loaded from DB)
       const currentInProgress = kanbanIssues?.inProgress?.length || 0;
       if (currentInProgress >= MAX_CONCURRENT_TASKS) {
@@ -849,7 +873,7 @@ export class AgentDaemon {
 
       // Build prompt
       const systemPrompt = generateSystemPrompt(this.profile);
-      let loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data }, pendingDecisions, ragContext, pendingTasks, kanbanIssues);
+      let loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data }, pendingDecisions, ragContext, pendingTasks, kanbanIssues, brandConfig);
 
       // Add initiative context so agents can propose their own initiatives
       try {
@@ -892,6 +916,13 @@ export class AgentDaemon {
               inProgress: kanbanIssues.inProgress,
               ready: kanbanIssues.ready,
             } : undefined,
+            brandConfig: brandConfig ? {
+              name: brandConfig.name,
+              shortName: brandConfig.shortName,
+              colors: brandConfig.colors,
+              socials: { twitter: brandConfig.socials.twitter, website: brandConfig.socials.website },
+              imageStyle: { aesthetic: brandConfig.imageStyle.aesthetic, defaultBranding: brandConfig.imageStyle.defaultBranding },
+            } : null,
           }
         );
 
@@ -2093,6 +2124,62 @@ export class AgentDaemon {
           }
         } catch (initErr) {
           logger.warn({ error: initErr, title: proposal.title }, 'Failed to create initiative from proposal');
+        }
+        break;
+      }
+
+      case 'schedule_event': {
+        // Agent schedules an event (post, announcement, meeting, etc.)
+        const event = actionData as {
+          title?: string;
+          description?: string;
+          eventType?: 'post' | 'ama' | 'release' | 'milestone' | 'meeting' | 'deadline' | 'other';
+          scheduledAt?: string;
+          platform?: 'twitter' | 'telegram' | 'discord' | 'website' | null;
+          content?: string;
+          projectId?: string;
+        };
+
+        if (!event?.title || !event?.scheduledAt) {
+          logger.warn({ event }, 'Invalid schedule_event: missing title or scheduledAt');
+          break;
+        }
+
+        try {
+          const createdEvent = await projectRepo.createEvent({
+            title: event.title,
+            description: event.description ?? null,
+            eventType: event.eventType || 'other',
+            scheduledAt: new Date(event.scheduledAt),
+            platform: event.platform || null,
+            content: event.content ?? null,
+            projectId: event.projectId ?? null,
+            agent: this.config.agentType,
+            createdBy: this.config.agentId,
+          });
+
+          logger.info({
+            eventId: createdEvent.id,
+            title: createdEvent.title,
+            scheduledAt: createdEvent.scheduledAt,
+            eventType: createdEvent.eventType,
+            platform: createdEvent.platform,
+          }, 'Agent scheduled event in calendar');
+
+          // Log as event
+          await eventRepo.log({
+            eventType: 'event_scheduled' as EventType,
+            sourceAgent: this.config.agentId,
+            payload: {
+              eventId: createdEvent.id,
+              title: createdEvent.title,
+              scheduledAt: createdEvent.scheduledAt,
+              eventType: createdEvent.eventType,
+              platform: createdEvent.platform,
+            },
+          });
+        } catch (scheduleErr) {
+          logger.warn({ error: scheduleErr, event }, 'Failed to schedule event');
         }
         break;
       }

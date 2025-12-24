@@ -387,6 +387,35 @@ export interface PendingTask {
   from: string;
 }
 
+/**
+ * Brand configuration for agent context (white-label)
+ * Loaded from database, not hardcoded in profiles
+ */
+export interface BrandConfigContext {
+  name: string;
+  shortName: string;
+  tagline: string;
+  colors: {
+    primary: string;
+    secondary: string;
+    background: string;
+    accent: string;
+    text: string;
+  };
+  socials: {
+    twitter: string | null;
+    telegram: string | null;
+    discord: string | null;
+    website: string | null;
+  };
+  imageStyle: {
+    aesthetic: string;
+    patterns: string;
+    mascot: string | null;
+    defaultBranding: string;
+  };
+}
+
 export function buildLoopPrompt(
   profile: AgentProfile,
   state: Record<string, unknown>,
@@ -394,7 +423,8 @@ export function buildLoopPrompt(
   pendingDecisions?: PendingDecision[],
   ragContext?: string,
   pendingTasks?: PendingTask[],
-  kanbanIssues?: AgentKanbanState
+  kanbanIssues?: AgentKanbanState,
+  brandConfig?: BrandConfigContext | null
 ): string {
   // Current date/time for agent awareness - CRITICAL for time-sensitive content
   const now = new Date();
@@ -411,6 +441,23 @@ export function buildLoopPrompt(
 
   const parts = [
     '# Agent Loop Execution',
+    '',
+    '## ⛔⛔⛔ CRITICAL: NO SCRIPT-BASED IMAGE GENERATION ⛔⛔⛔',
+    '',
+    '**ABSOLUTELY FORBIDDEN:**',
+    '- DO NOT write .js, .ts, .py, .html, .svg files to generate images',
+    '- DO NOT use canvas, sharp, or any code-based image generation',
+    '- DO NOT create scripts that call APIs to generate graphics',
+    '',
+    '**THE ONLY WAY TO GENERATE IMAGES:**',
+    '```json',
+    '{"type": "spawn_worker", "task": "Generate [description]", "servers": ["imagen", "filesystem"], "timeout": 180000}',
+    '```',
+    '',
+    'The imagen MCP has `imagen_generate_image` tool that calls Google Imagen AI.',
+    'If you write ANY script files for image generation, YOUR TASK WILL BE REJECTED.',
+    '',
+    '---',
     '',
     '## Agent: ' + profile.name + ' (' + profile.codename + ')',
     '## Trigger: ' + trigger.type,
@@ -441,6 +488,41 @@ export function buildLoopPrompt(
     );
   }
 
+  // Add brand configuration if available (white-label CI)
+  if (brandConfig) {
+    parts.push(
+      '## 🎨 Brand Configuration (CI)',
+      '',
+      '**Use these values for ALL visual content:**',
+      '',
+      '| Property | Value |',
+      '|----------|-------|',
+      `| Project Name | **${brandConfig.name}** |`,
+      `| Short Name | **${brandConfig.shortName}** |`,
+      `| Tagline | ${brandConfig.tagline || 'N/A'} |`,
+      '',
+      '### Colors (REQUIRED for image generation)',
+      `- **Primary:** ${brandConfig.colors.primary}`,
+      `- **Secondary:** ${brandConfig.colors.secondary}`,
+      `- **Background:** ${brandConfig.colors.background}`,
+      `- **Accent:** ${brandConfig.colors.accent}`,
+      '',
+      '### Social Handles (for watermarks/footers)',
+      brandConfig.socials.twitter ? `- Twitter: ${brandConfig.socials.twitter}` : '',
+      brandConfig.socials.telegram ? `- Telegram: ${brandConfig.socials.telegram}` : '',
+      brandConfig.socials.website ? `- Website: ${brandConfig.socials.website}` : '',
+      '',
+      '### Image Style Guidelines',
+      `- **Aesthetic:** ${brandConfig.imageStyle.aesthetic}`,
+      `- **Patterns:** ${brandConfig.imageStyle.patterns}`,
+      brandConfig.imageStyle.mascot ? `- **Mascot:** ${brandConfig.imageStyle.mascot}` : '',
+      `- **Default Branding:** ${brandConfig.imageStyle.defaultBranding}`,
+      '',
+      '⚠️ **ALWAYS use these CI values when generating images or content!**',
+      ''
+    );
+  }
+
   // Add RAG context if available
   if (ragContext) {
     parts.push(ragContext, '');
@@ -465,7 +547,33 @@ export function buildLoopPrompt(
       );
     }
     parts.push(
-      '**Respond to these tasks in your summary!** Acknowledge receipt and provide status/action.',
+      '---',
+      '⚠️ **CRITICAL: EXECUTE THESE TASKS NOW!**',
+      '',
+      '### Required Actions:',
+      '- If task requires **image generation** → `spawn_worker` with `servers: ["imagen", "filesystem"]`',
+      '- If task requires **Telegram posting** → `spawn_worker` with `servers: ["telegram"]`',
+      '- If task requires **image + Telegram** → `spawn_worker` with `servers: ["imagen", "telegram", "filesystem"]`',
+      '- If task requires **web research** → `spawn_worker` with `servers: ["fetch"]`',
+      '',
+      '### ⛔ FORBIDDEN - DO NOT DO THESE:',
+      '- **DO NOT create HTML files** to generate graphics',
+      '- **DO NOT create SVG files** to generate graphics',
+      '- **DO NOT write JavaScript/TypeScript** code to create images',
+      '- **DO NOT use canvas or any code-based image creation**',
+      '',
+      '### ✅ CORRECT WAY TO CREATE IMAGES:',
+      '```json',
+      '{',
+      '  "type": "spawn_worker",',
+      '  "task": "Generate marketing banner: [YOUR PROMPT]",',
+      '  "servers": ["imagen", "filesystem"],',
+      '  "timeout": 180000',
+      '}',
+      '```',
+      '',
+      'The imagen MCP server uses Google Imagen AI to generate real images!',
+      '**DO NOT just acknowledge - EXECUTE with spawn_worker actions!**',
       ''
     );
   }

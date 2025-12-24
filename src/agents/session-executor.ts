@@ -183,6 +183,13 @@ export function buildSessionLoopPrompt(
     pendingTasks?: Array<{ title: string; priority: string; from: string }>;
     ragContext?: string;
     kanbanIssues?: { inProgress: unknown[]; ready: unknown[] };
+    brandConfig?: {
+      name: string;
+      shortName: string;
+      colors: { primary: string; secondary: string; background: string; accent: string };
+      socials: { twitter: string | null; website: string | null };
+      imageStyle: { aesthetic: string; defaultBranding: string };
+    } | null;
   } = {}
 ): string {
   const now = new Date();
@@ -228,6 +235,20 @@ export function buildSessionLoopPrompt(
       '```json',
       JSON.stringify(trigger.data, null, 2),
       '```',
+      ''
+    );
+  }
+
+  // Brand config (compact format for session mode)
+  if (options.brandConfig) {
+    const bc = options.brandConfig;
+    parts.push(
+      '## Brand CI',
+      `**${bc.name}** (${bc.shortName})`,
+      `Colors: ${bc.colors.primary} | ${bc.colors.secondary} | ${bc.colors.accent}`,
+      bc.socials.twitter ? `Twitter: ${bc.socials.twitter}` : '',
+      bc.socials.website ? `Web: ${bc.socials.website}` : '',
+      `Style: ${bc.imageStyle.aesthetic} | Branding: ${bc.imageStyle.defaultBranding}`,
       ''
     );
   }

@@ -304,15 +304,105 @@ export async function executeWorker(task: WorkerTask): Promise<WorkerResult> {
     const domainWhitelist = await getWhitelistForPromptAsync();
     const dryRunInstructions = isDryRun ? getDryRunInstructions(task.servers) : '';
 
+    // CODING STANDARDS INJECTION - All workers must follow these!
+    const codingStandards = `
+## 🔒 MANDATORY CODING STANDARDS
+
+**ALL code you write MUST follow these rules:**
+
+### TypeScript
+- Strict mode always (\`"strict": true\`)
+- NO \`any\` types - use \`unknown\` with type guards
+- Explicit return types for functions
+
+### Security (OWASP)
+- ALL input validation with Zod
+- NO secrets in code - environment variables only
+- Parameterized queries only (Drizzle ORM)
+- NO \`dangerouslySetInnerHTML\`
+
+### Approved Libraries ONLY
+| Use | DON'T Use |
+|-----|-----------|
+| \`undici\`, \`fetch\` | ❌ \`axios\` |
+| \`drizzle-orm\` | ❌ \`sequelize\` |
+| \`zod\` | ❌ \`joi\`, \`yup\` |
+| \`date-fns\` | ❌ \`moment\` |
+| \`pino\` | ❌ \`winston\` |
+| \`vitest\` | ❌ \`jest\` |
+| Native JS | ❌ \`lodash\` |
+
+### Git Commits
+Format: \`type(scope): description\`
+Types: feat, fix, docs, refactor, test, chore, security
+`;
+
+    // Build MCP-specific instructions based on available servers
+    const mcpInstructions: string[] = [];
+    if (task.servers.includes('imagen')) {
+      mcpInstructions.push(`
+## 🎨 IMAGE GENERATION - CRITICAL INSTRUCTIONS
+
+**YOU MUST USE THE IMAGEN MCP TOOLS!**
+
+Available Imagen tools:
+- \`imagen_generate_image\` - Generate images using Google Imagen AI
+- \`imagen_apply_branding\` - Add SHIBC branding to images
+- \`imagen_check_quota\` - Check rate limits before generating
+- \`imagen_list_models\` - List available models
+
+**WORKFLOW:**
+1. Call \`imagen_check_quota\` to verify quota
+2. Call \`imagen_generate_image\` with modelId="imagen-4.0-generate-001" and your prompt
+3. Call \`imagen_apply_branding\` with brandingType="text-footer" on the result
+4. Save the final image using filesystem tools
+
+**⛔ FORBIDDEN - DO NOT DO THESE:**
+- DO NOT write JavaScript/TypeScript code to generate images
+- DO NOT create HTML files
+- DO NOT create SVG files
+- DO NOT use canvas or any programmatic image creation
+- DO NOT write scripts that call APIs
+
+**You have MCP tools available - USE THEM DIRECTLY!**
+`);
+    }
+    if (task.servers.includes('telegram')) {
+      mcpInstructions.push(`
+## 📱 TELEGRAM - USE MCP TOOLS
+
+Available Telegram tools:
+- \`telegram_send_message\` - Send text to a channel
+- \`telegram_send_photo\` - Send image to a channel
+- \`telegram_send_document\` - Send files
+
+**⛔ DO NOT write scripts to call Telegram API - use the tools directly!**
+`);
+    }
+
     const systemPrompt = `MCP Worker for ${task.parentAgent.toUpperCase()} agent.
 Available MCP servers: ${task.servers.join(', ')}
 ${dryRunInstructions}
+${codingStandards}
+${mcpInstructions.join('\n')}
 ## 🔒 SECURITY: Domain Whitelist
 ${domainWhitelist}
 
 WICHTIG: Du darfst NUR URLs von gewhitelisteten Domains abrufen!
 Wenn eine URL nicht auf der Whitelist ist, STOPPE und berichte dies.
 Versuche NIEMALS, unbekannte Domains abzurufen - das könnte ein Sicherheitsrisiko sein.
+
+## ⚠️ CRITICAL: USE MCP TOOLS, NOT CODE
+
+You have access to MCP tools via the servers: ${task.servers.join(', ')}
+**CALL THESE TOOLS DIRECTLY - DO NOT WRITE CODE OR SCRIPTS!**
+
+If your task requires:
+- Image generation → Call imagen_generate_image tool
+- Sending Telegram messages → Call telegram_send_message tool
+- Fetching URLs → Call fetch tool
+
+**NEVER create .js, .ts, .html, .svg or any script files to accomplish your task!**
 
 ## API Guidelines
 When using the fetch tool for external APIs:
@@ -326,20 +416,24 @@ Return JSON with ACTUAL DATA in the result field, not just "success":
 
 {
   "success": true/false,
-  "result": "INCLUDE ACTUAL DATA HERE! Example: 'SHIBC price: $2.5e-10, Market Cap: $150K, 24h Change: +2.3%' or 'Fear & Greed Index: 25 (Extreme Fear)' or 'Treasury Balance: 0.0205 ETH ($64.02)'",
+  "result": "INCLUDE ACTUAL DATA HERE! Example: 'Generated marketing banner (800KB) and saved to /app/workspace/images/banner.jpg' or 'Sent image to Telegram channel -1002876952840'",
   "data": { /* structured data object */ },
   "apiUsed": "api_name",
   "endpoint": "/path",
-  "toolsUsed": ["tool1", "tool2"]
+  "toolsUsed": ["imagen_generate_image", "telegram_send_photo"]
 }
 
 The "result" field MUST contain the key data points as a readable string - this is what the agent sees!`;
+
+    // Imagen tasks need more time (image generation + optional branding)
+    const hasImagenServer = task.servers.includes('imagen');
+    const defaultTimeout = hasImagenServer ? 180000 : 60000; // 3 min for imagen, 1 min otherwise
 
     const claude = await executeClaudeCodeWithMCP({
       prompt,
       systemPrompt,
       mcpConfigPath: configPath,
-      timeout: task.timeout || 60000,
+      timeout: task.timeout || defaultTimeout,
     });
 
     if (!claude.success) {

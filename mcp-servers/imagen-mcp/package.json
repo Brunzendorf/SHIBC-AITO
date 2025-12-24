@@ -1,6 +1,6 @@
 {
   "name": "shibc-aito-imagen-mcp",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "MCP server for Google Imagen image generation using the official @modelcontextprotocol/sdk.",
   "type": "module",
   "main": "dist/index.js",

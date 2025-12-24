@@ -1002,7 +1002,577 @@ const initiative = await runner.createFromProposal('cmo', {
 
 ---
 
+## 11. CTO Development Environment (NEU)
+
+> **Referenz:** [CTO-MCP-INVENTORY.md](./CTO-MCP-INVENTORY.md), [CTO-DEV-ENVIRONMENT.md](./CTO-DEV-ENVIRONMENT.md)
+
+### 🔴 KRITISCH
+
+#### TASK-041: Portainer MCP Server ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-23)
+**Aufwand:** 24h → 8h (effizientere Implementierung)
+**Priorität:** 🔴 HOCH
+**Datei:** `mcp-servers/portainer-mcp/`
+
+**Lösung:**
+14 Tools für Container/Stack/Image Management:
+- `portainer_endpoints`, `portainer_containers`, `portainer_container_inspect`
+- `portainer_container_start/stop/restart`, `portainer_container_logs`
+- `portainer_stacks`, `portainer_stack_start/stop`, `portainer_stack_file`
+- `portainer_images`, `portainer_image_pull`, `portainer_system_info`
+- X-API-Key Authentication
+- In mcp_servers.json und CTO Profile integriert
+
+---
+
+#### TASK-042: Woodpecker CI MCP Server ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-23)
+**Aufwand:** 24h → 8h (effizientere Implementierung)
+**Priorität:** 🔴 HOCH
+**Datei:** `mcp-servers/woodpecker-mcp/`
+
+**Lösung:**
+14 Tools für CI/CD Pipeline Management:
+- `woodpecker_user`, `woodpecker_repos`, `woodpecker_repo`, `woodpecker_repo_activate`
+- `woodpecker_pipelines`, `woodpecker_pipeline`, `woodpecker_pipeline_create`
+- `woodpecker_pipeline_restart`, `woodpecker_pipeline_cancel`
+- `woodpecker_pipeline_approve`, `woodpecker_pipeline_decline`
+- `woodpecker_logs`, `woodpecker_secrets`, `woodpecker_version`
+- Bearer Token Authentication
+- In mcp_servers.json und CTO Profile integriert
+
+---
+
+### 🟠 HOCH
+
+#### TASK-043: Qdrant MCP Server ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-23)
+**Aufwand:** 16h → 4h (effizientere Implementierung)
+**Priorität:** 🟠 MITTEL
+**Datei:** `mcp-servers/qdrant-mcp/`
+
+**Lösung:**
+10 Tools für Qdrant Vector Database:
+- `qdrant_list_collections`, `qdrant_get_collection`
+- `qdrant_create_collection`, `qdrant_delete_collection`
+- `qdrant_search` - Similarity search mit Filtern
+- `qdrant_upsert_points`, `qdrant_get_points`, `qdrant_delete_points`
+- `qdrant_scroll` - Pagination
+- `qdrant_count` - Point counting
+
+**Features:**
+- Zod-Validierung aller Inputs
+- Filter-Support für komplexe Queries
+- Pagination mit Scroll-API
+- README.md mit Beispielen
+- In mcp_servers.json und Dockerfile integriert
+
+---
+
+#### TASK-044: n8n MCP Server ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 16h → 0.5h (NPM Package verwendet)
+**Priorität:** 🟠 MITTEL
+**Datei:** `.claude/mcp_servers.json`
+
+**Lösung:**
+NPM Package `@illuminaresolutions/n8n-mcp-server` verwendet:
+- Workflows CRUD, Execute
+- Executions verwalten
+- Credentials (nur Namen, sicher)
+- 7.2K Downloads, 119 Stars
+
+**Config:**
+```json
+{
+  "n8n": {
+    "command": "npx",
+    "args": ["-y", "@illuminaresolutions/n8n-mcp-server"],
+    "env": {
+      "N8N_API_URL": "${N8N_API_URL}",
+      "N8N_API_KEY": "${N8N_API_KEY}"
+    }
+  }
+}
+```
+
+**Quelle:** [npm](https://www.npmjs.com/package/@illuminaresolutions/n8n-mcp-server)
+
+---
+
+#### TASK-045: GitHub MCP Integration ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-23)
+**Aufwand:** 8h → 0.5h (bereits konfiguriert)
+**Priorität:** 🟡 NIEDRIG (NPM Package existiert)
+**Datei:** `.claude/mcp_servers.json`
+
+**Lösung:**
+- Bereits in mcp_servers.json konfiguriert
+- Package: `@modelcontextprotocol/server-github`
+- Token via `GITHUB_TOKEN` env var
+- CTO hat Zugriff über Worker
+
+**Config:**
+```json
+{
+  "github": {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+    },
+    "description": "GitHub API - repos, issues, PRs, files"
+  }
+}
+```
+
+---
+
+#### TASK-046: CTO Profile Überarbeitung ✅ DONE
+**Status:** 🔧 IMPROVEMENT → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 8h → 2h (effizientere Implementierung)
+**Priorität:** 🟠 HOCH
+**Datei:** `profiles/cto.md`
+
+**Lösung:**
+CTO Profile an neue MCP-Architektur angepasst:
+
+**Aktualisierungen:**
+- MCP Server Tabelle erweitert mit: qdrant, n8n, nginx, certbot, dns
+- Worker Task Templates für alle 5 neuen MCPs hinzugefügt
+- Loop Actions mit Infrastructure Management erweitert
+- Full Subdomain Deployment Workflow dokumentiert
+
+**Neue MCP-Tabelle:**
+| Server | Hauptloop | Worker | Verwendung |
+|--------|-----------|--------|------------|
+| `filesystem` | ✅ JA | ✅ JA | Workspace |
+| `fetch` | ✅ JA | ✅ JA | HTTP/APIs |
+| `portainer` | ❌ NEIN | ✅ JA | Container (high context) |
+| `woodpecker` | ❌ NEIN | ✅ JA | CI/CD (high context) |
+| `qdrant` | ❌ NEIN | ✅ JA | Vector Search |
+| `n8n` | ❌ NEIN | ✅ JA | Automation |
+| `github` | ❌ NEIN | ✅ JA | Repos, PRs |
+| `nginx` | ❌ NEIN | ✅ JA | Reverse Proxy |
+| `certbot` | ❌ NEIN | ✅ JA | SSL Certificates |
+| `dns` | ❌ NEIN | ✅ JA | DNS Records |
+
+---
+
+### Zusammenfassung CTO Development Environment
+
+| Task | Priorität | Aufwand | Abhängigkeiten |
+|------|-----------|---------|----------------|
+| TASK-041: Portainer MCP | 🔴 HOCH | 24h | - |
+| TASK-042: Woodpecker MCP | 🔴 HOCH | 24h | - |
+| TASK-043: Qdrant MCP | 🟠 MITTEL | 16h | - |
+| TASK-044: n8n MCP | 🟠 MITTEL | 16h | - |
+| TASK-045: GitHub MCP | 🟡 NIEDRIG | 8h | - |
+| TASK-046: CTO Profile | 🟠 HOCH | 8h | TASK-041 bis TASK-045 |
+| **GESAMT** | | **96h (~12 Tage)** | |
+
+**Empfohlene Reihenfolge:**
+1. TASK-045 (GitHub) - Schnellster Win, NPM Package
+2. TASK-041 (Portainer) - Wichtigste Infrastruktur
+3. TASK-042 (Woodpecker) - CI/CD Pipeline
+4. TASK-044 (n8n) - Automation
+5. TASK-043 (Qdrant) - Intelligence
+6. TASK-046 (CTO Profile) - Alles zusammenführen
+
+---
+
+## 12. CTO Full Autonomy - Erweitert (NEU)
+
+> **Referenz:** [CTO-FULL-AUTONOMY.md](./CTO-FULL-AUTONOMY.md), [CTO-TEAM-STRUCTURE.md](./CTO-TEAM-STRUCTURE.md)
+
+### 🔴 KRITISCH - Neue MCP Server
+
+#### TASK-047: Git MCP Server ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-23)
+**Aufwand:** 16h → 6h (effizientere Implementierung)
+**Priorität:** 🔴 KRITISCH
+**Datei:** `mcp-servers/git-mcp/`
+
+**Lösung:**
+13 Tools für lokale Git Operationen:
+- `git_clone`, `git_init`, `git_status`, `git_add`, `git_commit`
+- `git_push`, `git_pull`, `git_branch`, `git_log`, `git_diff`
+- `git_stash`, `git_merge`, `git_remote`
+- simple-git Library
+- Path Restriction via ALLOWED_PATHS
+- Forbidden Patterns: `push --force`, `reset --hard`
+- README.md erstellt, in mcp_servers.json integriert
+
+---
+
+#### TASK-048: Shell MCP Server ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-23)
+**Aufwand:** 16h → 6h (effizientere Implementierung)
+**Priorität:** 🔴 KRITISCH
+**Datei:** `mcp-servers/shell-mcp/`
+
+**Lösung:**
+7 Tools für sichere Shell-Operationen:
+- `shell_exec` - Befehl ausführen (Whitelist-basiert)
+- `shell_which` - Befehl-Pfad prüfen
+- `shell_env` - Umgebungsvariable lesen
+- `shell_file_exists` - Datei prüfen
+- `shell_read_file` - Datei lesen
+- `shell_write_file` - Datei schreiben
+- `shell_list_dir` - Verzeichnis auflisten
+- Command Whitelist: npm, node, npx, tsc, vitest, docker, ls, cat, head, tail, wc, grep, find, pwd, echo, mkdir, cp, mv, touch, rm
+- Forbidden Patterns: rm -rf /, sudo, push --force, reset --hard
+- Path Restriction via ALLOWED_PATHS
+- Configurable Timeout (default 60s, max 10min)
+- README.md erstellt, in mcp_servers.json integriert
+
+---
+
+#### TASK-049: Playwright MCP Konfiguration ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-23)
+**Aufwand:** 4h → 0.5h (NPM Package, nur Config-Update)
+**Priorität:** 🔴 KRITISCH
+**Datei:** `.claude/mcp_servers.json`
+
+**Lösung:**
+- Korrektes Package: `@playwright/mcp@latest` (Microsoft, nicht Anthropic)
+- Accessibility-Tree basiert (kein Vision-Model nötig)
+- Headless Modus via DISPLAY env var
+- In mcp_servers.json aktualisiert
+
+**Config:**
+```json
+{
+  "playwright": {
+    "command": "npx",
+    "args": ["-y", "@playwright/mcp@latest"],
+    "env": {
+      "DISPLAY": ":99"
+    },
+    "description": "Microsoft Playwright MCP - browser automation via accessibility tree"
+  }
+}
+```
+
+---
+
+### 🟠 HOCH - Infrastructure MCPs
+
+#### TASK-050: nginx MCP Server ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 16h → 4h (effizientere Implementierung)
+**Priorität:** 🟠 HOCH
+**Datei:** `mcp-servers/nginx-mcp/`
+
+**Lösung:**
+9 Tools für nginx Virtual Host Management:
+- `nginx_list_sites` - Alle Sites auflisten
+- `nginx_get_site` - Site-Config lesen
+- `nginx_create_reverse_proxy` - Reverse Proxy erstellen
+- `nginx_create_static_site` - Static Site erstellen
+- `nginx_enable_site` - Site aktivieren
+- `nginx_disable_site` - Site deaktivieren
+- `nginx_delete_site` - Site löschen
+- `nginx_test_config` - Config validieren
+- `nginx_reload` - nginx neuladen
+
+**Features:**
+- Domain-Whitelist via ALLOWED_DOMAINS
+- Automatische Subdomain-Generierung
+- Template-basierte Config-Erstellung
+- In mcp_servers.json und Dockerfile integriert
+
+---
+
+#### TASK-051: Certbot MCP Server ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 8h → 3h (effizientere Implementierung)
+**Priorität:** 🟠 HOCH
+**Datei:** `mcp-servers/certbot-mcp/`
+
+**Lösung:**
+5 Tools für SSL-Zertifikat-Management:
+- `certbot_list` - Alle Zertifikate auflisten
+- `certbot_status` - Zertifikat-Status prüfen
+- `certbot_create` - Neues Zertifikat erstellen (Let's Encrypt)
+- `certbot_renew` - Zertifikat(e) erneuern
+- `certbot_delete` - Zertifikat löschen
+
+**Features:**
+- Domain-Whitelist via ALLOWED_DOMAINS
+- Staging-Modus für Tests
+- Dry-run Unterstützung
+- Webroot und Standalone Modi
+- Email-Konfiguration via CERTBOT_EMAIL
+- In mcp_servers.json und Dockerfile integriert
+
+---
+
+#### TASK-052: DNS MCP Server ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 8h → 3h (effizientere Implementierung)
+**Priorität:** 🟡 MITTEL
+**Datei:** `mcp-servers/dns-mcp/`
+
+**Lösung:**
+6 Tools für Cloudflare DNS Management:
+- `dns_list_zones` - Alle Zonen auflisten
+- `dns_list_records` - DNS Records einer Zone auflisten
+- `dns_create_record` - Record erstellen (A, AAAA, CNAME, TXT, MX)
+- `dns_update_record` - Record aktualisieren
+- `dns_delete_record` - Record löschen
+- `dns_verify` - DNS-Propagation via DNS-over-HTTPS prüfen
+
+**Features:**
+- Domain-Whitelist via ALLOWED_DOMAINS
+- Cloudflare API Bearer Token Auth
+- Zone ID als Default konfigurierbar
+- Support für proxied und TTL-Optionen
+- MX-Records mit Priority
+- In mcp_servers.json und Dockerfile integriert
+
+---
+
+### 🟠 HOCH - CTO Sub-Agent Profiles ✅ ALL DONE
+
+#### TASK-053: Architect Agent Profile ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 4h → 0.5h
+**Datei:** `profiles/cto-architect.md`
+
+**Lösung:** Sub-Agent für System Design - MCP: github, qdrant, filesystem, fetch
+
+---
+
+#### TASK-054: Developer Agent Profile ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 4h → 0.5h
+**Datei:** `profiles/cto-developer.md`
+
+**Lösung:** Sub-Agent für Backend Implementation - MCP: git, github, shell, filesystem, woodpecker
+
+---
+
+#### TASK-055: Frontend Agent Profile ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 4h → 0.5h
+**Datei:** `profiles/cto-frontend.md`
+
+**Lösung:** Sub-Agent für UI/React - MCP: git, github, filesystem, playwright, mui, shell
+
+---
+
+#### TASK-056: DevOps Agent Profile ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 4h → 0.5h
+**Datei:** `profiles/cto-devops.md`
+
+**Lösung:** Sub-Agent für Infrastructure - MCP: portainer, woodpecker, nginx, certbot, dns, n8n, shell, git, filesystem
+Full Subdomain Deployment Workflow dokumentiert.
+
+---
+
+#### TASK-057: QA Agent Profile ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 4h → 0.5h
+**Datei:** `profiles/cto-qa.md`
+
+**Lösung:** Sub-Agent für Quality - MCP: playwright, woodpecker, github, shell, filesystem
+
+---
+
+#### TASK-058: Security Agent Profile ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 4h → 0.5h
+**Datei:** `profiles/cto-security.md`
+
+**Lösung:** Sub-Agent für Security - MCP: shell, woodpecker, github, qdrant, filesystem. OWASP Top 10 Checkliste.
+
+---
+
+#### TASK-059: SRE Agent Profile ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 4h → 0.5h
+**Datei:** `profiles/cto-sre.md`
+
+**Lösung:** Sub-Agent für Reliability - MCP: portainer, fetch, n8n, qdrant, filesystem. SLO Targets definiert.
+
+---
+
+#### TASK-060: Release Manager Agent Profile ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-24)
+**Aufwand:** 4h → 0.5h
+**Datei:** `profiles/cto-release.md`
+
+**Lösung:** Sub-Agent für Releases - MCP: github, woodpecker, portainer, n8n, git, filesystem. SemVer + Changelog Workflow.
+
+---
+
+### 🟠 HOCH - Coding Guidelines & Templates ✅ ALL DONE
+
+#### TASK-061: Coding Guidelines Document ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-23)
+**Aufwand:** 4h → bereits vorhanden
+**Priorität:** 🔴 HOCH
+**Datei:** `docs/CODING-GUIDELINES.md`
+
+**Lösung:** Umfassende Guidelines dokumentiert:
+- TypeScript Strict Mode
+- ESLint/Prettier Config
+- Naming Conventions
+- Conventional Commits
+- Testing Standards
+- Security Best Practices
+- SHIBC Website Stack Referenz
+
+---
+
+#### TASK-062: Approved Libraries Catalog ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-23)
+**Aufwand:** 2h → bereits vorhanden
+**Priorität:** 🔴 HOCH
+**Datei:** `config/approved-libraries.yml`
+
+**Lösung:** Vollständiger Katalog mit 450+ Zeilen:
+- Runtime (Node 20.x, TypeScript 5.7.x)
+- Frameworks (Fastify, Next.js 15, grammY)
+- Database (Drizzle, pg, ioredis)
+- Testing (Vitest 3, Playwright)
+- React Ecosystem (Zustand, MUI 7)
+- Blockchain (viem, Hardhat)
+- Status: approved, preferred, deprecated, forbidden
+
+---
+
+#### TASK-063: Project Templates ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-23)
+**Aufwand:** 8h → bereits vorhanden
+**Priorität:** 🟠 HOCH
+**Datei:** `templates/`
+
+**Lösung:** 4 komplette Templates erstellt:
+- `typescript-api/` - Fastify REST API
+- `typescript-bot/` - grammY Telegram Bot
+- `nextjs-app/` - Next.js 15 mit Tailwind
+- `smart-contract/` - Hardhat + Solidity
+
+Jedes Template enthält:
+- src/ Struktur
+- package.json mit approved libraries
+- tsconfig.json (strict)
+- Dockerfile
+- docker-compose.yml
+- .woodpecker.yml (CI/CD)
+- README.md
+
+---
+
+### 7-Phasen Entwicklungsworkflow
+
+> **WICHTIG:** Alle Tasks in diesem Dokument MÜSSEN nach dem 7-Phasen-Workflow entwickelt werden!
+>
+> **Referenz:** [CLAUDE.md](../CLAUDE.md) - Abschnitt "7-Phasen Workflow"
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    7-PHASEN WORKFLOW                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. PLANEN        → Anforderungen, Scope, Sicherheit definieren │
+│  2. DOKU FINDEN   → Relevante Dokumentation recherchieren       │
+│  3. ANALYSIEREN   → Bestehenden Code verstehen, Patterns finden │
+│  4. IMPLEMENTIEREN → Code schreiben nach Guidelines             │
+│  5. TESTEN        → Unit Tests, Integration Tests, E2E          │
+│  6. DOKU UPDATEN  → README, Profile, API Docs aktualisieren     │
+│  7. FINALISIEREN  → Commit, PR, Integration in System           │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Jeder Task hat die 7 Phasen als Checkliste!**
+
+---
+
+### Zusammenfassung CTO Full Autonomy ✅ KOMPLETT
+
+| Kategorie | Tasks | Erledigt | Status |
+|-----------|-------|----------|--------|
+| **Neue MCPs (Kritisch)** | 3 (git, shell, playwright) | 3 | ✅ 100% |
+| **Infrastructure MCPs** | 3 (nginx, certbot, dns) | 3 | ✅ 100% |
+| **Sub-Agent Profiles** | 8 | 8 | ✅ 100% |
+| **Guidelines & Templates** | 3 | 3 | ✅ 100% |
+| **GESAMT** | **17 Tasks** | **17** | **✅ 100%** |
+
+**Kombiniert mit Section 11:**
+| Section | Tasks | Erledigt | Status |
+|---------|-------|----------|--------|
+| Section 11 (Basis MCPs) | 6 | 6 | ✅ 100% |
+| Section 12 (Full Autonomy) | 17 | 17 | ✅ 100% |
+| **TOTAL CTO AUTONOMY** | **23 Tasks** | **23** | **✅ 100%** |
+
+**Alle Phasen erledigt:**
+1. ✅ **Phase 1 - NPM Ready:** TASK-045 (GitHub), TASK-049 (Playwright)
+2. ✅ **Phase 2 - Kritische MCPs:** TASK-041 (Portainer), TASK-042 (Woodpecker), TASK-047 (Git), TASK-048 (Shell)
+3. ✅ **Phase 3 - Infrastructure:** TASK-050 (nginx), TASK-051 (Certbot), TASK-044 (n8n)
+4. ✅ **Phase 4 - Intelligence:** TASK-043 (Qdrant), TASK-052 (DNS)
+5. ✅ **Phase 5 - Guidelines:** TASK-061 (Coding), TASK-062 (Libraries), TASK-063 (Templates)
+6. ✅ **Phase 6 - Sub-Agents:** TASK-053-060 (8 Profile)
+7. ✅ **Phase 7 - CTO Update:** TASK-046 (CTO Profile überarbeiten)
+
+**CTO FULL AUTONOMY: KOMPLETT!** (2025-12-24)
+
+---
+
+## 13. MCP Plugin Architektur (NEU)
+
+#### TASK-064: Shared Adapter System ✅ DONE
+**Status:** ✨ FEATURE → ✅ ERLEDIGT (2025-12-23)
+**Aufwand:** 8h
+**Priorität:** 🔴 HOCH
+**Datei:** `mcp-servers/shared/`
+
+**Lösung:**
+Erweiterbares Adapter-System mit Interfaces für schnelle Integration neuer Komponenten:
+
+**Struktur:**
+```
+mcp-servers/shared/
+├── package.json          # @shibc/mcp-shared
+├── tsconfig.json
+└── src/
+    ├── index.ts          # Barrel exports
+    ├── types.ts          # Alle Interfaces
+    ├── base.ts           # Base Classes & Helpers
+    └── registry.ts       # Adapter Registry
+```
+
+**Interfaces:**
+- `IAdapter` - Basis-Interface
+- `IApiAdapter` - REST API Adapter
+- `ICICDAdapter` - CI/CD (Woodpecker, Jenkins, GitLab CI)
+- `IContainerAdapter` - Container (Portainer, Docker, K8s)
+- `IGitAdapter` - Git Operationen
+- `IShellAdapter` - Shell/CLI
+- `ICMSAdapter` - CMS (Directus, Strapi)
+- `IMessagingAdapter` - Messaging (Telegram, Discord)
+
+**Helpers:**
+- `BaseAdapter`, `BaseApiAdapter` - Abstrakte Basisklassen
+- `ToolBuilder` - Fluent API für MCP Tools
+- `PathValidator`, `CommandValidator` - Security
+- `successResult()`, `errorResult()` - Result Helpers
+- `AdapterRegistry` - Factory Pattern mit Singleton
+- `@RegisterAdapter` Decorator
+
+**Dokumentation:** `docs/MCP-PLUGIN-DEVELOPMENT.md`
+
+---
+
 ## Referenzen
 
 - [FEATURE-REFERENCE.md](./FEATURE-REFERENCE.md) - Vollständige Feature-Dokumentation
 - [AITO-3.0-COMPLETE.md](./AITO-3.0-COMPLETE.md) - System-Übersicht
+- [CTO-MCP-INVENTORY.md](./CTO-MCP-INVENTORY.md) - MCP Server Details
+- [CTO-DEV-ENVIRONMENT.md](./CTO-DEV-ENVIRONMENT.md) - Architektur-Übersicht
+- [CTO-FULL-AUTONOMY.md](./CTO-FULL-AUTONOMY.md) - Vollständiger Autonomie-Flow
+- [CTO-TEAM-STRUCTURE.md](./CTO-TEAM-STRUCTURE.md) - Agent Team Struktur

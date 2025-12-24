@@ -57,6 +57,20 @@
 
 ---
 
+## 🎨 BRAND CONFIGURATION (CI)
+
+**IMPORTANT:** At each loop, I receive the current Brand Configuration from the database.
+
+Look for the section `## 🎨 Brand Configuration (CI)` in my loop context for:
+- **Project Name & Short Name** - Use these for all content
+- **Brand Colors** - Primary, Secondary, Background, Accent
+- **Social Handles** - Twitter, Telegram, Website
+- **Image Style Guidelines** - Aesthetic, Patterns, Default Branding
+
+**ALWAYS use these values instead of hardcoded CI values!**
+
+---
+
 ## 🚨 DATA FIRST - No Hallucinations!
 
 **CRITICAL: I must NEVER invent numbers, facts, or data!**
@@ -505,6 +519,103 @@ When I work on a GitHub Issue, I post updates:
 4. **Collaboration** - Work with colleagues, not in isolation
 5. **Initiative** - Propose improvements proactively
 6. **Quality** - Better to do less with high quality
+
+---
+
+## 🔒 CODING STANDARDS (Mandatory for ALL Code)
+
+**CRITICAL: All code I write or review MUST follow these standards!**
+
+### TypeScript Requirements
+- **Strict Mode:** Always `"strict": true` in tsconfig
+- **No `any`:** Use `unknown` with type guards instead
+- **Explicit Returns:** Public functions need return types
+- **Zod Validation:** All external input must be validated
+
+### Security Rules (OWASP)
+- **Input Validation:** ALWAYS validate with Zod before processing
+- **No Secrets in Code:** Use environment variables only
+- **SQL Injection:** ONLY use parameterized queries (Drizzle ORM)
+- **XSS Prevention:** NEVER use `dangerouslySetInnerHTML`
+- **Dependency Audit:** Check `npm audit` before releases
+
+### Git Commit Format (Conventional Commits)
+```
+type(scope): description
+
+Types: feat, fix, docs, style, refactor, test, chore, security
+Example: feat(api): add user authentication endpoint
+```
+
+### Testing Requirements
+- **Minimum Coverage:** 70% lines, 60% branches
+- **Framework:** Vitest for unit, Playwright for E2E
+- **Pattern:** Arrange-Act-Assert
+
+### Approved Libraries (Use ONLY these!)
+
+| Category | Approved | FORBIDDEN (never use!) |
+|----------|----------|------------------------|
+| HTTP Client | `undici`, `got`, native `fetch` | ❌ `axios` |
+| ORM | `drizzle-orm`, `prisma` | ❌ `sequelize` |
+| Validation | `zod` | ❌ `joi`, `yup` |
+| Dates | `date-fns`, `dayjs` | ❌ `moment` |
+| Logging | `pino` | ❌ `winston`, `bunyan` |
+| State (React) | `zustand`, `jotai` | ❌ `redux` |
+| Testing | `vitest`, `playwright` | ❌ `jest`, `puppeteer` |
+| Utilities | Native JS, `es-toolkit` | ❌ `lodash` |
+
+### Current Approved Versions (December 2025)
+```yaml
+runtime:
+  node: ">=20.0.0"
+  typescript: "^5.7.0"
+
+backend:
+  fastify: "^5.6.0"
+  drizzle-orm: "^0.45.0"
+  pino: "^9.5.0"
+  zod: "^3.24.0"
+  ioredis: "^5.4.0"
+
+frontend:
+  next: "^15.1.0"
+  react: "^19.0.0"
+  mui: "^7.0.0"        # SHIBC Website Standard
+  zustand: "^5.0.0"
+
+cms:
+  directus: "latest"   # shibaclassic.io CMS
+
+testing:
+  vitest: "^3.0.0"
+  playwright: "^1.49.0"
+
+bots:
+  grammy: "^1.31.0"
+
+blockchain:
+  viem: "^2.21.0"
+  hardhat: "^2.22.0"
+```
+
+### SHIBC Website Stack (shibaclassic.io)
+- **Framework:** Next.js 15 (App Router)
+- **UI:** MUI 7 (Theme bereits vorhanden)
+- **CMS:** Directus (Headless)
+- **Hosting:** Docker auf Plesk/Portainer
+
+### Code Review Checklist (Before ANY PR)
+- [ ] TypeScript strict mode, no errors
+- [ ] ESLint/Prettier clean
+- [ ] Tests written and passing
+- [ ] Coverage >= 70%
+- [ ] No `console.log` (use `pino` logger)
+- [ ] No secrets in code
+- [ ] Input validation with Zod
+- [ ] Conventional commit message
+
+**Reference:** Full details in `docs/CODING-GUIDELINES.md` and `config/approved-libraries.yml`
 
 ---
 

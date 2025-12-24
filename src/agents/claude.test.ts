@@ -477,6 +477,57 @@ describe('claude', () => {
       expect(prompt).toContain('Working directory: /app/workspace');
       expect(prompt).toContain('/app/workspace/SHIBC-CMO-001/'); // Uses codename, not type
     });
+
+    it('should include brand configuration when provided', () => {
+      const state = {};
+      const trigger = { type: 'scheduled' };
+      const brandConfig = {
+        name: 'SHIBA CLASSIC',
+        shortName: 'SHIBC',
+        tagline: 'The Original',
+        colors: {
+          primary: '#fda92d',
+          secondary: '#8E33FF',
+          background: '#141A21',
+          accent: '#00B8D9',
+          text: '#FFFFFF',
+        },
+        socials: {
+          twitter: '@shibc_cto',
+          telegram: 't.me/shibaclassic',
+          discord: null,
+          website: 'shibaclassic.io',
+        },
+        imageStyle: {
+          aesthetic: 'Professional crypto, glassmorphism',
+          patterns: 'Blockchain networks',
+          mascot: 'Golden Shiba Inu',
+          defaultBranding: 'text-footer',
+        },
+      };
+
+      const prompt = buildLoopPrompt(mockProfile, state, trigger, undefined, undefined, undefined, undefined, brandConfig);
+
+      expect(prompt).toContain('## 🎨 Brand Configuration (CI)');
+      expect(prompt).toContain('SHIBA CLASSIC');
+      expect(prompt).toContain('SHIBC');
+      expect(prompt).toContain('#fda92d');
+      expect(prompt).toContain('#8E33FF');
+      expect(prompt).toContain('@shibc_cto');
+      expect(prompt).toContain('shibaclassic.io');
+      expect(prompt).toContain('Professional crypto, glassmorphism');
+      expect(prompt).toContain('Golden Shiba Inu');
+      expect(prompt).toContain('text-footer');
+    });
+
+    it('should not include brand section when brandConfig is null', () => {
+      const state = {};
+      const trigger = { type: 'scheduled' };
+
+      const prompt = buildLoopPrompt(mockProfile, state, trigger, undefined, undefined, undefined, undefined, null);
+
+      expect(prompt).not.toContain('## 🎨 Brand Configuration (CI)');
+    });
   });
 
   describe('parseClaudeOutput', () => {

@@ -375,6 +375,23 @@ services:
       GIT_FILTER: website/*
       DIRECTUS_URL: ${DIRECTUS_URL}
       DIRECTUS_TOKEN: ${DIRECTUS_TOKEN}
+      # Portainer API for deployments
+      PORTAINER_URL: ${PORTAINER_URL:-http://portainer:9000}
+      PORTAINER_API_KEY: ${PORTAINER_API_KEY}
+      PORTAINER_ENDPOINT_ID: ${PORTAINER_ENDPOINT_ID:-1}
+      # Woodpecker CI for builds
+      WOODPECKER_URL: ${WOODPECKER_URL}
+      WOODPECKER_TOKEN: ${WOODPECKER_TOKEN}
+      # n8n API for automation
+      N8N_API_URL: ${N8N_API_URL:-http://n8n:5678/api/v1}
+      N8N_API_KEY: ${N8N_API_KEY}
+      # Cloudflare DNS API
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN}
+      CLOUDFLARE_ZONE_ID: ${CLOUDFLARE_ZONE_ID}
+      # Certbot SSL
+      CERTBOT_EMAIL: ${CERTBOT_EMAIL:-admin@shibaclassic.io}
+      # Security: Allowed domains for nginx/certbot/dns
+      ALLOWED_DOMAINS: ${ALLOWED_DOMAINS:-shibaclassic.io}
     volumes:
       - ./profiles:/app/profiles:ro
       - cto_memory:/app/memory
@@ -382,6 +399,8 @@ services:
       - shared_gemini_config:/app/.gemini
       - shared_openai_config:/app/.openai
       - ./workspace:/app/workspace
+      # CTO-eigenes Volume für geklonte Projekte (website, contracts, etc.)
+      - cto_projects:/app/projects
     depends_on:
       orchestrator:
         condition: service_healthy
@@ -568,6 +587,10 @@ volumes:
   cfo_memory:
   coo_memory:
   cco_memory:
+
+  # CTO Projects Volume (for cloned repos: website, contracts, etc.)
+  # Separate from shared workspace to avoid conflicts
+  cto_projects:
 
   # Agent Workspaces: Now using shared bind mount ./workspace:/app/workspace
   # (Named volumes removed - all agents share the same local workspace)

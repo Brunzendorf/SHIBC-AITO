@@ -1415,6 +1415,185 @@ export const settingsRepo = {
 };
 
 // =============================================================================
+// Brand Configuration Repository (White-Label CI)
+// =============================================================================
+
+export interface BrandConfig {
+  id: string;
+  projectKey: string;
+  name: string;
+  shortName: string;
+  tagline: string | null;
+  colors: {
+    primary: string;
+    secondary: string;
+    background: string;
+    accent: string;
+    text: string;
+  };
+  logos: {
+    main: string | null;
+    icon: string | null;
+    watermark: string | null;
+  };
+  socials: {
+    twitter: string | null;
+    telegram: string | null;
+    discord: string | null;
+    website: string | null;
+  };
+  imageStyle: {
+    aesthetic: string;
+    patterns: string;
+    mascot: string | null;
+    defaultBranding: 'logo-watermark' | 'text-footer' | 'logo-and-text' | 'none';
+  };
+  tokenInfo: {
+    symbol: string | null;
+    contractAddress: string | null;
+    chain: string | null;
+    decimals: number;
+  } | null;
+  isActive: boolean;
+  isDefault: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export const brandConfigRepo = {
+  /**
+   * Get brand config by project key
+   */
+  async getByProjectKey(projectKey: string): Promise<BrandConfig | null> {
+    return queryOne<BrandConfig>(
+      `SELECT id, project_key as "projectKey", name, short_name as "shortName", tagline,
+              colors, logos, socials, image_style as "imageStyle", token_info as "tokenInfo",
+              is_active as "isActive", is_default as "isDefault",
+              created_at as "createdAt", updated_at as "updatedAt"
+       FROM brand_config WHERE project_key = $1 AND is_active = true`,
+      [projectKey]
+    );
+  },
+
+  /**
+   * Get the default brand config (used when no project key specified)
+   */
+  async getDefault(): Promise<BrandConfig | null> {
+    return queryOne<BrandConfig>(
+      `SELECT id, project_key as "projectKey", name, short_name as "shortName", tagline,
+              colors, logos, socials, image_style as "imageStyle", token_info as "tokenInfo",
+              is_active as "isActive", is_default as "isDefault",
+              created_at as "createdAt", updated_at as "updatedAt"
+       FROM brand_config WHERE is_default = true AND is_active = true`
+    );
+  },
+
+  /**
+   * Get all active brand configs
+   */
+  async getAll(): Promise<BrandConfig[]> {
+    return query<BrandConfig>(
+      `SELECT id, project_key as "projectKey", name, short_name as "shortName", tagline,
+              colors, logos, socials, image_style as "imageStyle", token_info as "tokenInfo",
+              is_active as "isActive", is_default as "isDefault",
+              created_at as "createdAt", updated_at as "updatedAt"
+       FROM brand_config WHERE is_active = true
+       ORDER BY is_default DESC, name`
+    );
+  },
+
+  /**
+   * Update brand config
+   */
+  async update(projectKey: string, updates: Partial<Pick<BrandConfig, 'name' | 'shortName' | 'tagline' | 'colors' | 'logos' | 'socials' | 'imageStyle' | 'tokenInfo'>>): Promise<BrandConfig | null> {
+    const setClause: string[] = [];
+    const values: unknown[] = [];
+    let paramIndex = 1;
+
+    if (updates.name !== undefined) { setClause.push(`name = $${paramIndex++}`); values.push(updates.name); }
+    if (updates.shortName !== undefined) { setClause.push(`short_name = $${paramIndex++}`); values.push(updates.shortName); }
+    if (updates.tagline !== undefined) { setClause.push(`tagline = $${paramIndex++}`); values.push(updates.tagline); }
+    if (updates.colors !== undefined) { setClause.push(`colors = $${paramIndex++}`); values.push(JSON.stringify(updates.colors)); }
+    if (updates.logos !== undefined) { setClause.push(`logos = $${paramIndex++}`); values.push(JSON.stringify(updates.logos)); }
+    if (updates.socials !== undefined) { setClause.push(`socials = $${paramIndex++}`); values.push(JSON.stringify(updates.socials)); }
+    if (updates.imageStyle !== undefined) { setClause.push(`image_style = $${paramIndex++}`); values.push(JSON.stringify(updates.imageStyle)); }
+    if (updates.tokenInfo !== undefined) { setClause.push(`token_info = $${paramIndex++}`); values.push(JSON.stringify(updates.tokenInfo)); }
+
+    if (setClause.length === 0) return this.getByProjectKey(projectKey);
+
+    values.push(projectKey);
+    const [result] = await query<BrandConfig>(
+      `UPDATE brand_config SET ${setClause.join(', ')}, updated_at = NOW()
+       WHERE project_key = $${paramIndex}
+       RETURNING id, project_key as "projectKey", name, short_name as "shortName", tagline,
+                 colors, logos, socials, image_style as "imageStyle", token_info as "tokenInfo",
+                 is_active as "isActive", is_default as "isDefault",
+                 created_at as "createdAt", updated_at as "updatedAt"`,
+      values
+    );
+    return result;
+  },
+
+  /**
+   * Create a new brand config
+   */
+  async create(config: Pick<BrandConfig, 'projectKey' | 'name' | 'shortName' | 'tagline' | 'colors' | 'logos' | 'socials' | 'imageStyle'>): Promise<BrandConfig> {
+    const [result] = await query<BrandConfig>(
+      `INSERT INTO brand_config (project_key, name, short_name, tagline, colors, logos, socials, image_style)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, project_key as "projectKey", name, short_name as "shortName", tagline,
+                 colors, logos, socials, image_style as "imageStyle", token_info as "tokenInfo",
+                 is_active as "isActive", is_default as "isDefault",
+                 created_at as "createdAt", updated_at as "updatedAt"`,
+      [config.projectKey, config.name, config.shortName, config.tagline,
+       JSON.stringify(config.colors), JSON.stringify(config.logos),
+       JSON.stringify(config.socials), JSON.stringify(config.imageStyle)]
+    );
+    return result;
+  },
+
+  /**
+   * Set a brand config as default
+   */
+  async setDefault(projectKey: string): Promise<void> {
+    await transaction(async (client) => {
+      // Remove default from all
+      await client.query(`UPDATE brand_config SET is_default = false`);
+      // Set new default
+      await client.query(`UPDATE brand_config SET is_default = true WHERE project_key = $1`, [projectKey]);
+    });
+  },
+
+  /**
+   * Get brand config formatted for agent injection
+   * Returns a compact format suitable for agent context
+   */
+  async getForAgent(projectKey?: string): Promise<{
+    name: string;
+    shortName: string;
+    tagline: string;
+    colors: BrandConfig['colors'];
+    socials: BrandConfig['socials'];
+    imageStyle: BrandConfig['imageStyle'];
+  } | null> {
+    const config = projectKey
+      ? await this.getByProjectKey(projectKey)
+      : await this.getDefault();
+
+    if (!config) return null;
+
+    return {
+      name: config.name,
+      shortName: config.shortName,
+      tagline: config.tagline || '',
+      colors: config.colors,
+      socials: config.socials,
+      imageStyle: config.imageStyle,
+    };
+  },
+};
+
+// =============================================================================
 // Project Planning Repository (TASK: Project Planning Feature)
 // =============================================================================
 

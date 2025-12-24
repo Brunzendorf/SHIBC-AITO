@@ -72,8 +72,22 @@ RUN npm run build
 
 # Build custom MCP servers
 COPY mcp-servers ./mcp-servers
+
+# Build shared library first (dependency for other MCP servers)
+RUN cd mcp-servers/shared && npm ci && npm run build || true
+
+# Build individual MCP servers
 RUN cd mcp-servers/fetch-validated && npm ci && npm run build
 RUN cd mcp-servers/imagen-mcp && npm ci && npm run build || true
+RUN cd mcp-servers/telegram-mcp && npm ci && npm run build || true
+RUN cd mcp-servers/git-mcp && npm ci && npm run build || true
+RUN cd mcp-servers/shell-mcp && npm ci && npm run build || true
+RUN cd mcp-servers/portainer-mcp && npm ci && npm run build || true
+RUN cd mcp-servers/woodpecker-mcp && npm ci && npm run build || true
+RUN cd mcp-servers/qdrant-mcp && npm ci && npm run build || true
+RUN cd mcp-servers/nginx-mcp && npm ci && npm run build || true
+RUN cd mcp-servers/certbot-mcp && npm ci && npm run build || true
+RUN cd mcp-servers/dns-mcp && npm ci && npm run build || true
 
 # Production stage
 FROM node:20-slim AS production
@@ -144,7 +158,8 @@ RUN mkdir -p \
     /app/.gemini \
     /app/logs \
     /app/memory \
-    /app/workspace && \
+    /app/workspace \
+    /app/projects && \
     chown -R agent:aito /app
 
 # Environment
@@ -161,9 +176,10 @@ ENV GEMINI_CONFIG_DIR=/app/.gemini
 # Switch to non-root user
 USER agent
 
-# Configure git safe.directory for workspace (fixes "dubious ownership" with volume mounts)
+# Configure git safe.directory for workspace and projects (fixes "dubious ownership" with volume mounts)
 # Must run AFTER USER switch so config is written to agent's home
 RUN git config --global --add safe.directory /app/workspace && \
+    git config --global --add safe.directory /app/projects && \
     git config --global --add safe.directory '*' && \
     git config --global user.email "agent@shibaclassic.io" && \
     git config --global user.name "AITO Agent"

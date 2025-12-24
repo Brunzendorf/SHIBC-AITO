@@ -408,6 +408,51 @@ describe('buildSessionLoopPrompt', () => {
     expect(prompt).toContain('Execute your loop');
     expect(prompt).toContain('JSON');
   });
+
+  it('should include brand config when provided', () => {
+    const prompt = buildSessionLoopPrompt(
+      { type: 'cron' },
+      {},
+      {
+        brandConfig: {
+          name: 'SHIBA CLASSIC',
+          shortName: 'SHIBC',
+          colors: {
+            primary: '#fda92d',
+            secondary: '#8E33FF',
+            background: '#141A21',
+            accent: '#00B8D9',
+          },
+          socials: {
+            twitter: '@shibc_cto',
+            website: 'shibaclassic.io',
+          },
+          imageStyle: {
+            aesthetic: 'Professional crypto',
+            defaultBranding: 'text-footer',
+          },
+        },
+      }
+    );
+
+    expect(prompt).toContain('## Brand CI');
+    expect(prompt).toContain('SHIBA CLASSIC');
+    expect(prompt).toContain('SHIBC');
+    expect(prompt).toContain('#fda92d');
+    expect(prompt).toContain('@shibc_cto');
+    expect(prompt).toContain('shibaclassic.io');
+    expect(prompt).toContain('text-footer');
+  });
+
+  it('should not include brand section when brandConfig is null', () => {
+    const prompt = buildSessionLoopPrompt(
+      { type: 'cron' },
+      {},
+      { brandConfig: null }
+    );
+
+    expect(prompt).not.toContain('## Brand CI');
+  });
 });
 
 describe('getSessionPoolStats', () => {

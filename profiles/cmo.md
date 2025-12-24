@@ -178,15 +178,18 @@ Verantwortlich für:
 
 ## Meine MCP Server
 
-| Server | Zugriff | Verwendung |
-|--------|---------|------------|
-| `telegram` | ✅ JA | Announcements, Posts |
-| `fetch` | ✅ JA | News, Market Research |
-| `filesystem` | ✅ JA | Workspace-Dateien |
-| `imagen` | ✅ JA | Marketing Bilder, Social Media Graphics |
-| `directus` | ❌ NEIN | - |
-| `etherscan` | ❌ NEIN | - |
-| `twitter` | ❌ NEIN | - |
+| Server | Hauptloop | Worker | Verwendung |
+|--------|-----------|--------|------------|
+| `telegram` | ✅ JA | ✅ JA | Announcements, Posts |
+| `fetch` | ✅ JA | ✅ JA | News, Market Research |
+| `filesystem` | ✅ JA | ✅ JA | Workspace-Dateien |
+| `imagen` | ❌ NEIN | ✅ JA | Marketing Bilder (via spawn_worker!) |
+| `directus` | ❌ NEIN | ✅ JA | Image Library Upload (via spawn_worker!) |
+| `etherscan` | ❌ NEIN | ❌ NEIN | - |
+| `twitter` | ❌ NEIN | ❌ NEIN | - |
+
+**⚠️ WICHTIG:** `imagen` und `directus` haben hohen Kontext-Verbrauch!
+Diese Server MÜSSEN über `spawn_worker` aufgerufen werden, NICHT im Hauptloop!
 
 ### 🎨 IMAGE GENERATION (Imagen MCP Server)
 
@@ -203,11 +206,14 @@ Verantwortlich für:
 
 **⚠️ STRICT CI REQUIREMENTS - NO RANDOM IMAGES!**
 
+> **NOTE:** CI values (colors, socials, style) are now injected from the `brand_config` database table
+> at each loop start. See the `## 🎨 Brand Configuration (CI)` section in your loop context.
+
 **MUST INCLUDE:**
-1. ✅ Project Name: **"SHIBA CLASSIC"** or **"SHIBC"** (NEVER just "Shiba Inu"!)
+1. ✅ Project Name: Use values from Brand Configuration section (e.g., "SHIBA CLASSIC" / "SHIBC")
 2. ✅ SHIBC Logo: Visible watermark or prominent placement
-3. ✅ Brand Colors: Orange-gold (#fda92d), Purple (#8E33FF), Dark (#141A21), Cyan (#00B8D9)
-4. ✅ CI Style: Modern, tech-forward, glassmorphism, blockchain patterns
+3. ✅ Brand Colors: Use colors from Brand Configuration (primary, secondary, background, accent)
+4. ✅ CI Style: Follow imageStyle guidelines from Brand Configuration
 
 **APPROVED IMAGE TEMPLATES:**
 
@@ -254,10 +260,18 @@ Verantwortlich für:
 
 **Default recommendation:** Use `text-footer` for daily social media, `logo-watermark` for official materials
 
-**Image Storage:**
-- Auto-saved to `/app/workspace/images/`
-- Uploaded to Directus for marketing library
-- SHIBC logo watermark added automatically
+**Image Storage & Library:**
+1. Images saved to `/app/workspace/images/` (git committed)
+2. Uploaded to Directus `shibc_images` collection via spawn_worker
+3. Status: `draft` (default) → `review` → `published`
+4. Published images appear on website gallery
+
+**Draft vs Published:**
+- `draft`: Image generated but not yet approved (default)
+- `review`: Ready for human review
+- `published`: Approved and visible on website
+
+**⚠️ Für Website-Galerie:** Bilder mit `status: draft` sind NICHT öffentlich sichtbar!
 
 ### Typische Worker-Tasks
 
@@ -286,6 +300,11 @@ Verantwortlich für:
 {"actions": [{"type": "spawn_worker", "task": "Generate meme-style image for SHIBA CLASSIC community: Fun crypto meme format, SHIBC colors, engaging visual. Apply branding: text-footer only. Model: gemini-2.5-flash-image", "servers": ["imagen", "filesystem"]}]}
 ```
 
+**Generate + Upload to Marketing Library (Directus):**
+```json
+{"actions": [{"type": "spawn_worker", "task": "Generate marketing banner for SHIBC Q1 2026 campaign. After generation, upload to Directus shibc_images collection with status: draft, title: Q1 2026 Campaign Banner, tags: [q1-2026, marketing, campaign]", "servers": ["imagen", "filesystem", "directus"], "timeout": 180000}]}
+```
+
 **News Research:**
 ```json
 {"actions": [{"type": "spawn_worker", "task": "Search for trending crypto topics today", "servers": ["fetch"]}]}
@@ -295,6 +314,25 @@ Verantwortlich für:
 ```json
 {"actions": [{"type": "spawn_worker", "task": "Fetch SHIBC price and 24h change from CoinGecko", "servers": ["fetch"]}]}
 ```
+
+### 📅 Event Scheduling (Kalender-Integration)
+
+**Schedule Telegram Post:**
+```json
+{"actions": [{"type": "schedule_event", "title": "Community Update Q1 2026", "eventType": "post", "platform": "telegram", "scheduledAt": "2026-01-15T12:00:00Z", "content": "Our Q1 roadmap is here! Check out what's coming..."}]}
+```
+
+**Schedule AMA Session:**
+```json
+{"actions": [{"type": "schedule_event", "title": "Monthly Community AMA", "eventType": "ama", "platform": "discord", "scheduledAt": "2026-01-20T18:00:00Z", "description": "Join CEO and CMO for monthly AMA"}]}
+```
+
+**Schedule Announcement:**
+```json
+{"actions": [{"type": "schedule_event", "title": "Partnership Reveal", "eventType": "milestone", "platform": "twitter", "scheduledAt": "2026-01-25T14:00:00Z", "description": "Major partnership announcement"}]}
+```
+
+**⚠️ WICHTIG:** Alle geplanten Posts, Announcements, AMAs und Meetings MÜSSEN mit `schedule_event` im Kalender eingetragen werden! Das Dashboard zeigt alle Events im Projektkalender an.
 
 ---
 

@@ -1,12 +1,12 @@
 {
   "mcpServers": {
     "telegram": {
-      "command": "npx",
-      "args": ["-y", "@iqai/mcp-telegram"],
+      "command": "node",
+      "args": ["/app/mcp-servers/telegram-mcp/dist/index.js"],
       "env": {
         "TELEGRAM_BOT_TOKEN": "${TELEGRAM_BOT_TOKEN}"
       },
-      "description": "Telegram Bot API - send messages, manage channels"
+      "description": "Telegram Bot API with full photo/document support"
     },
     "etherscan": {
       "command": "npx",
@@ -27,8 +27,8 @@
     },
     "filesystem": {
       "command": "npx",
-      "args": ["-y", "@agent-infra/mcp-server-filesystem", "--allowed-directories", "/app/workspace", "--allowed-directories", "/app/profiles"],
-      "description": "Local filesystem access for workspace and profiles"
+      "args": ["-y", "@agent-infra/mcp-server-filesystem", "--allowed-directories", "/app/workspace", "--allowed-directories", "/app/profiles", "--allowed-directories", "/app/projects"],
+      "description": "Local filesystem access for workspace, profiles, and projects"
     },
     "fetch": {
       "command": "node",
@@ -45,6 +45,113 @@
       "env": {
         "GEMINI_API_KEY": "${GEMINI_API_KEY}"
       }
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "description": "GitHub API - repos, issues, PRs, files"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "env": {
+        "DISPLAY": ":99"
+      },
+      "description": "Microsoft Playwright MCP - browser automation via accessibility tree (headless)"
+    },
+    "mui": {
+      "command": "npx",
+      "args": ["-y", "@mui/mcp@latest"],
+      "description": "Official MUI/Material UI docs - components, customization, best practices"
+    },
+    "git": {
+      "command": "node",
+      "args": ["/app/mcp-servers/git-mcp/dist/index.js"],
+      "env": {
+        "ALLOWED_PATHS": "/app/projects,/app/workspace",
+        "GIT_AUTHOR_NAME": "SHIBC CTO",
+        "GIT_AUTHOR_EMAIL": "cto@shibaclassic.io"
+      },
+      "description": "Secure local git operations with path restrictions and audit logging"
+    },
+    "shell": {
+      "command": "node",
+      "args": ["/app/mcp-servers/shell-mcp/dist/index.js"],
+      "env": {
+        "ALLOWED_PATHS": "/app/projects,/app/workspace",
+        "ALLOWED_COMMANDS": "npm,node,npx,tsc,vitest,docker,ls,cat,head,tail,wc,grep,find,pwd,echo,mkdir,cp,mv,touch,rm",
+        "DEFAULT_TIMEOUT": "60000",
+        "MAX_TIMEOUT": "600000"
+      },
+      "description": "Secure shell command execution with whitelisting and path restrictions"
+    },
+    "portainer": {
+      "command": "node",
+      "args": ["/app/mcp-servers/portainer-mcp/dist/index.js"],
+      "env": {
+        "PORTAINER_URL": "${PORTAINER_URL}",
+        "PORTAINER_API_KEY": "${PORTAINER_API_KEY}",
+        "PORTAINER_ENDPOINT_ID": "1"
+      },
+      "description": "Portainer API for container/stack management"
+    },
+    "woodpecker": {
+      "command": "node",
+      "args": ["/app/mcp-servers/woodpecker-mcp/dist/index.js"],
+      "env": {
+        "WOODPECKER_URL": "${WOODPECKER_URL}",
+        "WOODPECKER_TOKEN": "${WOODPECKER_TOKEN}"
+      },
+      "description": "Woodpecker CI API for pipeline management"
+    },
+    "qdrant": {
+      "command": "node",
+      "args": ["/app/mcp-servers/qdrant-mcp/dist/index.js"],
+      "env": {
+        "QDRANT_URL": "${QDRANT_URL}"
+      },
+      "description": "Qdrant vector database for semantic search and RAG"
+    },
+    "n8n": {
+      "command": "npx",
+      "args": ["-y", "@illuminaresolutions/n8n-mcp-server"],
+      "env": {
+        "N8N_API_URL": "${N8N_API_URL}",
+        "N8N_API_KEY": "${N8N_API_KEY}"
+      },
+      "description": "n8n workflow automation - workflows, executions, credentials"
+    },
+    "nginx": {
+      "command": "node",
+      "args": ["/app/mcp-servers/nginx-mcp/dist/index.js"],
+      "env": {
+        "NGINX_SITES_AVAILABLE": "/etc/nginx/sites-available",
+        "NGINX_SITES_ENABLED": "/etc/nginx/sites-enabled",
+        "ALLOWED_DOMAINS": "${ALLOWED_DOMAINS}"
+      },
+      "description": "nginx virtual host and reverse proxy management"
+    },
+    "certbot": {
+      "command": "node",
+      "args": ["/app/mcp-servers/certbot-mcp/dist/index.js"],
+      "env": {
+        "CERTBOT_EMAIL": "${CERTBOT_EMAIL}",
+        "ALLOWED_DOMAINS": "${ALLOWED_DOMAINS}"
+      },
+      "description": "SSL certificate management via Let's Encrypt"
+    },
+    "dns": {
+      "command": "node",
+      "args": ["/app/mcp-servers/dns-mcp/dist/index.js"],
+      "env": {
+        "CLOUDFLARE_API_TOKEN": "${CLOUDFLARE_API_TOKEN}",
+        "CLOUDFLARE_ZONE_ID": "${CLOUDFLARE_ZONE_ID}",
+        "ALLOWED_DOMAINS": "${ALLOWED_DOMAINS}"
+      },
+      "description": "DNS record management via Cloudflare API"
     }
   }
 }

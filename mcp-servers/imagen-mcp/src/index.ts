@@ -106,7 +106,19 @@ function recordUsage(modelId: string, cost: number) {
 const MODEL_CATALOG = [
   { model_id: "imagen-4.0-generate-001", name: "Imagen 4", feature: "Image Generation", input: "Text", output: "Image", price_per_image: 0.04, technical_id: "models/imagen-4.0-generate-001" },
   { model_id: "gemini-2.5-flash-image", name: "Gemini 2.5 Flash Image", feature: "Image Generation", input: "Text", output: "Image", price_per_image: 0.0, technical_id: "gemini-2.5-flash-image" },
+  { model_id: "gemini-2.0-flash-exp", name: "Gemini 2.0 Flash (Multimodal)", feature: "Image Generation with Reference", input: "Text+Image", output: "Image", price_per_image: 0.0, technical_id: "gemini-2.0-flash-exp" },
 ];
+
+// --- Character DNA Storage ---
+interface CharacterDNA {
+  name: string;
+  role: string;
+  description: string;
+  referenceImageBase64: string;
+  createdAt: number;
+}
+
+const characterDNAStore: Map<string, CharacterDNA> = new Map();
 
 const PROMPT_GUIDE = {
   general_tips: [
@@ -382,6 +394,70 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           },
           required: ['imageBase64', 'brandingType']
         }
+      },
+      // === CHARACTER CONSISTENCY TOOLS ===
+      {
+        name: 'imagen_save_character',
+        description: 'Saves a character reference image (DNA) for consistent generation across multiple images. Use this to establish a character that can be reused in different scenes.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            characterId: { type: 'string', description: "Unique ID for the character (e.g., 'cmo_yuki', 'cto_viktor')" },
+            name: { type: 'string', description: "Character's full name (e.g., 'Yuki Tanaka')" },
+            role: { type: 'string', description: "Character's role (e.g., 'Chief Marketing Officer')" },
+            description: { type: 'string', description: 'Detailed physical description for consistency (hair, eyes, age, style)' },
+            referenceImageBase64: { type: 'string', description: 'Base64-encoded reference image (the "DNA" for this character)' }
+          },
+          required: ['characterId', 'name', 'role', 'description', 'referenceImageBase64']
+        }
+      },
+      {
+        name: 'imagen_list_characters',
+        description: 'Lists all saved character references (DNA) available for consistent image generation.',
+        inputSchema: { type: 'object', properties: {} }
+      },
+      {
+        name: 'imagen_get_character',
+        description: 'Gets details and reference image for a saved character.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            characterId: { type: 'string', description: 'The character ID to retrieve' }
+          },
+          required: ['characterId']
+        }
+      },
+      {
+        name: 'imagen_generate_character_scene',
+        description: 'Generates a new image of a saved character in a different scene/setting while maintaining character consistency. Uses Gemini 2.0 Flash multimodal capabilities.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            characterId: { type: 'string', description: 'The saved character ID to use' },
+            scenePrompt: { type: 'string', description: 'Description of the new scene/setting (e.g., "in a modern boardroom giving a presentation")' },
+            style: { type: 'string', description: 'Optional style modifier (e.g., "professional corporate photography", "candid shot")' },
+            aspectRatio: { type: 'string', description: "Aspect ratio: '1:1', '16:9', '9:16', '4:3'. Default: '1:1'" },
+            applyBranding: { type: 'boolean', description: 'Whether to apply SHIBC branding. Default: false' }
+          },
+          required: ['characterId', 'scenePrompt']
+        }
+      },
+      {
+        name: 'imagen_generate_with_reference',
+        description: 'Generates an image using a reference image for character/style consistency. Direct API - for one-off generations without saving the character.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            referenceImageBase64: { type: 'string', description: 'Base64-encoded reference image' },
+            prompt: { type: 'string', description: 'What to generate - must reference the person/object in the reference image' },
+            consistencyInstruction: {
+              type: 'string',
+              description: "How to maintain consistency. Default: 'Keep the exact same person with identical facial features, but change the setting/pose as described.'"
+            },
+            aspectRatio: { type: 'string', description: "Aspect ratio: '1:1', '16:9', '9:16'. Default: '1:1'" }
+          },
+          required: ['referenceImageBase64', 'prompt']
+        }
       }
     ],
   };
@@ -581,6 +657,379 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         };
       }
 
+      // === CHARACTER CONSISTENCY HANDLERS ===
+
+      case 'imagen_save_character': {
+        const { characterId, name: charName, role, description, referenceImageBase64 } = args as {
+          characterId: string;
+          name: string;
+          role: string;
+          description: string;
+          referenceImageBase64: string;
+        };
+
+        log('info', 'Saving character DNA', { characterId, name: charName, role });
+
+        if (!characterId || !charName || !referenceImageBase64) {
+          return {
+            content: [{ type: 'text', text: 'characterId, name, and referenceImageBase64 are required' }],
+            isError: true,
+          };
+        }
+
+        // Store character DNA
+        characterDNAStore.set(characterId, {
+          name: charName,
+          role,
+          description,
+          referenceImageBase64,
+          createdAt: Date.now(),
+        });
+
+        // Also save to filesystem for persistence
+        const workspaceDir = process.env.WORKSPACE_DIR || '/app/workspace';
+        const characterDir = path.join(workspaceDir, 'assets', 'team', 'characters');
+
+        try {
+          if (!fs.existsSync(characterDir)) {
+            fs.mkdirSync(characterDir, { recursive: true });
+          }
+
+          // Save reference image
+          const imageBuffer = Buffer.from(referenceImageBase64, 'base64');
+          const imagePath = path.join(characterDir, `${characterId}_reference.jpg`);
+          fs.writeFileSync(imagePath, imageBuffer);
+
+          // Save metadata
+          const metaPath = path.join(characterDir, `${characterId}_meta.json`);
+          fs.writeFileSync(metaPath, JSON.stringify({
+            characterId,
+            name: charName,
+            role,
+            description,
+            createdAt: new Date().toISOString(),
+          }, null, 2));
+
+          log('info', 'Character saved to filesystem', { characterId, imagePath, metaPath });
+        } catch (fsError) {
+          log('warn', 'Could not persist character to filesystem', { error: fsError instanceof Error ? fsError.message : 'Unknown' });
+        }
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            message: `Character "${charName}" saved successfully`,
+            characterId,
+            name: charName,
+            role,
+            description,
+            stored: true,
+          })}]
+        };
+      }
+
+      case 'imagen_list_characters': {
+        log('debug', 'Listing characters', { count: characterDNAStore.size });
+
+        const characters = Array.from(characterDNAStore.entries()).map(([id, char]) => ({
+          characterId: id,
+          name: char.name,
+          role: char.role,
+          description: char.description.substring(0, 100) + (char.description.length > 100 ? '...' : ''),
+          createdAt: new Date(char.createdAt).toISOString(),
+        }));
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            message: `${characters.length} character(s) available`,
+            characters,
+          }, null, 2)}]
+        };
+      }
+
+      case 'imagen_get_character': {
+        const { characterId } = args as { characterId: string };
+
+        const character = characterDNAStore.get(characterId);
+        if (!character) {
+          return {
+            content: [{ type: 'text', text: `Character "${characterId}" not found. Use imagen_list_characters to see available characters.` }],
+            isError: true,
+          };
+        }
+
+        return {
+          content: [{ type: 'text', text: JSON.stringify({
+            characterId,
+            name: character.name,
+            role: character.role,
+            description: character.description,
+            createdAt: new Date(character.createdAt).toISOString(),
+            referenceImageBase64: character.referenceImageBase64,
+          })}]
+        };
+      }
+
+      case 'imagen_generate_character_scene': {
+        const { characterId, scenePrompt, style, aspectRatio, applyBranding: shouldBrand } = args as {
+          characterId: string;
+          scenePrompt: string;
+          style?: string;
+          aspectRatio?: string;
+          applyBranding?: boolean;
+        };
+
+        log('info', 'Generating character scene', { characterId, scenePrompt: scenePrompt.substring(0, 50) });
+
+        // Check rate limits
+        const rateLimitCheck = checkRateLimit('gemini-2.0-flash-exp');
+        if (!rateLimitCheck.allowed) {
+          return {
+            content: [{ type: 'text', text: `Rate limit exceeded: ${rateLimitCheck.reason}` }],
+            isError: true,
+          };
+        }
+
+        // Get character
+        const character = characterDNAStore.get(characterId);
+        if (!character) {
+          return {
+            content: [{ type: 'text', text: `Character "${characterId}" not found. Save the character first using imagen_save_character.` }],
+            isError: true,
+          };
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+          return {
+            content: [{ type: 'text', text: 'GEMINI_API_KEY environment variable is not set.' }],
+            isError: true,
+          };
+        }
+
+        const ai = new GoogleGenAI({ apiKey });
+
+        // Build the consistency prompt
+        const fullPrompt = `You are an expert portrait photographer. Generate a new professional photograph of the EXACT SAME PERSON shown in the reference image.
+
+CHARACTER DETAILS:
+- Name: ${character.name}
+- Role: ${character.role}
+- Physical Description: ${character.description}
+
+CRITICAL REQUIREMENTS:
+1. The person MUST have IDENTICAL facial features to the reference image
+2. Same face shape, eye color, hair color, skin tone
+3. Age and ethnicity must match exactly
+4. Only the pose, clothing, and setting should change
+
+NEW SCENE:
+${scenePrompt}
+
+${style ? `STYLE: ${style}` : 'STYLE: Professional corporate photography, soft lighting, high quality'}
+
+Generate a photorealistic image of this exact person in the new setting.`;
+
+        try {
+          const genStart = Date.now();
+
+          // Use Gemini 2.0 Flash with image input for character consistency
+          const generateParams = {
+            model: 'gemini-2.0-flash-exp',
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: 'image/jpeg',
+                      data: character.referenceImageBase64
+                    }
+                  },
+                  { text: fullPrompt }
+                ]
+              }
+            ],
+            generationConfig: {
+              responseModalities: ['image', 'text'],
+            },
+          };
+          const response = await ai.models.generateContent(generateParams as Parameters<typeof ai.models.generateContent>[0]);
+
+          log('info', 'Gemini response received', { durationMs: Date.now() - genStart });
+
+          // Extract image from response
+          let generatedImageBase64: string | null = null;
+
+          if (response.candidates && response.candidates[0]?.content?.parts) {
+            for (const part of response.candidates[0].content.parts) {
+              if (part.inlineData?.data) {
+                generatedImageBase64 = part.inlineData.data;
+                break;
+              }
+            }
+          }
+
+          if (!generatedImageBase64) {
+            // Fallback: Try to use Imagen with the enhanced prompt
+            log('warn', 'Gemini did not return image, falling back to Imagen');
+
+            const imagenResponse = await ai.models.generateImages({
+              model: 'models/imagen-4.0-generate-001',
+              prompt: `${fullPrompt}\n\nImportant: Match the person from the description exactly.`,
+              config: {
+                numberOfImages: 1,
+                aspectRatio: aspectRatio || '1:1',
+                personGeneration: PersonGeneration.ALLOW_ADULT,
+              },
+            });
+
+            if (imagenResponse?.generatedImages?.[0]?.image?.imageBytes) {
+              generatedImageBase64 = imagenResponse.generatedImages[0].image.imageBytes;
+            }
+          }
+
+          if (!generatedImageBase64) {
+            return {
+              content: [{ type: 'text', text: 'Failed to generate image. The model did not return an image.' }],
+              isError: true,
+            };
+          }
+
+          // Apply branding if requested
+          if (shouldBrand) {
+            generatedImageBase64 = await applyBranding(generatedImageBase64, 'text-footer', {
+              customHandles: { telegram: '@shibc_official', twitter: '@shibc_official' },
+            });
+          }
+
+          // Record usage
+          recordUsage('gemini-2.0-flash-exp', 0);
+
+          log('info', 'Character scene generated', {
+            characterId,
+            durationMs: Date.now() - startTime,
+            branded: shouldBrand,
+          });
+
+          return {
+            content: [{ type: 'text', text: JSON.stringify({
+              message: `Character scene generated for ${character.name}`,
+              characterId,
+              characterName: character.name,
+              scene: scenePrompt,
+              image_base64: generatedImageBase64,
+            })}]
+          };
+
+        } catch (apiError) {
+          log('error', 'Character scene generation failed', {
+            error: apiError instanceof Error ? apiError.message : 'Unknown',
+          });
+          return {
+            content: [{ type: 'text', text: `Generation failed: ${apiError instanceof Error ? apiError.message : 'Unknown error'}` }],
+            isError: true,
+          };
+        }
+      }
+
+      case 'imagen_generate_with_reference': {
+        const { referenceImageBase64, prompt, consistencyInstruction, aspectRatio } = args as {
+          referenceImageBase64: string;
+          prompt: string;
+          consistencyInstruction?: string;
+          aspectRatio?: string;
+        };
+
+        log('info', 'Generating with reference', { promptLen: prompt?.length });
+
+        // Check rate limits
+        const rateLimitCheck = checkRateLimit('gemini-2.0-flash-exp');
+        if (!rateLimitCheck.allowed) {
+          return {
+            content: [{ type: 'text', text: `Rate limit exceeded: ${rateLimitCheck.reason}` }],
+            isError: true,
+          };
+        }
+
+        const apiKey = process.env.GEMINI_API_KEY;
+        if (!apiKey) {
+          return {
+            content: [{ type: 'text', text: 'GEMINI_API_KEY environment variable is not set.' }],
+            isError: true,
+          };
+        }
+
+        const defaultInstruction = 'Keep the exact same person with identical facial features, but change the setting/pose as described.';
+        const instruction = consistencyInstruction || defaultInstruction;
+
+        const ai = new GoogleGenAI({ apiKey });
+
+        try {
+          const genStart = Date.now();
+
+          const refGenParams = {
+            model: 'gemini-2.0-flash-exp',
+            contents: [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: 'image/jpeg',
+                      data: referenceImageBase64
+                    }
+                  },
+                  { text: `${instruction}\n\n${prompt}` }
+                ]
+              }
+            ],
+            generationConfig: {
+              responseModalities: ['image', 'text'],
+            },
+          };
+          const response = await ai.models.generateContent(refGenParams as Parameters<typeof ai.models.generateContent>[0]);
+
+          log('info', 'Reference generation response', { durationMs: Date.now() - genStart });
+
+          let generatedImageBase64: string | null = null;
+
+          if (response.candidates && response.candidates[0]?.content?.parts) {
+            for (const part of response.candidates[0].content.parts) {
+              if (part.inlineData?.data) {
+                generatedImageBase64 = part.inlineData.data;
+                break;
+              }
+            }
+          }
+
+          if (!generatedImageBase64) {
+            return {
+              content: [{ type: 'text', text: 'Failed to generate image with reference. Try using imagen_generate_image instead.' }],
+              isError: true,
+            };
+          }
+
+          recordUsage('gemini-2.0-flash-exp', 0);
+
+          return {
+            content: [{ type: 'text', text: JSON.stringify({
+              message: 'Image generated with reference',
+              prompt,
+              image_base64: generatedImageBase64,
+            })}]
+          };
+
+        } catch (apiError) {
+          log('error', 'Reference generation failed', {
+            error: apiError instanceof Error ? apiError.message : 'Unknown',
+          });
+          return {
+            content: [{ type: 'text', text: `Generation failed: ${apiError instanceof Error ? apiError.message : 'Unknown error'}` }],
+            isError: true,
+          };
+        }
+      }
+
       default:
         return {
           content: [{ type: 'text', text: `Unknown tool: ${name}` }],
@@ -599,7 +1048,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
 // --- Start server ---
 async function main() {
-  log('info', 'Imagen MCP Server starting', { rateLimits: RATE_LIMITS, version: '1.1.0', sdk: '@modelcontextprotocol/sdk' });
+  log('info', 'Imagen MCP Server starting', { rateLimits: RATE_LIMITS, version: '1.2.0', sdk: '@modelcontextprotocol/sdk', features: ['character-consistency', 'reference-images'] });
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

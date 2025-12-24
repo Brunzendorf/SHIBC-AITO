@@ -31,17 +31,24 @@ export interface MCPToolResult {
   isError?: boolean;
 }
 
-// MCP servers available per agent type
+// MCP servers available per agent type (MAIN LOOP ONLY)
+// IMPORTANT: High-context servers like 'directus' and 'imagen' should NOT be in main loop!
+// They should only be accessed via spawn_worker to preserve session context.
+// Workers dynamically load servers from mcp_servers.json, so they can use any server.
 export const MCP_SERVERS_BY_AGENT: Record<string, string[]> = {
-  ceo: ['filesystem', 'fetch', 'imagen'],
+  ceo: ['filesystem', 'fetch'],
   dao: ['filesystem', 'etherscan'],
-  cmo: ['telegram', 'fetch', 'filesystem', 'imagen'],
-  cto: ['directus', 'filesystem', 'fetch'],
+  cmo: ['telegram', 'fetch', 'filesystem'],  // imagen via worker only (high context)
+  cto: ['filesystem', 'fetch', 'directus', 'github', 'playwright', 'mui', 'git', 'shell', 'portainer', 'woodpecker'],  // via worker
   cfo: ['etherscan', 'filesystem'],
   coo: ['telegram', 'filesystem'],
   cco: ['filesystem', 'fetch'],
-  test: ['filesystem', 'fetch', 'imagen'],  // Test agent for E2E testing with image generation
+  test: ['filesystem', 'fetch'],
 };
+
+// Servers that should ONLY be used via spawn_worker (high context usage)
+// These are NOT included in main loop MCP config to preserve session context
+export const WORKER_ONLY_SERVERS = ['directus', 'imagen', 'github', 'playwright', 'mui', 'git', 'shell', 'portainer', 'woodpecker'];
 
 /**
  * Load MCP server configurations from .claude/mcp_servers.json
