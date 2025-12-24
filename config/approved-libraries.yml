@@ -1,0 +1,450 @@
+# SHIBC Approved Libraries Catalog
+# Version: 1.1.0
+# Stand: 2025-12-23
+# Updated: Aktuelle NPM Versionen geprüft
+#
+# Diese Liste definiert alle genehmigten Libraries für SHIBC Projekte.
+# CTO Sub-Agents MÜSSEN sich an diese Liste halten!
+#
+# Kategorien:
+# - approved: Darf verwendet werden
+# - preferred: Bevorzugte Option (wenn mehrere Alternativen)
+# - forbidden: NICHT verwenden - Alternative nutzen!
+# - deprecated: Auslaufend - bei neuen Projekten vermeiden
+
+---
+metadata:
+  version: "1.1.0"
+  lastUpdated: "2025-12-23"
+  maintainer: "CTO Agent"
+  versionCheck: "https://www.npmjs.com/"
+
+# ===========================================
+# RUNTIME ENVIRONMENT
+# ===========================================
+runtime:
+  node:
+    version: ">=20.0.0"
+    status: preferred
+    notes: "LTS Version verwenden"
+
+  typescript:
+    version: "^5.7.0"
+    status: approved
+    config:
+      strict: true
+      target: "ES2022"
+
+# ===========================================
+# WEB FRAMEWORKS
+# ===========================================
+frameworks:
+  backend:
+    fastify:
+      version: "^5.6.0"
+      status: preferred
+      notes: "Standard für REST APIs"
+
+    express:
+      version: "^4.18.0"
+      status: approved
+      notes: "Nur für Legacy-Projekte"
+
+    hono:
+      version: "^4.0.0"
+      status: approved
+      notes: "Für Edge Functions"
+
+  frontend:
+    nextjs:
+      version: "^15.1.0"
+      status: preferred
+      notes: "App Router verwenden"
+
+    react:
+      version: "^19.0.0"
+      status: approved
+      notes: "Mit Next.js oder standalone"
+
+    vite:
+      version: "^6.0.0"
+      status: approved
+      notes: "Für SPAs ohne SSR"
+
+  bots:
+    grammy:
+      version: "^1.31.0"
+      status: preferred
+      notes: "Telegram Bot Framework"
+
+    discordjs:
+      version: "^14.0.0"
+      status: approved
+      notes: "Discord Bot Framework"
+
+# ===========================================
+# DATABASE & ORM
+# ===========================================
+database:
+  orm:
+    drizzle:
+      version: "^0.45.0"
+      status: preferred
+      notes: "Type-safe SQL, beste DX"
+
+    prisma:
+      version: "^6.0.0"
+      status: approved
+      notes: "Für komplexe Schemas"
+
+    sequelize:
+      status: forbidden
+      alternative: "drizzle-orm"
+      reason: "Veraltet, schlechte TypeScript-Integration"
+
+  drivers:
+    pg:
+      version: "^8.13.0"
+      status: approved
+      notes: "PostgreSQL Driver"
+
+    better-sqlite3:
+      version: "^11.0.0"
+      status: approved
+      notes: "SQLite für Tests/Dev"
+
+  cache:
+    ioredis:
+      version: "^5.4.0"
+      status: preferred
+      notes: "Redis Client mit Clustering"
+
+    redis:
+      version: "^4.7.0"
+      status: approved
+      notes: "Offizieller Redis Client"
+
+# ===========================================
+# VALIDATION & SCHEMA
+# ===========================================
+validation:
+  zod:
+    version: "^3.24.0"
+    status: preferred
+    notes: "Runtime Type Validation"
+
+  typebox:
+    version: "^0.33.0"
+    status: approved
+    notes: "JSON Schema Generation"
+
+  joi:
+    status: forbidden
+    alternative: "zod"
+    reason: "Keine native TypeScript-Integration"
+
+  yup:
+    status: deprecated
+    alternative: "zod"
+    reason: "Zod ist moderner und type-safer"
+
+# ===========================================
+# HTTP CLIENTS
+# ===========================================
+http:
+  undici:
+    version: "^7.0.0"
+    status: preferred
+    notes: "Native Node.js HTTP Client"
+
+  got:
+    version: "^14.0.0"
+    status: approved
+    notes: "Feature-rich HTTP Client"
+
+  axios:
+    status: forbidden
+    alternative: "undici, got"
+    reason: "Overhead, Security Issues, besser native fetch"
+
+  node-fetch:
+    status: deprecated
+    alternative: "native fetch"
+    reason: "Node 18+ hat native fetch"
+
+# ===========================================
+# TESTING
+# ===========================================
+testing:
+  unit:
+    vitest:
+      version: "^3.0.0"
+      status: preferred
+      notes: "Vitest 3.x - schnell, native ESM"
+
+    jest:
+      status: deprecated
+      alternative: "vitest"
+      reason: "Vitest ist schneller und moderner"
+
+  e2e:
+    playwright:
+      version: "^1.49.0"
+      status: preferred
+      notes: "Cross-browser E2E Testing"
+
+    cypress:
+      status: approved
+      version: "^13.0.0"
+      notes: "Alternative zu Playwright"
+
+    puppeteer:
+      status: deprecated
+      alternative: "playwright"
+      reason: "Playwright hat mehr Features"
+
+  mocking:
+    msw:
+      version: "^2.6.0"
+      status: preferred
+      notes: "API Mocking"
+
+    nock:
+      status: deprecated
+      alternative: "msw"
+      reason: "MSW ist moderner"
+
+# ===========================================
+# UTILITIES
+# ===========================================
+utilities:
+  dates:
+    date-fns:
+      version: "^4.1.0"
+      status: preferred
+      notes: "Functional Date Utils"
+
+    dayjs:
+      version: "^1.11.0"
+      status: approved
+      notes: "Leichtgewichtige Alternative"
+
+    moment:
+      status: forbidden
+      alternative: "date-fns, dayjs"
+      reason: "Riesig, veraltet, nicht tree-shakeable"
+
+  lodash:
+    status: forbidden
+    alternative: "Native JS, es-toolkit"
+    reason: "Meistens nicht nötig, zu groß"
+
+  es-toolkit:
+    version: "^1.0.0"
+    status: approved
+    notes: "Moderne Lodash-Alternative"
+
+  uuid:
+    version: "^11.0.0"
+    status: approved
+    notes: "UUID Generation"
+
+  nanoid:
+    version: "^5.0.0"
+    status: approved
+    notes: "Kompakte IDs"
+
+# ===========================================
+# LOGGING
+# ===========================================
+logging:
+  pino:
+    version: "^9.5.0"
+    status: preferred
+    notes: "Schnellster Logger"
+
+  winston:
+    status: deprecated
+    alternative: "pino"
+    reason: "Pino ist schneller"
+
+  bunyan:
+    status: forbidden
+    alternative: "pino"
+    reason: "Nicht mehr gepflegt"
+
+# ===========================================
+# SECURITY
+# ===========================================
+security:
+  hashing:
+    bcrypt:
+      version: "^5.1.0"
+      status: approved
+      notes: "Password Hashing"
+
+    argon2:
+      version: "^0.41.0"
+      status: preferred
+      notes: "Modernere Alternative zu bcrypt"
+
+  crypto:
+    jose:
+      version: "^5.9.0"
+      status: preferred
+      notes: "JWT/JWE/JWS"
+
+    jsonwebtoken:
+      version: "^9.0.0"
+      status: approved
+      notes: "Einfache JWT-Implementierung"
+
+  sanitization:
+    dompurify:
+      version: "^3.2.0"
+      status: approved
+      notes: "HTML Sanitization"
+
+    sanitize-html:
+      version: "^2.13.0"
+      status: approved
+      notes: "Server-side Sanitization"
+
+# ===========================================
+# BLOCKCHAIN
+# ===========================================
+blockchain:
+  ethereum:
+    viem:
+      version: "^2.21.0"
+      status: preferred
+      notes: "Type-safe Ethereum"
+
+    ethers:
+      version: "^6.13.0"
+      status: approved
+      notes: "Populäre Alternative"
+
+    web3:
+      status: deprecated
+      alternative: "viem, ethers"
+      reason: "Viem ist moderner und type-safer"
+
+  solidity:
+    hardhat:
+      version: "^2.22.0"
+      status: preferred
+      notes: "Smart Contract Development"
+
+    foundry:
+      status: approved
+      notes: "Rust-basierte Alternative"
+
+# ===========================================
+# REACT ECOSYSTEM
+# ===========================================
+react:
+  state:
+    zustand:
+      version: "^5.0.0"
+      status: preferred
+      notes: "Einfaches State Management"
+
+    jotai:
+      version: "^2.10.0"
+      status: approved
+      notes: "Atomic State"
+
+    redux:
+      status: deprecated
+      alternative: "zustand, jotai"
+      reason: "Zu viel Boilerplate"
+
+  forms:
+    react-hook-form:
+      version: "^7.53.0"
+      status: preferred
+      notes: "Performante Forms"
+
+    formik:
+      status: deprecated
+      alternative: "react-hook-form"
+      reason: "react-hook-form ist performanter"
+
+  ui:
+    mui:
+      version: "^7.0.0"
+      status: preferred
+      notes: "Material Design - SHIBC Website Standard"
+
+    shadcn:
+      status: approved
+      notes: "Tailwind + Radix Components"
+
+    chakra:
+      version: "^3.0.0"
+      status: approved
+      notes: "Alternative zu MUI"
+
+  cms:
+    directus:
+      status: preferred
+      notes: "Headless CMS - bereits im Einsatz für shibaclassic.io"
+
+# ===========================================
+# BUILD TOOLS
+# ===========================================
+build:
+  bundlers:
+    esbuild:
+      version: "^0.24.0"
+      status: preferred
+      notes: "Schnellster Bundler"
+
+    tsup:
+      version: "^8.3.0"
+      status: approved
+      notes: "esbuild Wrapper für Libraries"
+
+    webpack:
+      status: deprecated
+      alternative: "esbuild, vite"
+      reason: "Zu komplex, langsam"
+
+    rollup:
+      version: "^4.27.0"
+      status: approved
+      notes: "Für Library Builds"
+
+# ===========================================
+# PROCESS MANAGEMENT
+# ===========================================
+process:
+  pm2:
+    version: "^5.4.0"
+    status: approved
+    notes: "Production Process Manager"
+
+  tsx:
+    version: "^4.19.0"
+    status: preferred
+    notes: "TypeScript Execute (Development)"
+
+  nodemon:
+    status: deprecated
+    alternative: "tsx watch"
+    reason: "tsx ist schneller"
+
+# ===========================================
+# MESSAGE QUEUES
+# ===========================================
+queues:
+  bullmq:
+    version: "^5.26.0"
+    status: preferred
+    notes: "Redis-based Queue"
+
+  bee-queue:
+    status: deprecated
+    alternative: "bullmq"
+    reason: "BullMQ ist Feature-reicher"

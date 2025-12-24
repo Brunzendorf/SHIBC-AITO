@@ -1,0 +1,58 @@
+# Woodpecker CI Pipeline
+# SHIBC Smart Contract Template
+
+variables:
+  - &node_image 'node:20-alpine'
+
+when:
+  - event: [push, pull_request]
+    branch: [main, develop]
+
+steps:
+  install:
+    image: *node_image
+    commands:
+      - npm ci
+
+  compile:
+    image: *node_image
+    commands:
+      - npm run compile
+    depends_on:
+      - install
+
+  lint:
+    image: *node_image
+    commands:
+      - npm run lint
+    depends_on:
+      - install
+
+  test:
+    image: *node_image
+    commands:
+      - npm run test
+    depends_on:
+      - compile
+
+  coverage:
+    image: *node_image
+    commands:
+      - npm run test:coverage
+    depends_on:
+      - compile
+    when:
+      - event: pull_request
+
+  # IMPORTANT: Mainnet deploys require manual approval!
+  # This step only runs on main branch with manual trigger
+  deploy-mainnet:
+    image: *node_image
+    commands:
+      - echo "CAUTION: Mainnet deployment requires CEO approval!"
+      - echo "Contract deployment must be verified before proceeding."
+    depends_on:
+      - test
+    when:
+      - event: manual
+        branch: main

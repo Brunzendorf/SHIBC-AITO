@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - BOT_TOKEN=${BOT_TOKEN}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      - redis
+    networks:
+      - shibc-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    networks:
+      - shibc-network
+    restart: unless-stopped
+
+networks:
+  shibc-network:
+    driver: bridge
+
+volumes:
+  redis-data:

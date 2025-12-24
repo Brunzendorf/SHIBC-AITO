@@ -1,0 +1,28 @@
+{
+  "name": "@shibc/shell-mcp",
+  "version": "1.0.0",
+  "description": "Shell MCP Server for SHIBC CTO - secure command execution with restrictions",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "shell-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - NODE_ENV=${NODE_ENV:-development}
+      - DATABASE_URL=${DATABASE_URL}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - shibc-network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-shibc}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-shibc}
+      - POSTGRES_DB=${POSTGRES_DB:-shibc_api}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shibc}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - shibc-network
+    restart: unless-stopped
+
+networks:
+  shibc-network:
+    driver: bridge
+
+volumes:
+  postgres-data:

@@ -1,0 +1,80 @@
+# Woodpecker CI Pipeline
+# SHIBC Next.js App Template
+
+variables:
+  - &node_image 'node:20-alpine'
+
+when:
+  - event: [push, pull_request]
+    branch: [main, develop]
+
+steps:
+  install:
+    image: *node_image
+    commands:
+      - npm ci
+
+  typecheck:
+    image: *node_image
+    commands:
+      - npm run typecheck
+    depends_on:
+      - install
+
+  lint:
+    image: *node_image
+    commands:
+      - npm run lint
+    depends_on:
+      - install
+
+  test:
+    image: *node_image
+    commands:
+      - npm run test
+    depends_on:
+      - install
+
+  build:
+    image: *node_image
+    commands:
+      - npm run build
+    depends_on:
+      - typecheck
+      - lint
+      - test
+
+  e2e:
+    image: mcr.microsoft.com/playwright:v1.49.0-jammy
+    commands:
+      - npm run test:e2e
+    depends_on:
+      - build
+    when:
+      - event: pull_request
+
+  docker:
+    image: plugins/docker
+    settings:
+      repo: registry.shibaclassic.io/${CI_REPO_NAME}
+      tags:
+        - latest
+        - ${CI_COMMIT_SHA:0:8}
+    depends_on:
+      - build
+    when:
+      - event: push
+        branch: main
+
+  deploy:
+    image: curlimages/curl
+    commands:
+      - |
+        curl -X POST "https://portainer.shibaclassic.io/api/webhooks/${PORTAINER_WEBHOOK}"
+    secrets:
+      - portainer_webhook
+    depends_on:
+      - docker
+    when:
+      - event: push
+        branch: main

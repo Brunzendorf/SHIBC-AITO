@@ -1,0 +1,22 @@
+{
+  "name": "@shibc/certbot-mcp",
+  "version": "1.0.0",
+  "description": "Certbot/Let's Encrypt MCP Server for AITO",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.2"
+  },
+  "author": "SHIBC Team",
+  "license": "MIT"
+}

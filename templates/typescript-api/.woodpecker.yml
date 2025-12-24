@@ -1,0 +1,125 @@
+# Woodpecker CI Pipeline
+# SHIBC TypeScript API Template
+
+variables:
+  - &node_image 'node:20-alpine'
+
+when:
+  - event: [push, pull_request]
+    branch: [main, develop]
+
+steps:
+  # ============================================
+  # Install Dependencies
+  # ============================================
+  install:
+    image: *node_image
+    commands:
+      - npm ci
+
+  # ============================================
+  # Type Check
+  # ============================================
+  typecheck:
+    image: *node_image
+    commands:
+      - npm run typecheck
+    depends_on:
+      - install
+
+  # ============================================
+  # Lint
+  # ============================================
+  lint:
+    image: *node_image
+    commands:
+      - npm run lint
+    depends_on:
+      - install
+
+  # ============================================
+  # Unit Tests
+  # ============================================
+  test:
+    image: *node_image
+    commands:
+      - npm run test:coverage
+    depends_on:
+      - install
+
+  # ============================================
+  # Build
+  # ============================================
+  build:
+    image: *node_image
+    commands:
+      - npm run build
+    depends_on:
+      - typecheck
+      - lint
+      - test
+
+  # ============================================
+  # Security Audit
+  # ============================================
+  audit:
+    image: *node_image
+    commands:
+      - npm audit --audit-level=high
+    depends_on:
+      - install
+    when:
+      - event: pull_request
+
+  # ============================================
+  # Build Docker Image (on main only)
+  # ============================================
+  docker:
+    image: plugins/docker
+    settings:
+      repo: registry.shibaclassic.io/${CI_REPO_NAME}
+      tags:
+        - latest
+        - ${CI_COMMIT_SHA:0:8}
+      dockerfile: Dockerfile
+      username:
+        from_secret: docker_username
+      password:
+        from_secret: docker_password
+    depends_on:
+      - build
+    when:
+      - event: push
+        branch: main
+
+  # ============================================
+  # Deploy to Staging (on develop)
+  # ============================================
+  deploy-staging:
+    image: curlimages/curl
+    commands:
+      - |
+        curl -X POST "https://portainer.shibaclassic.io/api/webhooks/${PORTAINER_WEBHOOK_STAGING}"
+    secrets:
+      - portainer_webhook_staging
+    depends_on:
+      - build
+    when:
+      - event: push
+        branch: develop
+
+  # ============================================
+  # Deploy to Production (on main)
+  # ============================================
+  deploy-production:
+    image: curlimages/curl
+    commands:
+      - |
+        curl -X POST "https://portainer.shibaclassic.io/api/webhooks/${PORTAINER_WEBHOOK_PROD}"
+    secrets:
+      - portainer_webhook_prod
+    depends_on:
+      - docker
+    when:
+      - event: push
+        branch: main
