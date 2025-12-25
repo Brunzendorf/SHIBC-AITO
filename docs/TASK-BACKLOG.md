@@ -74,7 +74,7 @@ Claude execution timed out after 300000ms
 ### TASK-109: Agent State Machines (Deterministische Workflows)
 **Status:** 🟠 HOCH
 **Entdeckt:** 2025-12-26
-**Aufwand:** 20-30h
+**Aufwand:** ~45h (13 Subtasks, 30 Workflows für 7 Agents)
 
 **Problem:**
 - Agents (besonders CTO) schreiben endlos Specs, aber bauen nichts
@@ -121,40 +121,81 @@ Claude execution timed out after 300000ms
 - [ ] `state_ack` Response-Handling
 - [ ] Agent-Output zu ACK-Payload parsen
 
-#### TASK-109.5: CTO State Machine Definitionen
-**Aufwand:** 4h
-- [ ] BUILD_PROJECT Workflow (13 States)
-  - IDLE → ANALYZE_ISSUE → WRITE_SPEC (optional) → CREATE_PROJECT
-  - → WRITE_CODE → RUN_TESTS → COMMIT_PUSH → DEPLOY_STAGING
-  - → VERIFY_STAGING → DEPLOY_PROD → COMPLETE
-- [ ] FIX_BUG Workflow (8 States)
-- [ ] INFRASTRUCTURE_CHECK Workflow (5 States)
+#### TASK-109.5: CEO State Machine Definitionen
+**Aufwand:** 2h
+- [ ] STRATEGIC_DECISION Workflow (7 States)
+- [ ] INITIATIVE_LAUNCH Workflow (6 States)
+- [ ] WEEKLY_REPORT Workflow (5 States)
 
 #### TASK-109.6: CMO State Machine Definitionen
 **Aufwand:** 3h
-- [ ] CAMPAIGN_EXECUTION Workflow
-- [ ] CONTENT_CREATION Workflow
-- [ ] SOCIAL_MEDIA_POST Workflow
+- [ ] CAMPAIGN_EXECUTION Workflow (9 States)
+- [ ] CONTENT_CREATION Workflow (6 States)
+- [ ] SOCIAL_RESPONSE Workflow (5 States)
+- [ ] MARKET_NEWSJACKING Workflow (7 States)
 
-#### TASK-109.7: Orchestrator Integration
+#### TASK-109.7: CTO State Machine Definitionen
+**Aufwand:** 4h
+- [ ] BUILD_PROJECT Workflow (13 States)
+- [ ] FIX_BUG Workflow (8 States)
+- [ ] INFRASTRUCTURE_CHECK Workflow (5 States)
+- [ ] SECURITY_INCIDENT Workflow (9 States)
+
+#### TASK-109.8: CFO State Machine Definitionen
+**Aufwand:** 3h
+- [ ] TREASURY_REPORT Workflow (6 States)
+- [ ] PAYMENT_PROCESSING Workflow (9 States)
+- [ ] BUDGET_ALLOCATION Workflow (6 States)
+- [ ] FINANCIAL_AUDIT Workflow (6 States)
+
+#### TASK-109.9: COO State Machine Definitionen
+**Aufwand:** 3h
+- [ ] OPERATIONAL_REPORT Workflow (6 States)
+- [ ] PROCESS_OPTIMIZATION Workflow (7 States)
+- [ ] INCIDENT_MANAGEMENT Workflow (7 States)
+- [ ] AGENT_HEALTH_CHECK Workflow (6 States)
+- [ ] CAPACITY_PLANNING Workflow (5 States)
+
+#### TASK-109.10: CCO State Machine Definitionen
+**Aufwand:** 3h
+- [ ] COMPLIANCE_REVIEW Workflow (6 States)
+- [ ] POLICY_UPDATE Workflow (8 States)
+- [ ] RISK_ASSESSMENT Workflow (6 States)
+- [ ] AUDIT_PREPARATION Workflow (5 States)
+- [ ] CONTENT_MODERATION Workflow (6 States)
+
+#### TASK-109.11: DAO State Machine Definitionen
+**Aufwand:** 3h
+- [ ] PROPOSAL_LIFECYCLE Workflow (10 States)
+- [ ] GOVERNANCE_REPORT Workflow (5 States)
+- [ ] DELEGATE_MANAGEMENT Workflow (5 States)
+- [ ] TREASURY_PROPOSAL Workflow (6 States)
+- [ ] COMMUNITY_PULSE Workflow (6 States)
+
+#### TASK-109.12: Orchestrator Integration
 **Aufwand:** 3h
 - [ ] State Machines aus Issues erstellen
 - [ ] Automatisches Triggern bei Issue-Assignment
 - [ ] Monitoring für stuck/failed Machines
+- [ ] Scheduled Trigger für periodische Workflows
 
-#### TASK-109.8: Dashboard UI
+#### TASK-109.13: Dashboard UI
 **Aufwand:** 4h
-- [ ] State Machine Visualisierung
+- [ ] State Machine Visualisierung (Flow-Diagramm)
 - [ ] Aktueller State pro Agent
-- [ ] Transition History
+- [ ] Transition History Timeline
 - [ ] Manuelles Retry/Skip (Admin)
+- [ ] Workflow-Statistiken
 
 **Akzeptanzkriterien:**
-- [ ] CTO erhält Issue #726 → State Machine startet automatisch
-- [ ] CTO durchläuft alle States: Analyze → Spec → Build → Test → Deploy
-- [ ] Bei Test-Failure: Automatischer Retry im WRITE_CODE State
-- [ ] Dashboard zeigt aktuellen State und Projekt-Kontext
-- [ ] Volle Audit-Trail aller Transitions
+- [ ] Alle 7 Agents haben definierte Workflows (30 total)
+- [ ] CTO erhält Issue → BUILD_PROJECT State Machine startet automatisch
+- [ ] CMO erhält Campaign → CAMPAIGN_EXECUTION State Machine startet
+- [ ] Bei Failure: Automatischer Retry im vorherigen State
+- [ ] Scheduled Workflows (Treasury Report, Health Check) laufen periodisch
+- [ ] Dashboard zeigt aktuellen State aller Agents
+- [ ] Volle Audit-Trail aller Transitions in PostgreSQL
+- [ ] Agents können nicht "steckenbleiben" - Timeout-Handling
 
 ---
 

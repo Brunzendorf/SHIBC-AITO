@@ -97,6 +97,80 @@ interface StateTransition {
 
 ---
 
+## Agent State Machines (All 7 Agents)
+
+---
+
+## CEO State Machines
+
+### 1. STRATEGIC_DECISION
+```
+IDLE → GATHER_CONTEXT → ANALYZE_OPTIONS → CONSULT_C_LEVEL → MAKE_DECISION → COMMUNICATE → COMPLETE
+```
+**Trigger:** Strategic issue, major decision needed
+**States:**
+- GATHER_CONTEXT: Read relevant issues, market data, agent reports
+- ANALYZE_OPTIONS: List pros/cons of each option
+- CONSULT_C_LEVEL: Request input from relevant C-level agents
+- MAKE_DECISION: Final decision with rationale
+- COMMUNICATE: Broadcast decision to all agents
+
+### 2. INITIATIVE_LAUNCH
+```
+IDLE → DEFINE_SCOPE → ASSIGN_AGENTS → CREATE_ISSUES → MONITOR_PROGRESS → REVIEW_COMPLETION → COMPLETE
+```
+**Trigger:** New initiative proposal
+**States:**
+- DEFINE_SCOPE: Goals, timeline, success metrics
+- ASSIGN_AGENTS: Determine which agents handle what
+- CREATE_ISSUES: Create GitHub issues for each task
+- MONITOR_PROGRESS: Check agent progress daily
+- REVIEW_COMPLETION: Verify all tasks done
+
+### 3. WEEKLY_REPORT
+```
+IDLE → COLLECT_AGENT_REPORTS → ANALYZE_METRICS → WRITE_REPORT → PUBLISH → COMPLETE
+```
+**Trigger:** Weekly schedule (Sundays)
+
+---
+
+## CMO State Machines
+
+### 1. CAMPAIGN_EXECUTION
+```
+IDLE → ANALYZE_BRIEF → CREATE_CONTENT → REVIEW_COMPLIANCE → SCHEDULE_POSTS → EXECUTE → MONITOR_ENGAGEMENT → REPORT → COMPLETE
+```
+**Trigger:** Campaign issue assigned
+**States:**
+- ANALYZE_BRIEF: Understand campaign goals, target audience
+- CREATE_CONTENT: Write copy, create visuals (spawn imagen worker)
+- REVIEW_COMPLIANCE: CCO check for compliance
+- SCHEDULE_POSTS: Queue for optimal times
+- EXECUTE: Post to Telegram/Twitter
+- MONITOR_ENGAGEMENT: Track metrics for 24-48h
+- REPORT: Summary with metrics
+
+### 2. CONTENT_CREATION
+```
+IDLE → RESEARCH_TOPIC → WRITE_DRAFT → GENERATE_VISUALS → REVIEW → PUBLISH → COMPLETE
+```
+**Trigger:** Content request
+
+### 3. SOCIAL_RESPONSE
+```
+IDLE → ANALYZE_MENTION → DRAFT_RESPONSE → COMPLIANCE_CHECK → POST → COMPLETE
+```
+**Trigger:** Community mention requiring response
+
+### 4. MARKET_NEWSJACKING
+```
+IDLE → DETECT_TREND → ASSESS_RELEVANCE → CREATE_ANGLE → RAPID_CONTENT → POST → MONITOR → COMPLETE
+```
+**Trigger:** Fear & Greed alert, market news
+
+---
+
 ## CTO State Machines
 
 ### 1. BUILD_PROJECT (from GitHub Issue)
@@ -172,6 +246,192 @@ IDLE → ANALYZE_BUG → LOCATE_CODE → WRITE_FIX → RUN_TESTS → COMMIT_PUSH
 ```
 IDLE → CHECK_UPTIME → CHECK_CERTS → CHECK_CONTAINERS → GENERATE_REPORT → IDLE
 ```
+
+### 4. SECURITY_INCIDENT
+```
+IDLE → DETECT_THREAT → ASSESS_SEVERITY → ISOLATE → INVESTIGATE → PATCH → VERIFY → POST_MORTEM → COMPLETE
+```
+**Trigger:** Security alert
+
+---
+
+## CFO State Machines
+
+### 1. TREASURY_REPORT
+```
+IDLE → FETCH_BALANCES → FETCH_PRICES → CALCULATE_METRICS → GENERATE_REPORT → PUBLISH → COMPLETE
+```
+**Trigger:** Daily/weekly schedule
+**States:**
+- FETCH_BALANCES: Query Gnosis Safe, wallets via etherscan
+- FETCH_PRICES: Get token prices from CoinGecko
+- CALCULATE_METRICS: Treasury value, runway, burn rate
+- GENERATE_REPORT: Format markdown report
+- PUBLISH: Post to workspace, notify CEO
+
+### 2. PAYMENT_PROCESSING
+```
+IDLE → VERIFY_REQUEST → CHECK_BUDGET → COMPLIANCE_CHECK → PREPARE_TX → AWAIT_APPROVAL → EXECUTE → CONFIRM → COMPLETE
+```
+**Trigger:** Payment request issue
+**States:**
+- VERIFY_REQUEST: Valid recipient, amount, purpose
+- CHECK_BUDGET: Sufficient funds, within limits
+- COMPLIANCE_CHECK: CCO approval for large amounts
+- PREPARE_TX: Create transaction data
+- AWAIT_APPROVAL: Multi-sig if required
+- EXECUTE: Submit transaction
+- CONFIRM: Verify on-chain
+
+### 3. BUDGET_ALLOCATION
+```
+IDLE → ANALYZE_REQUESTS → PRIORITIZE → PROPOSE_ALLOCATION → CEO_APPROVAL → IMPLEMENT → COMPLETE
+```
+**Trigger:** Budget planning period
+
+### 4. FINANCIAL_AUDIT
+```
+IDLE → GATHER_TRANSACTIONS → CATEGORIZE → RECONCILE → FLAG_ANOMALIES → REPORT → COMPLETE
+```
+**Trigger:** Monthly schedule
+
+---
+
+## COO State Machines
+
+### 1. OPERATIONAL_REPORT
+```
+IDLE → COLLECT_AGENT_METRICS → CALCULATE_KPIs → IDENTIFY_BOTTLENECKS → GENERATE_REPORT → PUBLISH → COMPLETE
+```
+**Trigger:** Daily schedule
+**States:**
+- COLLECT_AGENT_METRICS: Loop counts, response times, errors
+- CALCULATE_KPIs: Uptime, throughput, efficiency
+- IDENTIFY_BOTTLENECKS: Slow agents, failed tasks
+- GENERATE_REPORT: Operational dashboard update
+- PUBLISH: Post to status service, notify CEO
+
+### 2. PROCESS_OPTIMIZATION
+```
+IDLE → ANALYZE_WORKFLOW → IDENTIFY_INEFFICIENCY → PROPOSE_IMPROVEMENT → TEST_CHANGE → MEASURE_IMPACT → IMPLEMENT → COMPLETE
+```
+**Trigger:** Performance issue detected
+
+### 3. INCIDENT_MANAGEMENT
+```
+IDLE → DETECT_INCIDENT → CLASSIFY_SEVERITY → ASSIGN_RESPONDER → COORDINATE_RESPONSE → VERIFY_RESOLUTION → POST_MORTEM → COMPLETE
+```
+**Trigger:** System alert, agent failure
+
+### 4. AGENT_HEALTH_CHECK
+```
+IDLE → CHECK_HEARTBEATS → CHECK_LOOP_COUNTS → CHECK_ERROR_RATES → RESTART_IF_NEEDED → REPORT → IDLE
+```
+**Trigger:** Hourly schedule
+
+### 5. CAPACITY_PLANNING
+```
+IDLE → ANALYZE_USAGE → FORECAST_GROWTH → IDENTIFY_CONSTRAINTS → PROPOSE_SCALING → COMPLETE
+```
+**Trigger:** Weekly schedule
+
+---
+
+## CCO State Machines
+
+### 1. COMPLIANCE_REVIEW
+```
+IDLE → RECEIVE_REQUEST → ANALYZE_CONTENT → CHECK_REGULATIONS → APPROVE_OR_REJECT → DOCUMENT → COMPLETE
+```
+**Trigger:** Compliance check request from other agents
+**States:**
+- RECEIVE_REQUEST: Content, campaign, or transaction to review
+- ANALYZE_CONTENT: Check for prohibited terms, claims
+- CHECK_REGULATIONS: Crypto advertising rules, disclaimers
+- APPROVE_OR_REJECT: Decision with feedback
+- DOCUMENT: Log decision for audit trail
+
+### 2. POLICY_UPDATE
+```
+IDLE → MONITOR_REGULATIONS → IDENTIFY_CHANGES → DRAFT_POLICY → LEGAL_REVIEW → CEO_APPROVAL → PUBLISH → NOTIFY_AGENTS → COMPLETE
+```
+**Trigger:** Regulatory change detected
+
+### 3. RISK_ASSESSMENT
+```
+IDLE → IDENTIFY_RISKS → EVALUATE_IMPACT → PROPOSE_MITIGATIONS → IMPLEMENT → MONITOR → COMPLETE
+```
+**Trigger:** New initiative, partnership proposal
+
+### 4. AUDIT_PREPARATION
+```
+IDLE → GATHER_DOCUMENTS → VERIFY_COMPLETENESS → ORGANIZE → GENERATE_REPORT → COMPLETE
+```
+**Trigger:** Audit schedule
+
+### 5. CONTENT_MODERATION
+```
+IDLE → SCAN_CONTENT → FLAG_VIOLATIONS → REVIEW → TAKE_ACTION → LOG → IDLE
+```
+**Trigger:** Continuous monitoring
+
+---
+
+## DAO State Machines
+
+### 1. PROPOSAL_LIFECYCLE
+```
+IDLE → RECEIVE_PROPOSAL → VALIDATE_FORMAT → PUBLISH_DISCUSSION → OPEN_VOTING → MONITOR_VOTES → CLOSE_VOTING → ANNOUNCE_RESULT → EXECUTE_IF_PASSED → COMPLETE
+```
+**Trigger:** New proposal submitted
+**States:**
+- RECEIVE_PROPOSAL: Parse proposal from issue/message
+- VALIDATE_FORMAT: Check required fields, thresholds
+- PUBLISH_DISCUSSION: Post to Telegram, Discord
+- OPEN_VOTING: Create Snapshot vote
+- MONITOR_VOTES: Track participation, remind voters
+- CLOSE_VOTING: End voting period
+- ANNOUNCE_RESULT: Publish outcome
+- EXECUTE_IF_PASSED: Trigger implementation
+
+### 2. GOVERNANCE_REPORT
+```
+IDLE → FETCH_VOTING_STATS → ANALYZE_PARTICIPATION → SUMMARIZE_DECISIONS → PUBLISH → COMPLETE
+```
+**Trigger:** Weekly schedule
+
+### 3. DELEGATE_MANAGEMENT
+```
+IDLE → TRACK_DELEGATIONS → ANALYZE_POWER_DISTRIBUTION → FLAG_CONCENTRATION → REPORT → COMPLETE
+```
+**Trigger:** Delegation change events
+
+### 4. TREASURY_PROPOSAL
+```
+IDLE → RECEIVE_FUNDING_REQUEST → VALIDATE_AMOUNT → CREATE_PROPOSAL → SUBMIT_TO_DAO → MONITOR → COMPLETE
+```
+**Trigger:** Funding request from agents
+
+### 5. COMMUNITY_PULSE
+```
+IDLE → SCAN_CHANNELS → ANALYZE_SENTIMENT → IDENTIFY_CONCERNS → SUMMARIZE → REPORT_TO_CEO → COMPLETE
+```
+**Trigger:** Daily schedule
+
+---
+
+## Workflow Summary
+
+| Agent | Workflows | Primary Focus |
+|-------|-----------|---------------|
+| **CEO** | 3 | Strategic decisions, initiatives, reporting |
+| **CMO** | 4 | Campaigns, content, social, market response |
+| **CTO** | 4 | Build, fix, infrastructure, security |
+| **CFO** | 4 | Treasury, payments, budgets, audits |
+| **COO** | 5 | Operations, processes, incidents, capacity |
+| **CCO** | 5 | Compliance, policy, risk, audits, moderation |
+| **DAO** | 5 | Proposals, governance, delegates, treasury, community |
+| **TOTAL** | **30** | |
 
 ---
 
