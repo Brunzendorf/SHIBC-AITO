@@ -1,6 +1,7 @@
 #!/bin/bash
 # AITO MCP Enforcement Hook
-# Blocks creation of executable scripts - agents MUST use spawn_worker with MCP
+# Blocks creation of executable scripts IN WORKSPACE - agents MUST use spawn_worker with MCP
+# Does NOT block /app/projects (CTO development) or /app/src (main codebase)
 
 # Read JSON input from stdin
 INPUT=$(cat)
@@ -8,13 +9,20 @@ INPUT=$(cat)
 # Extract file_path from tool_input
 FILE_PATH=$(echo "$INPUT" | grep -o '"file_path"[[:space:]]*:[[:space:]]*"[^"]*"' | sed 's/"file_path"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/')
 
-# Blocked extensions
+# ONLY block scripts in workspace directory (where CMO creates workaround scripts)
+# Allow scripts in: /app/projects, /app/src, /app/mcp-servers (legitimate development)
+if [[ "$FILE_PATH" != */workspace/* ]] && [[ "$FILE_PATH" != /app/workspace/* ]]; then
+  # Not in workspace - allow (CTO development, main codebase, etc.)
+  exit 0
+fi
+
+# Blocked extensions (only in workspace)
 BLOCKED_EXTENSIONS=".js .ts .sh .bash .py .mjs .cjs .rb .pl"
 
 # Check if file has blocked extension
 for ext in $BLOCKED_EXTENSIONS; do
   if [[ "$FILE_PATH" == *"$ext" ]]; then
-    echo "🚫 AITO ENFORCEMENT: Cannot create executable script files" >&2
+    echo "🚫 AITO ENFORCEMENT: Cannot create executable scripts in workspace" >&2
     echo "" >&2
     echo "File: $FILE_PATH" >&2
     echo "Blocked extension: $ext" >&2
