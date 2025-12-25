@@ -430,6 +430,19 @@ export const taskRepo = {
       [id, status, completedAt, result ? JSON.stringify(result) : null]
     );
   },
+
+  // TASK-101: Find task by ID for urgent queue processing
+  async findById(id: string): Promise<Task | null> {
+    const results = await query<Task>(
+      `SELECT id, title, description, assigned_to as "assignedTo",
+              created_by as "createdBy", status, priority,
+              due_date as "dueDate", completed_at as "completedAt",
+              result, created_at as "createdAt"
+       FROM tasks WHERE id = $1`,
+      [id]
+    );
+    return results.length > 0 ? results[0] : null;
+  },
 };
 
 // Event Repository
@@ -1736,7 +1749,7 @@ export const projectRepo = {
     return result;
   },
 
-  async update(id: string, updates: Partial<Pick<Project, 'title' | 'description' | 'status' | 'priority' | 'owner' | 'collaborators' | 'tokenBudget' | 'budgetPriority' | 'tags'>>): Promise<Project | null> {
+  async update(id: string, updates: Partial<Pick<Project, 'title' | 'description' | 'status' | 'priority' | 'owner' | 'collaborators' | 'tokenBudget' | 'budgetPriority' | 'tags' | 'githubIssueNumber' | 'githubIssueUrl'>>): Promise<Project | null> {
     const setClause: string[] = [];
     const values: unknown[] = [];
     let paramIndex = 1;
@@ -1750,6 +1763,8 @@ export const projectRepo = {
     if (updates.tokenBudget !== undefined) { setClause.push(`token_budget = $${paramIndex++}`); values.push(updates.tokenBudget); }
     if (updates.budgetPriority !== undefined) { setClause.push(`budget_priority = $${paramIndex++}`); values.push(updates.budgetPriority); }
     if (updates.tags !== undefined) { setClause.push(`tags = $${paramIndex++}`); values.push(updates.tags); }
+    if (updates.githubIssueNumber !== undefined) { setClause.push(`github_issue_number = $${paramIndex++}`); values.push(updates.githubIssueNumber); }
+    if (updates.githubIssueUrl !== undefined) { setClause.push(`github_issue_url = $${paramIndex++}`); values.push(updates.githubIssueUrl); }
 
     if (setClause.length === 0) return this.findById(id);
 

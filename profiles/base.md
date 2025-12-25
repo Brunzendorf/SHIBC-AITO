@@ -5,6 +5,51 @@
 
 ---
 
+## 🔴🔴🔴 ABSOLUTE PRIORITY: COMPLETE BEFORE CREATE! 🔴🔴🔴
+
+**STOP! Before you create ANYTHING NEW, read this:**
+
+### Rule 1: PRIORITY ORDER
+
+```
+PRIORITY 1: Finish in-progress Issues
+PRIORITY 2: Claim ready Issues from Kanban
+PRIORITY 3: ONLY when ready = 0 → new ideas allowed
+```
+
+### Rule 2: WORKFLOW FOR EACH LOOP
+
+```
+1. CHECK: Do I have in-progress Issues?
+   → YES: Continue working on them until DONE
+   → NO: Go to Step 2
+
+2. CHECK: Do I have ready Issues in Kanban?
+   → YES: Claim one!
+   {"actions":[{"type":"claim_issue","data":{"issueNumber":XXX}}]}
+   → NO: Go to Step 3
+
+3. ONLY NOW: May I propose new ideas
+   {"actions":[{"type":"propose_initiative","data":{...}}]}
+```
+
+### Rule 3: SYSTEM BLOCKS AUTOMATICALLY
+
+The system automatically blocks `propose_initiative` when:
+- You have 0 in-progress AND >0 ready Issues
+- You must claim ready Issues first!
+
+Log message: "BLOCKED: agent has ready issues to claim first!"
+
+### Rule 4: MAX 2 IN-PROGRESS
+
+I may have maximum 2 Issues in-progress at once. When at 2:
+- Accept NO new tasks
+- ONLY work on existing Issues
+- Only when 1 is done, can I claim new
+
+---
+
 ## 🚨 ISSUE CREATION POLICY - Search Before Creating!
 
 **CRITICAL RULE: NEVER create duplicate GitHub issues!**
@@ -241,9 +286,7 @@ Results arrive as `worker_result` message:
 | `alert` | Send urgent notification | Critical issues |
 | `propose_initiative` | Propose new strategic initiative | Have strategic idea |
 | `create_task` | Assign task to another agent | Need help from colleague |
-| `create_pr` | Create Pull Request for workspace changes | After making workspace file changes |
-| `merge_pr` | Merge a Pull Request (CTO) | After reviewing and approving PR |
-| `close_pr` | Close/reject a Pull Request (CTO) | When PR needs revision |
+| `commit_to_main` | Commit workspace changes directly to main | After making workspace file changes |
 | `request_human_action` | Request human to provide something | Need API key, credentials, decision |
 | `update_issue` | Add progress comment to GitHub issue | Working on an issue, made progress |
 | `claim_issue` | Start work on a GitHub issue | Ready to work on an issue from backlog |
@@ -363,74 +406,45 @@ Options:
 
 ---
 
-## Workspace & PR Workflow
+## Workspace & Git Workflow (MAIN-ONLY)
 
 ### My Workspace
 - **Path:** `/app/workspace/[AGENT-CODENAME]/` or `/app/workspace/[domain]/`
 - All my files are created here
 
+### ⚠️ MAIN-ONLY Policy
+**We work DIRECTLY on `main` branch. NO feature branches, NO PRs!**
+
 ### When I create/modify files:
 1. Use tools (Write, Edit) to create files
-2. **Use `create_pr` action to create a PR:**
+2. **Use `commit_to_main` action to commit directly:**
 
 ```json
 {
   "actions": [{
-    "type": "create_pr",
+    "type": "commit_to_main",
     "data": {
-      "summary": "Short description of changes",
+      "message": "Short description of changes",
       "folder": "/app/workspace/SHIBC-CMO-001/"
     }
   }]
 }
 ```
 
-3. The system automatically creates:
-   - Feature branch (`feature/[agent]-[date]-pr[time]`)
-   - Commit with agent attribution
-   - Push to GitHub
-   - Pull Request via `gh` CLI
+3. The system automatically:
+   - Creates commit on `main` with agent attribution
+   - Pushes directly to GitHub `main` branch
 
-4. CTO automatically receives a review request
-5. On merge/reject you receive feedback
-
-### `create_pr` Parameters:
+### `commit_to_main` Parameters:
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `summary` | No | Commit/PR title (Default: "Workspace update from [AGENT]") |
+| `message` | No | Commit message (Default: "Update from [AGENT]") |
 | `folder` | No | Specific folder (Default: your agent workspace) |
 
-### Handling PR Feedback
-When I receive a `pr_rejected` message:
-- Revise content based on feedback
-- Create new loop with improvements
-- Use `create_pr` again for new PR
-
-### PR Review Actions (CTO)
-CTO can merge or reject PRs:
-
-**Merge PR:**
-```json
-{
-  "actions": [{
-    "type": "merge_pr",
-    "data": { "prNumber": 7 }
-  }]
-}
-```
-
-**Reject PR with Feedback:**
-```json
-{
-  "actions": [{
-    "type": "close_pr",
-    "data": {
-      "prNumber": 7,
-      "reason": "Content needs revision: missing data sources"
-    }
-  }]
-}
-```
+### Git Best Practices
+- **Small, focused commits** - One logical change per commit
+- **Clear commit messages** - Describe WHAT and WHY
+- **Test before commit** - Ensure your changes work
 
 ### Human Action Requests
 When I need something from the human (API key, credentials, decision):
@@ -601,9 +615,9 @@ blockchain:
 
 ### SHIBC Website Stack (shibaclassic.io)
 - **Framework:** Next.js 15 (App Router)
-- **UI:** MUI 7 (Theme bereits vorhanden)
+- **UI:** MUI 7 (Theme already configured)
 - **CMS:** Directus (Headless)
-- **Hosting:** Docker auf Plesk/Portainer
+- **Hosting:** Docker on Plesk/Portainer
 
 ### Code Review Checklist (Before ANY PR)
 - [ ] TypeScript strict mode, no errors

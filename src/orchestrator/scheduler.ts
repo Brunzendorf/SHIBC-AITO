@@ -1,8 +1,8 @@
 import cron from 'node-cron';
 import { v4 as uuid } from 'uuid';
 import { createLogger } from '../lib/logger.js';
-import { agentRepo, eventRepo, projectRepo } from '../lib/db.js';
-import { publish, channels } from '../lib/redis.js';
+import { agentRepo, eventRepo, projectRepo, taskRepo } from '../lib/db.js';
+import { publish, channels, popUrgent } from '../lib/redis.js';
 import { agentConfigs, numericConfig } from '../lib/config.js';
 import { autoRestartUnhealthy } from './container.js';
 import { runArchiveWorker, getArchiveStats } from '../workers/archive-worker.js';
@@ -237,6 +237,83 @@ export function scheduleDataFetcher(): string {
   });
 
   return jobId;
+}
+
+// Schedule Urgent Queue Processor - forwards urgent tasks to agents (TASK-101)
+export function scheduleUrgentQueueProcessor(): string {
+  const jobId = 'urgent-queue-processor';
+  const cronExpression = '*/10 * * * * *'; // Every 10 seconds
+
+  logger.info({ cronExpression }, 'Scheduling Urgent Queue Processor');
+
+  const task = cron.schedule(cronExpression, async () => {
+    await processUrgentQueue();
+  });
+
+  jobs.set(jobId, task);
+  jobMetadata.set(jobId, {
+    id: jobId,
+    agentId: 'system',
+    cronExpression,
+    enabled: true,
+  });
+
+  return jobId;
+}
+
+// Process urgent queue items and forward to agents
+async function processUrgentQueue(): Promise<void> {
+  let processed = 0;
+  const maxBatch = 10; // Process max 10 items per run
+
+  while (processed < maxBatch) {
+    const item = await popUrgent() as { agentId: string; taskId: string; priority: string } | null;
+    if (!item) break; // Queue empty
+
+    try {
+      // Get the task from DB
+      const task = await taskRepo.findById(item.taskId);
+      if (!task) {
+        logger.warn({ taskId: item.taskId }, 'Urgent task not found in DB, skipping');
+        processed++;
+        continue;
+      }
+
+      // Forward to agent as high-priority task message
+      const message: AgentMessage = {
+        id: uuid(),
+        type: 'task',
+        from: 'orchestrator',
+        to: item.agentId,
+        payload: {
+          task_id: task.id,
+          title: task.title,
+          description: task.description,
+          priority: 'urgent',
+          source: 'urgent_queue',
+        },
+        priority: 'urgent',
+        timestamp: new Date(),
+        requiresResponse: true,
+      };
+
+      await publish(channels.agent(item.agentId), message);
+
+      logger.info({
+        taskId: item.taskId,
+        agentId: item.agentId
+      }, 'Urgent task forwarded to agent');
+
+      processed++;
+    } catch (err) {
+      logger.error({ err, item }, 'Failed to process urgent queue item');
+      processed++;
+    }
+  }
+
+  if (processed > 0) {
+    logger.debug({ processed }, 'Urgent queue batch processed');
+  }
 }
 
 // Schedule Backlog Grooming - workflow optimization every 3 hours
@@ -546,10 +623,16 @@ export async function initialize(): Promise<void> {
   scheduleDataFetcher();
   scheduleBacklogGrooming();
   scheduleEventExecutor();
+  scheduleUrgentQueueProcessor(); // TASK-101: Process urgent queue
 
   // Run data fetch immediately on startup
   logger.info('Running initial data fetch...');
   runDataFetch().catch(err => logger.error({ err }, 'Initial data fetch failed'));
+
+  // Run backlog grooming immediately on startup (TASK-100)
+  // This populates context:backlog in Redis so agents can see Kanban issues
+  logger.info('Running initial backlog grooming...');
+  runBacklogGrooming().catch(err => logger.error({ err }, 'Initial backlog grooming failed'));
 
   // Schedule agent loops
   await initializeAgentSchedules();

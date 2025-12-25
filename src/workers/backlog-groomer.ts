@@ -20,6 +20,25 @@ import type { EventType } from '../lib/types.js';
 
 const logger = createLogger('backlog-groomer');
 
+// GitHub Rate Limiting
+// Secondary rate limit: 80 content-generating requests per minute
+// We use a conservative 60/minute to stay safe (1 request per second)
+const RATE_LIMIT_DELAY_MS = 1000; // 1 second between write operations
+let lastWriteTime = 0;
+
+async function rateLimitedWrite<T>(operation: () => Promise<T>): Promise<T> {
+  const now = Date.now();
+  const timeSinceLastWrite = now - lastWriteTime;
+
+  if (timeSinceLastWrite < RATE_LIMIT_DELAY_MS) {
+    const waitTime = RATE_LIMIT_DELAY_MS - timeSinceLastWrite;
+    await new Promise(resolve => setTimeout(resolve, waitTime));
+  }
+
+  lastWriteTime = Date.now();
+  return operation();
+}
+
 // GitHub client
 let octokit: Octokit | null = null;
 
@@ -56,6 +75,7 @@ interface GithubIssue {
   labels: string[];
   state: string;
   created_at: string;
+  updated_at: string;
   assignee?: string;
 }
 
@@ -97,6 +117,7 @@ async function fetchOpenIssues(): Promise<GithubIssue[]> {
         labels: issue.labels.map(l => typeof l === 'string' ? l : l.name || ''),
         state: issue.state,
         created_at: issue.created_at,
+        updated_at: issue.updated_at,
         assignee: issue.assignee?.login ?? undefined,
       });
     }
@@ -433,6 +454,109 @@ async function validateEstimates(issues: GithubIssue[]): Promise<number> {
 }
 
 /**
+ * Automatically set top issues to status:ready per agent
+ * Ensures agents always have work in their ready queue
+ *
+ * Logic:
+ * - For each agent (cto, cmo, cfo, coo, cco, dao)
+ * - Find issues with that agent label AND a priority label
+ * - Skip issues already in ready/in-progress/review/blocked
+ * - Set top 2 issues to status:ready
+ */
+async function autoSetReadyIssues(issues: GithubIssue[]): Promise<number> {
+  const gh = getOctokit();
+  const agents = ['ceo', 'cto', 'cmo', 'cfo', 'coo', 'cco', 'dao'];
+  let totalSet = 0;
+
+  // Priority order for scoring
+  const priorityScore: Record<string, number> = {
+    'priority:critical': 4,
+    'priority:high': 3,
+    'priority:medium': 2,
+    'priority:low': 1,
+  };
+
+  for (const agent of agents) {
+    // Find issues for this agent that could be moved to ready
+    const agentIssues = issues.filter(i => {
+      const hasAgent = i.labels.includes(`agent:${agent}`);
+      const hasPriority = i.labels.some(l => l.startsWith('priority:'));
+      const notReady = !i.labels.includes(STATUS_LABELS.READY);
+      const notInProgress = !i.labels.includes(STATUS_LABELS.IN_PROGRESS);
+      const notReview = !i.labels.includes(STATUS_LABELS.REVIEW);
+      const notBlocked = !i.labels.includes(STATUS_LABELS.BLOCKED);
+      const notDone = !i.labels.includes(STATUS_LABELS.DONE);
+      const notNeedsEstimate = !i.labels.includes('needs-estimate');
+      const notDuplicate = !i.labels.includes('duplicate');
+      const notSubtask = !i.labels.includes('subtask');
+
+      return hasAgent && hasPriority && notReady && notInProgress &&
+             notReview && notBlocked && notDone && notNeedsEstimate &&
+             notDuplicate && notSubtask;
+    });
+
+    // Skip if already has ready issues (check current ready count)
+    const currentReadyCount = issues.filter(i =>
+      i.labels.includes(`agent:${agent}`) &&
+      i.labels.includes(STATUS_LABELS.READY)
+    ).length;
+
+    if (currentReadyCount >= 2) {
+      logger.debug({ agent, currentReadyCount }, 'Agent already has enough ready issues');
+      continue;
+    }
+
+    // Sort by priority (critical > high > medium > low)
+    const sorted = agentIssues.sort((a, b) => {
+      const scoreA = a.labels.reduce((s, l) => s + (priorityScore[l] || 0), 0);
+      const scoreB = b.labels.reduce((s, l) => s + (priorityScore[l] || 0), 0);
+      return scoreB - scoreA;
+    });
+
+    // Set top N to ready (up to 2 - currentReadyCount)
+    const toSet = sorted.slice(0, 2 - currentReadyCount);
+
+    for (const issue of toSet) {
+      try {
+        // Remove status:backlog if present (rate-limited)
+        if (issue.labels.includes(STATUS_LABELS.BACKLOG)) {
+          try {
+            await rateLimitedWrite(() => gh.issues.removeLabel({
+              owner: GITHUB_OWNER,
+              repo: GITHUB_REPO,
+              issue_number: issue.number,
+              name: STATUS_LABELS.BACKLOG,
+            }));
+          } catch {
+            // Label might not exist
+          }
+        }
+
+        // Add status:ready (rate-limited)
+        await rateLimitedWrite(() => gh.issues.addLabels({
+          owner: GITHUB_OWNER,
+          repo: GITHUB_REPO,
+          issue_number: issue.number,
+          labels: [STATUS_LABELS.READY],
+        }));
+
+        logger.info({
+          agent,
+          issueNumber: issue.number,
+          title: issue.title,
+        }, 'Auto-set issue to status:ready');
+
+        totalSet++;
+      } catch (error) {
+        logger.warn({ error, issueNumber: issue.number }, 'Failed to set status:ready');
+      }
+    }
+  }
+
+  return totalSet;
+}
+
+/**
  * Send prioritization request to CEO with focus-based triage suggestions
  */
 async function requestCEOPrioritization(issues: GithubIssue[]): Promise<void> {
@@ -585,10 +709,26 @@ ${marketContext}
 }
 
 /**
- * Index all issues to RAG for semantic search
+ * Index only NEW or UPDATED issues to RAG for semantic search
+ * Uses Redis to track last indexed timestamp per issue
  */
 async function indexIssuesToRAG(issues: GithubIssue[]): Promise<void> {
+  const REDIS_KEY_PREFIX = 'rag:issue:lastIndexed:';
+  let indexedCount = 0;
+  let skippedCount = 0;
+
   for (const issue of issues) {
+    // Check if issue was updated since last indexing
+    const lastIndexedKey = `${REDIS_KEY_PREFIX}${issue.number}`;
+    const lastIndexed = await redis.get(lastIndexedKey);
+    const issueUpdated = new Date(issue.updated_at).getTime();
+
+    // Skip if already indexed and not updated
+    if (lastIndexed && parseInt(lastIndexed) >= issueUpdated) {
+      skippedCount++;
+      continue;
+    }
+
     const content = `Issue #${issue.number}: ${issue.title}\n\n${issue.body || ''}\n\nLabels: ${issue.labels.join(', ')}`;
 
     await indexDocument(
@@ -601,9 +741,17 @@ async function indexIssuesToRAG(issues: GithubIssue[]): Promise<void> {
         created: issue.created_at,
       }
     );
+
+    // Mark as indexed with current timestamp
+    await redis.set(lastIndexedKey, Date.now().toString());
+    indexedCount++;
   }
 
-  logger.info({ count: issues.length }, 'Indexed issues to RAG');
+  logger.info({
+    total: issues.length,
+    indexed: indexedCount,
+    skipped: skippedCount
+  }, 'RAG indexing completed (only new/updated issues)');
 }
 
 /**
@@ -673,31 +821,67 @@ export async function runBacklogGrooming(): Promise<GroomingResult> {
     result.totalIssues = issues.length;
     logger.info({ count: issues.length }, 'Fetched open issues');
 
-    // 2. Index issues to RAG for semantic search
-    await indexIssuesToRAG(issues);
-
-    // 3. Detect duplicates
-    const duplicates = await findDuplicates(issues);
-    result.duplicatesFound = Array.from(duplicates.values()).flat().length;
-
-    if (duplicates.size > 0) {
-      await closeDuplicates(duplicates);
+    // 2. AUTO-READY FIRST! Set top issues to status:ready per agent
+    // This is the MOST CRITICAL step - runs before anything else to avoid rate limits
+    try {
+      const autoReadyCount = await autoSetReadyIssues(issues);
+      logger.info({ autoReadyCount }, 'Auto-set issues to status:ready');
+    } catch (readyError) {
+      logger.warn({ error: readyError }, 'Auto-ready failed, continuing');
     }
 
-    // 4. Find related issues and create epics
-    const relatedGroups = await findRelatedGroups(issues);
-    for (const [theme, issueNums] of relatedGroups) {
-      const epicNum = await createEpic(theme, issueNums, issues);
-      if (epicNum) result.epicsCreated++;
-    }
-
-    // 5. Validate estimates
-    result.issuesValidated = await validateEstimates(issues);
-
-    // 6. Update backlog context in Redis
+    // 3. Update backlog context in Redis - CRITICAL for agent Kanban views
     await updateBacklogContext(issues);
 
-    // 7. Request CEO prioritization
+    // 4. Index issues to RAG for semantic search (non-blocking - RAG may be unavailable)
+    // TASK-100 FIX: Wrap in try-catch so grooming continues even if Ollama is down
+    let ragAvailable = false;
+    try {
+      await indexIssuesToRAG(issues);
+      ragAvailable = true;
+    } catch (ragError) {
+      logger.warn({ error: ragError }, 'RAG indexing failed, continuing without semantic search');
+    }
+
+    // 5. Detect duplicates (only if RAG is available)
+    if (ragAvailable) {
+      try {
+        const duplicates = await findDuplicates(issues);
+        result.duplicatesFound = Array.from(duplicates.values()).flat().length;
+
+        if (duplicates.size > 0) {
+          await closeDuplicates(duplicates);
+        }
+      } catch (dupError) {
+        logger.warn({ error: dupError }, 'Duplicate detection failed, skipping');
+      }
+    } else {
+      logger.info('Skipping duplicate detection (RAG unavailable)');
+    }
+
+    // 6. Find related issues and create epics (only if RAG is available)
+    if (ragAvailable) {
+      try {
+        const relatedGroups = await findRelatedGroups(issues);
+        for (const [theme, issueNums] of relatedGroups) {
+          const epicNum = await createEpic(theme, issueNums, issues);
+          if (epicNum) result.epicsCreated++;
+        }
+      } catch (epicError) {
+        logger.warn({ error: epicError }, 'Epic creation failed, skipping');
+      }
+    } else {
+      logger.info('Skipping epic creation (RAG unavailable)');
+    }
+
+    // 7. Validate estimates (lower priority - can fail without breaking workflow)
+    try {
+      result.issuesValidated = await validateEstimates(issues);
+    } catch (validateError) {
+      logger.warn({ error: validateError }, 'Estimate validation failed, skipping');
+    }
+
+    // 8. Request CEO prioritization (optional - informational only)
     await requestCEOPrioritization(issues);
     result.prioritized = issues.filter(i =>
       !i.labels.includes('needs-estimate') && !isInProgress(i)

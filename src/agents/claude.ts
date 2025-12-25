@@ -660,8 +660,19 @@ export function buildLoopPrompt(
           );
         }
         if (kanbanIssues.inProgress.length === 0) {
+          // Get the highest priority issue to suggest
+          const suggestedIssue = kanbanIssues.ready[0];
           parts.push(
-            '**⚠️ PICK ONE:** You have no in-progress issues. Pick a ready issue!',
+            '### 🚨 ACTION REQUIRED: CLAIM AN ISSUE NOW!',
+            '',
+            'You have **0 in-progress** issues. You MUST claim a ready issue before doing anything else!',
+            '',
+            '**How to claim:**',
+            '```json',
+            `{"actions":[{"type":"claim_issue","data":{"issueNumber":${suggestedIssue?.number || 'XXX'}}}]}`,
+            '```',
+            '',
+            `**Suggested:** Claim **#${suggestedIssue?.number}** - ${suggestedIssue?.title || 'Pick from ready queue'}`,
             ''
           );
         }

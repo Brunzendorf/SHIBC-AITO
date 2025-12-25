@@ -116,7 +116,7 @@ export const workspaceConfig = {
   repoUrl: config.WORKSPACE_REPO_URL,
   branch: config.WORKSPACE_BRANCH,
   autoCommit: config.WORKSPACE_AUTO_COMMIT === 'true',
-  usePR: config.WORKSPACE_USE_PR === 'true',       // Branch+PR workflow
+  usePR: false, // DISABLED: Main-only workflow - no PRs
   autoMerge: config.WORKSPACE_AUTO_MERGE === 'true', // Auto-merge after approval
   skipPR: config.WORKSPACE_SKIP_PR === 'true',     // Bypass PR workflow - direct push
   // Build authenticated URL if token available

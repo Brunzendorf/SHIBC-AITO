@@ -400,7 +400,8 @@ services:
       - shared_openai_config:/app/.openai
       - ./workspace:/app/workspace
       # CTO-eigenes Volume für geklonte Projekte (website, contracts, etc.)
-      - cto_projects:/app/projects
+      # Lokaler Bind Mount statt Named Volume für bessere Sichtbarkeit
+      - ./cto-projects:/app/projects
     depends_on:
       orchestrator:
         condition: service_healthy

@@ -44,7 +44,7 @@ import {
 } from './session-executor.js';
 import { llmRouter, type TaskContext } from '../lib/llm/index.js';
 import type { AgentType, AgentMessage, EventType } from '../lib/types.js';
-import { spawnWorkerAsync } from '../workers/spawner.js';
+import { spawnWorkerAsync, spawnWorker } from '../workers/spawner.js';
 import { queueForArchive } from '../workers/archive-worker.js';
 import { getTraceId, withTraceAsync } from '../lib/tracing.js';
 import {
@@ -1675,85 +1675,45 @@ export class AgentDaemon {
         break;
       }
 
+      case 'commit_to_main':
       case 'create_pr': {
-        // Create a Pull Request for workspace changes
-        // This handles all git operations: branch, commit, push, PR creation
-        const folder = (actionData?.folder as string) || `/app/workspace/${this.profile?.codename || `SHIBC-${this.config.agentType.toUpperCase()}-001`}/`;
-        const summary = (actionData?.summary as string) || `Workspace update from ${this.config.agentType.toUpperCase()}`;
-        const loopNumber = (await this.state?.get(StateKeys.LOOP_COUNT)) || 0;
-        // PR category: 'status' (auto-merge, no RAG), 'content' (clevel review), 'strategic' (CEO review)
-        const rawCategory = (actionData?.category as string) || 'content';
-        const category = (['status', 'content', 'strategic'].includes(rawCategory) ? rawCategory : 'content') as 'status' | 'content' | 'strategic';
+        // Commit and push directly to main (no PRs - main-only workflow)
+        const message = (actionData?.message as string) || (actionData?.summary as string) || `Update from ${this.config.agentType.toUpperCase()}`;
 
-        logger.info({ folder, summary, category, agentType: this.config.agentType }, 'Creating PR for workspace changes');
+        logger.info({ message, agentType: this.config.agentType }, 'Committing to main');
 
         try {
-          const prResult = await workspace.commitAndCreatePR(
-            this.config.agentType,
-            summary,
-            loopNumber as number,
-            category
-          );
+          const result = await workspace.commitAndPush(this.config.agentType, message);
 
-          if (prResult.success) {
-            if (prResult.prUrl) {
+          if (result.success) {
+            if (result.filesChanged && result.filesChanged > 0) {
               logger.info({
-                prUrl: prResult.prUrl,
-                prNumber: prResult.prNumber,
-                branch: prResult.branchName,
-                filesChanged: prResult.filesChanged,
-              }, 'PR created successfully');
+                commitHash: result.commitHash,
+                filesChanged: result.filesChanged,
+              }, 'Committed and pushed to main');
 
-              // Store PR info in state for agent feedback
-              await this.state?.set('last_pr_url', prResult.prUrl);
-              await this.state?.set('last_pr_number', prResult.prNumber);
+              // Store commit info in state
+              await this.state?.set('last_commit_hash', result.commitHash);
 
               // Log as event
               await eventRepo.log({
-                eventType: 'pr_created' as EventType,
+                eventType: 'workspace_commit' as EventType,
                 sourceAgent: this.config.agentId,
                 payload: {
-                  prUrl: prResult.prUrl,
-                  prNumber: prResult.prNumber,
-                  branch: prResult.branchName,
-                  filesChanged: prResult.filesChanged,
-                  summary,
+                  commitHash: result.commitHash,
+                  filesChanged: result.filesChanged,
+                  message,
                 },
               });
-
-              // Notify CTO for review (if not CTO creating the PR)
-              if (this.config.agentType !== 'cto') {
-                const reviewMessage: AgentMessage = {
-                  id: crypto.randomUUID(),
-                  type: 'task',
-                  from: this.config.agentId,
-                  to: 'cto',
-                  payload: {
-                    task_id: `pr-review-${prResult.prNumber}`,
-                    title: `Review PR #${prResult.prNumber}: ${summary}`,
-                    description: `Please review and merge/close PR: ${prResult.prUrl}`,
-                    prUrl: prResult.prUrl,
-                    prNumber: prResult.prNumber,
-                    branch: prResult.branchName,
-                  },
-                  priority: 'normal',
-                  timestamp: new Date(),
-                  requiresResponse: false,
-                };
-                await publisher.publish(`channel:agent:cto`, JSON.stringify(reviewMessage));
-                logger.info({ prNumber: prResult.prNumber }, 'Sent PR review request to CTO');
-              }
-            } else if (prResult.filesChanged === 0) {
-              logger.info('No changes to commit');
             } else {
-              logger.info({ commitHash: prResult.commitHash }, 'Changes committed locally (push/PR may have failed)');
+              logger.info('No changes to commit');
             }
           } else {
-            logger.warn('PR creation failed');
+            logger.warn('Commit/push failed');
           }
-        } catch (prError) {
-          const errMsg = prError instanceof Error ? prError.message : String(prError);
-          logger.error({ error: errMsg, folder }, 'Failed to create PR');
+        } catch (commitError) {
+          const errMsg = commitError instanceof Error ? commitError.message : String(commitError);
+          logger.error({ error: errMsg }, 'Failed to commit to main');
         }
         break;
       }
@@ -2068,6 +2028,35 @@ export class AgentDaemon {
 
       case 'propose_initiative': {
         // Agent proposes a new initiative - create GitHub issue
+        // ENFORCEMENT: Block if agent has ready issues they should work on first!
+        const currentKanban = await getKanbanIssuesForAgent(this.config.agentType);
+        const inProgressCount = currentKanban?.inProgress?.length || 0;
+        const readyCount = currentKanban?.ready?.length || 0;
+
+        // Logic:
+        // - If in-progress > 0: Should be working, not creating (but allow if also completing)
+        // - If in-progress = 0 AND ready > 0: MUST claim first, BLOCK creation
+        // - If in-progress = 0 AND ready = 0: OK to propose new initiatives
+        if (inProgressCount === 0 && readyCount > 0) {
+          logger.warn({
+            agentType: this.config.agentType,
+            inProgressCount,
+            readyCount,
+          }, 'BLOCKED: propose_initiative rejected - agent has ready issues to claim first!');
+
+          // Log the blocked attempt
+          await eventRepo.log({
+            eventType: 'initiative_blocked' as EventType,
+            sourceAgent: this.config.agentId,
+            payload: {
+              reason: `Has ${readyCount} ready issues - must claim and work before creating new`,
+              attemptedTitle: (actionData as { title?: string })?.title || 'unknown',
+            },
+          }).catch(() => {}); // Ignore logging errors
+
+          break; // Skip this action
+        }
+
         const proposal = actionData as {
           title?: string;
           description?: string;
@@ -2180,6 +2169,274 @@ export class AgentDaemon {
           });
         } catch (scheduleErr) {
           logger.warn({ error: scheduleErr, event }, 'Failed to schedule event');
+        }
+        break;
+      }
+
+      case 'create_project': {
+        // Create a new project in the database with tracking
+        const projectData = actionData as {
+          title?: string;
+          description?: string;
+          priority?: 'critical' | 'high' | 'medium' | 'low';
+          tokenBudget?: number;
+          tags?: string[];
+          githubIssueNumber?: number;
+          githubIssueUrl?: string;
+        };
+
+        if (!projectData?.title) {
+          logger.warn({ projectData }, 'Invalid create_project: missing title');
+          break;
+        }
+
+        try {
+          const project = await projectRepo.create({
+            title: projectData.title,
+            description: projectData.description || '',
+            owner: this.config.agentType,
+            priority: projectData.priority || 'medium',
+            tokenBudget: projectData.tokenBudget || 50000,
+            tags: projectData.tags || [],
+            createdBy: this.config.agentId,
+          });
+
+          // Link GitHub issue if provided
+          if (projectData.githubIssueNumber) {
+            await projectRepo.update(project.id, {
+              githubIssueNumber: projectData.githubIssueNumber,
+              githubIssueUrl: projectData.githubIssueUrl,
+            });
+          }
+
+          logger.info({
+            projectId: project.id,
+            title: project.title,
+            owner: project.owner,
+            priority: project.priority,
+          }, 'Project created in database');
+
+          // Log as event
+          await eventRepo.log({
+            eventType: 'project_created' as EventType,
+            sourceAgent: this.config.agentId,
+            payload: {
+              projectId: project.id,
+              title: project.title,
+              owner: project.owner,
+            },
+          });
+        } catch (projectErr) {
+          logger.warn({ error: projectErr, projectData }, 'Failed to create project');
+        }
+        break;
+      }
+
+      case 'create_project_task': {
+        // Create a task within a project (with story points tracking)
+        const taskData = actionData as {
+          projectId?: string;
+          projectTitle?: string; // Alternative: find/create project by title
+          title?: string;
+          description?: string;
+          assignee?: string;
+          storyPoints?: 1 | 2 | 3 | 5 | 8;
+          githubIssueNumber?: number;
+          githubIssueUrl?: string;
+          dependencies?: string[];
+        };
+
+        if (!taskData?.title) {
+          logger.warn({ taskData }, 'Invalid create_project_task: missing title');
+          break;
+        }
+
+        try {
+          let projectId = taskData.projectId;
+
+          // If no projectId but projectTitle provided, find or create project
+          if (!projectId && taskData.projectTitle) {
+            const existingProjects = await projectRepo.findAll();
+            const existing = existingProjects.find((p: { title: string }) => p.title === taskData.projectTitle);
+            if (existing) {
+              projectId = existing.id;
+            } else {
+              // Create new project
+              const newProject = await projectRepo.create({
+                title: taskData.projectTitle,
+                description: `Project for ${taskData.projectTitle}`,
+                owner: this.config.agentType,
+                priority: 'medium',
+                tokenBudget: 50000,
+                tags: [],
+                createdBy: this.config.agentId,
+              });
+              projectId = newProject.id;
+              logger.info({ projectId, title: taskData.projectTitle }, 'Auto-created project for task');
+            }
+          }
+
+          if (!projectId) {
+            logger.warn({ taskData }, 'create_project_task: no projectId or projectTitle');
+            break;
+          }
+
+          const task = await projectRepo.createTask({
+            projectId,
+            title: taskData.title,
+            description: taskData.description || '',
+            assignee: taskData.assignee || this.config.agentType,
+            storyPoints: taskData.storyPoints || 2,
+            dependencies: taskData.dependencies || [],
+          });
+
+          logger.info({
+            taskId: task.id,
+            projectId,
+            title: task.title,
+            storyPoints: task.storyPoints,
+            assignee: task.assignee,
+          }, 'Project task created with story points');
+
+          // Log as event
+          await eventRepo.log({
+            eventType: 'task_created' as EventType,
+            sourceAgent: this.config.agentId,
+            payload: {
+              taskId: task.id,
+              projectId,
+              title: task.title,
+              storyPoints: task.storyPoints,
+            },
+          });
+        } catch (taskErr) {
+          logger.warn({ error: taskErr, taskData }, 'Failed to create project task');
+        }
+        break;
+      }
+
+      case 'update_project_task': {
+        // Update task status (todo -> in_progress -> review -> done)
+        const updateData = actionData as {
+          taskId?: string;
+          status?: 'todo' | 'in_progress' | 'review' | 'done' | 'blocked';
+          tokensUsed?: number;
+        };
+
+        if (!updateData?.taskId || !updateData?.status) {
+          logger.warn({ updateData }, 'Invalid update_project_task: missing taskId or status');
+          break;
+        }
+
+        try {
+          const task = await projectRepo.updateTaskStatus(
+            updateData.taskId,
+            updateData.status,
+            updateData.tokensUsed
+          );
+
+          if (task) {
+            logger.info({
+              taskId: task.id,
+              title: task.title,
+              status: task.status,
+              completedAt: task.completedAt,
+            }, 'Project task status updated');
+
+            // Log as event
+            await eventRepo.log({
+              eventType: 'task_updated' as EventType,
+              sourceAgent: this.config.agentId,
+              payload: {
+                taskId: task.id,
+                status: task.status,
+                completedAt: task.completedAt,
+              },
+            });
+          }
+        } catch (updateErr) {
+          logger.warn({ error: updateErr, updateData }, 'Failed to update project task');
+        }
+        break;
+      }
+
+      case 'spawn_subagent': {
+        // Spawn a specialized sub-agent (QA, Developer, DevOps, etc.)
+        const subagentData = actionData as {
+          subagentType?: 'qa' | 'developer' | 'devops' | 'architect' | 'frontend' | 'security' | 'sre' | 'release';
+          task?: string;
+          context?: Record<string, unknown>;
+          timeout?: number;
+        };
+
+        if (!subagentData?.subagentType || !subagentData?.task) {
+          logger.warn({ subagentData }, 'Invalid spawn_subagent: missing subagentType or task');
+          break;
+        }
+
+        try {
+          // Build sub-agent profile path
+          const subagentProfile = `cto-${subagentData.subagentType}`;
+
+          // Spawn as worker with the sub-agent profile context
+          const workerId = crypto.randomUUID();
+          const traceId = getTraceId() || crypto.randomUUID();
+
+          // Build enhanced task with sub-agent context
+          const enhancedTask = `[SUB-AGENT: ${subagentData.subagentType.toUpperCase()}]\n\n` +
+            `Profile: profiles/${subagentProfile}.md\n` +
+            `Parent: ${this.config.agentType}\n\n` +
+            `Task: ${subagentData.task}\n\n` +
+            (subagentData.context ? `Context: ${JSON.stringify(subagentData.context, null, 2)}` : '');
+
+          logger.info({
+            subagentType: subagentData.subagentType,
+            workerId,
+            task: subagentData.task.substring(0, 100),
+          }, 'Spawning sub-agent via worker');
+
+          // Use spawn_worker mechanism with sub-agent context
+          const result = await spawnWorker(
+            this.config.agentId,
+            this.config.agentType,
+            enhancedTask,
+            ['shell', 'filesystem', 'git'], // Sub-agents get full dev access
+            subagentData.context,
+            subagentData.timeout || 180000 // 3 min default
+          );
+
+          logger.info({
+            subagentType: subagentData.subagentType,
+            workerId,
+            success: result.success,
+            duration: result.duration,
+          }, 'Sub-agent worker completed');
+
+          // Log as event
+          await eventRepo.log({
+            eventType: 'subagent_spawned' as EventType,
+            sourceAgent: this.config.agentId,
+            payload: {
+              subagentType: subagentData.subagentType,
+              workerId,
+              success: result.success,
+              duration: result.duration,
+            },
+          });
+
+          // Publish result to dashboard
+          await publisher.publish('channel:worker:logs', JSON.stringify({
+            type: 'subagent_result',
+            agentType: this.config.agentType,
+            subagentType: subagentData.subagentType,
+            workerId,
+            success: result.success,
+            duration: result.duration,
+            output: result.result?.substring(0, 500),
+            timestamp: new Date().toISOString(),
+          }));
+        } catch (subagentErr) {
+          logger.warn({ error: subagentErr, subagentData }, 'Failed to spawn sub-agent');
         }
         break;
       }
