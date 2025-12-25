@@ -152,6 +152,15 @@
         "ALLOWED_DOMAINS": "${ALLOWED_DOMAINS}"
       },
       "description": "DNS record management via Cloudflare API"
+    },
+    "status": {
+      "command": "node",
+      "args": ["/app/mcp-servers/status-mcp/dist/index.js"],
+      "env": {
+        "STATUS_SERVICE_URL": "http://aito-status:3002",
+        "AGENT_TYPE": "${AGENT_TYPE}"
+      },
+      "description": "Agent status dashboard - post status, view team activity (TASK-108)"
     }
   }
 }

@@ -58,6 +58,43 @@ import {
 
 const logger = createLogger('daemon');
 
+// Status Service URL (TASK-108)
+const STATUS_SERVICE_URL = process.env.STATUS_SERVICE_URL || 'http://aito-status:3002';
+
+/**
+ * Post agent status to Status Service (TASK-108)
+ * Non-blocking - errors are logged but don't affect loop execution
+ */
+async function postAgentStatus(
+  agentType: string,
+  loopNumber: number,
+  status: 'working' | 'idle' | 'blocked' | 'completed',
+  activity: string,
+  issueNumber?: number
+): Promise<void> {
+  try {
+    const response = await fetch(`${STATUS_SERVICE_URL}/api/status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agent: agentType,
+        loop: loopNumber,
+        status,
+        activity,
+        issue: issueNumber,
+      }),
+    });
+    if (!response.ok) {
+      const errText = await response.text();
+      logger.warn({ agentType, status, error: errText }, 'Failed to post agent status');
+    }
+  } catch (error) {
+    // Non-blocking - just log and continue
+    const errMsg = error instanceof Error ? error.message : String(error);
+    logger.debug({ agentType, status, error: errMsg }, 'Status service unreachable (non-critical)');
+  }
+}
+
 /**
  * Priority-based queue delays (in milliseconds)
  * Higher priority tasks are processed faster
@@ -759,6 +796,9 @@ export class AgentDaemon {
       const loopCount = (await this.state.get<number>(StateKeys.LOOP_COUNT)) || 0;
       await this.state.set(StateKeys.LOOP_COUNT, loopCount + 1);
 
+      // TASK-108: Post "working" status at loop start
+      postAgentStatus(this.config.agentType, loopCount + 1, 'working', `Processing ${trigger} trigger`);
+
       // TASK-006: Get essential state only (performance optimization)
       // Loads only 6 keys instead of potentially 1000+ keys
       const currentState = await this.state.getEssential();
@@ -1187,6 +1227,15 @@ export class AgentDaemon {
 
       const duration = Date.now() - loopStart;
       logger.info({ trigger, duration, success: result.success }, 'Loop completed');
+
+      // TASK-108: Post "idle" status at loop end
+      const completedLoopCount = (await this.state.get<number>(StateKeys.LOOP_COUNT)) || 0;
+      postAgentStatus(
+        this.config.agentType,
+        completedLoopCount,
+        result.success ? 'idle' : 'blocked',
+        result.success ? `Completed ${trigger} loop` : `Loop failed: ${trigger}`
+      );
 
       // EVENT-DRIVEN: Check if more tasks in queue
       // Note: This is a read-only peek to decide if we need another loop.

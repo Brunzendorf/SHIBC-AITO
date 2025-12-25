@@ -1,0 +1,22 @@
+{
+  "name": "@aito/status-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for agent status updates (TASK-108)",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "status-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "node-fetch": "^3.3.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

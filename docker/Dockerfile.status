@@ -1,0 +1,35 @@
+# AITO Status Service
+# Provides real-time agent status updates via REST + WebSocket
+# TASK-108: Agent Status Service
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install runtime dependencies first
+RUN npm init -y && \
+    npm install express cors ws pg && \
+    npm install -D typescript @types/node @types/express @types/ws @types/cors @types/pg
+
+# Copy source
+COPY src/services/status ./src/services/status
+
+# Build TypeScript (output goes to dist/src/services/status/)
+RUN npx tsc src/services/status/index.ts \
+    --outDir dist \
+    --esModuleInterop \
+    --resolveJsonModule \
+    --target ES2020 \
+    --module commonjs \
+    --skipLibCheck \
+    --strict
+
+# Expose port
+EXPOSE 3002
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD wget --quiet --tries=1 --spider http://localhost:3002/health || exit 1
+
+# Run service
+CMD ["node", "dist/index.js"]

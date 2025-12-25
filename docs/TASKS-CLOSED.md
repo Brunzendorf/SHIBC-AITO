@@ -57,4 +57,23 @@ Vollständige Historie siehe Git History.
 - `db.ts`: Added `taskRepo.findById()` for urgent queue processing
 - Result: `context:backlog` now contains 420 issues, agents can see Kanban
 
-**Gesamt: 68 Tasks erledigt**
+### Sprint 13: Agent Status Service (2025-12-25)
+
+| Task | Beschreibung | Status |
+|------|--------------|--------|
+| TASK-108 | Agent Status Service - Workspace/Issue Pollution reduzieren | ✅ |
+
+**Implementiert:**
+- `src/services/status/index.ts`: Status Service mit REST + WebSocket API
+- `docker/migrations/009_agent_status.sql`: PostgreSQL Schema (agent_status, agent_heartbeat)
+- `mcp-servers/status-mcp/`: MCP Server für Agents (post_status, get_team_status, get_my_history)
+- `src/agents/daemon.ts`: Loop-Start/End Status-Calls integriert
+- `dashboard/src/components/agents/AgentStatusBoard.tsx`: Live Status Dashboard Komponente
+- `docker-compose.yml`: aito-status Service hinzugefügt
+
+**Erwartete Verbesserungen:**
+- Loop-Dateien/Agent: ~50+ → 0
+- "Proof" GitHub Issues: 30+ → 0
+- Status-Sichtbarkeit: Keine → Real-time Dashboard
+
+**Gesamt: 69 Tasks erledigt**

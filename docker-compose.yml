@@ -29,6 +29,8 @@ x-agent-base-env: &agent-base-env
   SESSION_POOL_ENABLED: ${SESSION_POOL_ENABLED:-false}
   SESSION_MAX_LOOPS: ${SESSION_MAX_LOOPS:-50}
   SESSION_IDLE_TIMEOUT_MS: ${SESSION_IDLE_TIMEOUT_MS:-1800000}
+  # Status Service (TASK-108)
+  STATUS_SERVICE_URL: http://status:3002
 
 services:
   # ============================================
@@ -553,6 +555,32 @@ services:
       - aito-network
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # STATUS SERVICE (Agent Status Dashboard)
+  # ============================================
+
+  status:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.status
+    container_name: aito-status
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      STATUS_PORT: 3002
+      DATABASE_URL: postgresql://${POSTGRES_USER:-aito}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-aito}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - aito-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3002/health"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -3,7 +3,7 @@
 import { Typography, Box, Grid } from '@mui/material';
 import SummaryCards from '@/components/widgets/SummaryCards';
 import HealthWidget from '@/components/widgets/HealthWidget';
-import AgentGrid from '@/components/agents/AgentGrid';
+import AgentStatusBoard from '@/components/agents/AgentStatusBoard';
 import RecentActivity from '@/components/widgets/RecentActivity';
 import FocusPanel from '@/components/FocusPanel';
 import InitiativesPanel from '@/components/InitiativesPanel';
@@ -43,13 +43,13 @@ export default function DashboardPage() {
         </Grid>
       </Grid>
 
-      {/* Agent Grid */}
+      {/* Agent Status Board (TASK-108) */}
       <Box sx={{ mb: 2 }}>
         <Typography variant="h5" gutterBottom sx={{ fontWeight: 600 }}>
-          Agents
+          Agent Status
         </Typography>
       </Box>
-      <AgentGrid />
+      <AgentStatusBoard />
     </Box>
   );
 }
