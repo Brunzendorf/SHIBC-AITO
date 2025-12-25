@@ -10,7 +10,7 @@
 
 import { createLogger } from './logger.js';
 
-const logger = createLogger().child({ component: 'mcp-enforcement' });
+const logger = createLogger('mcp-enforcement');
 
 /**
  * Operation types that MUST use specific MCPs
