@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/block-executables.sh\""
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Edit(**)",
+      "Glob(**)",
+      "Grep(**)",
+      "Write(*.md)",
+      "Write(*.txt)",
+      "Write(*.json)",
+      "Write(*.yaml)",
+      "Write(*.yml)",
+      "Write(*.csv)",
+      "Write(images/**)",
+      "Bash(*)"
+    ],
+    "deny": [
+      "Write(*.js)",
+      "Write(*.ts)",
+      "Write(*.sh)",
+      "Write(*.py)",
+      "Write(*.bash)",
+      "Write(*.mjs)",
+      "Write(*.cjs)"
+    ]
+  }
+}

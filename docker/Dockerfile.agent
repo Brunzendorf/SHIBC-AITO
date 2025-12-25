@@ -193,5 +193,11 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
 
 # Default command - merge claude-base into .claude volume, then start agent
 # cp -rn = recursive, no-clobber (don't overwrite existing files like credentials)
-# BUT: always force-update mcp_servers.json to ensure correct config
-CMD ["sh", "-c", "cp -rn /app/claude-base/* /app/.claude/ 2>/dev/null || true; cp -f /app/claude-base/mcp_servers.json /app/.claude/mcp_servers.json 2>/dev/null || true; node dist/agents/index.js"]
+# BUT: always force-update mcp_servers.json, settings.json, and hooks to ensure correct config
+CMD ["sh", "-c", "\
+  cp -rn /app/claude-base/* /app/.claude/ 2>/dev/null || true; \
+  cp -f /app/claude-base/mcp_servers.json /app/.claude/mcp_servers.json 2>/dev/null || true; \
+  cp -f /app/claude-base/settings.json /app/.claude/settings.json 2>/dev/null || true; \
+  cp -rf /app/claude-base/hooks /app/.claude/ 2>/dev/null || true; \
+  chmod +x /app/.claude/hooks/*.sh 2>/dev/null || true; \
+  node dist/agents/index.js"]
