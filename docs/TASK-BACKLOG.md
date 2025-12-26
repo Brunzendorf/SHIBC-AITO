@@ -114,18 +114,18 @@ Claude execution timed out after 300000ms
 - [ ] Redis pub/sub Integration
 - [ ] Timeout-Handling mit Auto-Retry
 
-#### TASK-109.4: Agent Daemon Integration
+#### TASK-109.4: Agent Daemon Integration ✅
 **Aufwand:** 4h
-- [ ] Neuer Message-Typ: `state_task` in daemon.ts
-- [ ] State-Context in Prompt injizieren
-- [ ] `state_ack` Response-Handling
-- [ ] Agent-Output zu ACK-Payload parsen
+- [x] Neuer Message-Typ: `state_task` in daemon.ts
+- [x] State-Context in Prompt injizieren
+- [x] `state_ack` Response-Handling
+- [x] Agent-Output zu ACK-Payload parsen
 
-#### TASK-109.5: CEO State Machine Definitionen
+#### TASK-109.5: CEO State Machine Definitionen ✅
 **Aufwand:** 2h
-- [ ] STRATEGIC_DECISION Workflow (7 States)
-- [ ] INITIATIVE_LAUNCH Workflow (6 States)
-- [ ] WEEKLY_REPORT Workflow (5 States)
+- [x] STRATEGIC_DECISION Workflow (7 States)
+- [x] INITIATIVE_LAUNCH Workflow (6 States)
+- [x] WEEKLY_REPORT Workflow (5 States)
 
 #### TASK-109.6: CMO State Machine Definitionen
 **Aufwand:** 3h
