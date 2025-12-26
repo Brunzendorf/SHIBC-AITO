@@ -127,12 +127,12 @@ Claude execution timed out after 300000ms
 - [x] INITIATIVE_LAUNCH Workflow (6 States)
 - [x] WEEKLY_REPORT Workflow (5 States)
 
-#### TASK-109.6: CMO State Machine Definitionen
+#### TASK-109.6: CMO State Machine Definitionen ✅
 **Aufwand:** 3h
-- [ ] CAMPAIGN_EXECUTION Workflow (9 States)
-- [ ] CONTENT_CREATION Workflow (6 States)
-- [ ] SOCIAL_RESPONSE Workflow (5 States)
-- [ ] MARKET_NEWSJACKING Workflow (7 States)
+- [x] CAMPAIGN_EXECUTION Workflow (8 States) - bereits in 010
+- [x] CONTENT_CREATION Workflow (6 States)
+- [x] SOCIAL_RESPONSE Workflow (5 States)
+- [x] MARKET_NEWSJACKING Workflow (7 States)
 
 #### TASK-109.7: CTO State Machine Definitionen
 **Aufwand:** 4h
