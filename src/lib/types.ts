@@ -163,6 +163,7 @@ export interface Event {
 export type MessageType =
   | 'task'
   | 'task_queued'          // Notification that a task was added to queue (wake-up signal)
+  | 'state_task'           // State Machine task from StateMachineService (TASK-109)
   | 'status_request'
   | 'status_response'
   | 'decision'

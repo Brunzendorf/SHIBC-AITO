@@ -8,30 +8,25 @@
  * - Audit trail of all transitions
  */
 
-import { Pool, PoolClient } from 'pg';
+import { Pool } from 'pg';
 import Redis from 'ioredis';
 import { EventEmitter } from 'events';
 import {
   AgentType,
   StateMachine,
   StateMachineDefinition,
-  StateDefinition,
   StateTransition,
   MachineContext,
   MachineStatus,
-  QueueItem,
-  QueueStatus,
   StateTaskMessage,
   StateAckMessage,
   CreateMachineOptions,
-  TransitionOptions,
   ListMachinesOptions,
   MachineStats,
   StateMachineEvent,
   StateMachineDefinitionRow,
   StateMachineRow,
   StateTransitionRow,
-  QueueItemRow,
 } from './types';
 
 // ============================================================================

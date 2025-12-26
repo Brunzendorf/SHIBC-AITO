@@ -44,6 +44,7 @@ import {
 } from './session-executor.js';
 import { llmRouter, type TaskContext } from '../lib/llm/index.js';
 import type { AgentType, AgentMessage, EventType } from '../lib/types.js';
+import type { StateTaskMessage, StateAckMessage } from '../services/state-machine/types.js';
 import { spawnWorkerAsync, spawnWorker } from '../workers/spawner.js';
 import { queueForArchive } from '../workers/archive-worker.js';
 import { getTraceId, withTraceAsync } from '../lib/tracing.js';
@@ -170,6 +171,8 @@ export class AgentDaemon {
   // TASK-002: Message queue for messages received during loop execution
   private pendingMessages: Array<{ message: AgentMessage; channel: string }> = [];
   private processingMessages = false; // Prevents concurrent message processing
+  // TASK-109: Current state machine task context (set when triggered by state_task)
+  private currentStateTask: StateTaskMessage | null = null;
 
   constructor(daemonConfig: DaemonConfig) {
     this.config = daemonConfig;
@@ -502,6 +505,18 @@ export class AgentDaemon {
 
     if (needsAI) {
       logger.info({ type: message.type }, 'Triggering AI for message');
+
+      // TASK-109: Extract and store state task context for state_task messages
+      if (message.type === 'state_task' && message.payload) {
+        this.currentStateTask = message.payload as StateTaskMessage;
+        logger.info({
+          machineId: this.currentStateTask.machineId,
+          state: this.currentStateTask.state,
+          workflowType: this.currentStateTask.workflowType,
+          attemptNumber: this.currentStateTask.attemptNumber,
+        }, 'State machine task received');
+      }
+
       await this.runLoop('message', message);
     } else {
       // Handle simple events without AI
@@ -540,6 +555,212 @@ export class AgentDaemon {
     }
 
     this.processingMessages = false;
+  }
+
+  /**
+   * TASK-109: Build prompt for state machine tasks
+   * Uses the state machine's prompt and injects context for agent to work on
+   */
+  private buildStateMachinePrompt(
+    stateTask: StateTaskMessage,
+    agentState: Record<string, unknown>,
+    ragContext: string
+  ): string {
+    const sections: string[] = [];
+
+    // Header with workflow info
+    sections.push(`## STATE MACHINE TASK
+
+You are executing state **${stateTask.state}** in workflow **${stateTask.workflowType}**.
+Machine ID: ${stateTask.machineId}
+Attempt: ${stateTask.attemptNumber}/${stateTask.timeout / 60000} min timeout
+
+---`);
+
+    // State Machine Context (project info, previous state results)
+    sections.push(`## WORKFLOW CONTEXT
+
+\`\`\`json
+${JSON.stringify(stateTask.context, null, 2)}
+\`\`\`
+
+---`);
+
+    // The actual task prompt from the state definition
+    sections.push(`## YOUR TASK
+
+${stateTask.prompt}
+
+---`);
+
+    // Required output fields
+    sections.push(`## REQUIRED OUTPUT
+
+Your response MUST include JSON with these fields in your output:
+
+\`\`\`json
+{
+${stateTask.requiredOutput.map(field => `  "${field}": "<your value here>"`).join(',\n')}
+}
+\`\`\`
+
+Mark the JSON block clearly so it can be parsed. Example:
+
+**STATE_OUTPUT:**
+\`\`\`json
+{
+${stateTask.requiredOutput.map(field => `  "${field}": "..."`).join(',\n')}
+}
+\`\`\`
+
+---`);
+
+    // RAG context if available
+    if (ragContext) {
+      sections.push(`## RELEVANT CONTEXT FROM MEMORY
+
+${ragContext}
+
+---`);
+    }
+
+    // Current agent state (subset)
+    const relevantState: Record<string, unknown> = {};
+    const stateKeys = ['last_loop_at', 'project_path', 'current_task', 'loop_count'];
+    for (const key of stateKeys) {
+      if (agentState[key] !== undefined) {
+        relevantState[key] = agentState[key];
+      }
+    }
+    if (Object.keys(relevantState).length > 0) {
+      sections.push(`## AGENT STATE
+
+\`\`\`json
+${JSON.stringify(relevantState, null, 2)}
+\`\`\`
+
+---`);
+    }
+
+    // Instructions for completion
+    sections.push(`## COMPLETION
+
+When you complete this state:
+1. Execute the required work
+2. Output the STATE_OUTPUT JSON block with all required fields
+3. Include any errors in the JSON if something failed
+
+The state machine will automatically advance to the next state based on your output.`);
+
+    return sections.join('\n\n');
+  }
+
+  /**
+   * TASK-109: Send state acknowledgment to state machine service
+   */
+  private async sendStateAck(
+    stateTask: StateTaskMessage,
+    success: boolean,
+    output: Record<string, unknown>,
+    error?: string
+  ): Promise<void> {
+    const ack: StateAckMessage = {
+      type: 'state_ack',
+      machineId: stateTask.machineId,
+      state: stateTask.state,
+      success,
+      output,
+      error,
+    };
+
+    // Publish to state machine service channel
+    const channel = 'channel:state-machine';
+    try {
+      await publisher.publish(channel, JSON.stringify(ack));
+      logger.info({
+        machineId: stateTask.machineId,
+        state: stateTask.state,
+        success,
+        hasError: !!error,
+      }, 'State acknowledgment sent');
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.error({ error: errMsg, machineId: stateTask.machineId }, 'Failed to send state acknowledgment');
+    }
+  }
+
+  /**
+   * TASK-109: Parse state output from agent's response
+   * Looks for STATE_OUTPUT JSON block in the response
+   */
+  private parseStateOutput(claudeOutput: string, requiredFields: string[]): {
+    success: boolean;
+    output: Record<string, unknown>;
+    error?: string;
+  } {
+    try {
+      // Look for STATE_OUTPUT JSON block
+      const stateOutputMatch = claudeOutput.match(/\*\*STATE_OUTPUT:\*\*\s*```json\s*([\s\S]*?)```/);
+      if (stateOutputMatch) {
+        const parsed = JSON.parse(stateOutputMatch[1].trim());
+
+        // Check if all required fields are present
+        const missingFields = requiredFields.filter(field => !(field in parsed));
+        if (missingFields.length > 0) {
+          return {
+            success: false,
+            output: parsed,
+            error: `Missing required fields: ${missingFields.join(', ')}`,
+          };
+        }
+
+        // Check if agent reported an error
+        if (parsed.error || parsed.success === false) {
+          return {
+            success: false,
+            output: parsed,
+            error: parsed.error || 'Agent reported failure',
+          };
+        }
+
+        return { success: true, output: parsed };
+      }
+
+      // Fallback: Try to find any JSON block with required fields
+      const jsonMatches = claudeOutput.match(/```json\s*([\s\S]*?)```/g);
+      if (jsonMatches) {
+        for (const match of jsonMatches) {
+          try {
+            const jsonContent = match.replace(/```json\s*/, '').replace(/```$/, '').trim();
+            const parsed = JSON.parse(jsonContent);
+
+            // Check if this JSON has any required fields
+            const hasRequiredField = requiredFields.some(field => field in parsed);
+            if (hasRequiredField) {
+              const missingFields = requiredFields.filter(field => !(field in parsed));
+              if (missingFields.length === 0) {
+                return { success: true, output: parsed };
+              }
+            }
+          } catch {
+            // Continue to next JSON block
+          }
+        }
+      }
+
+      // No valid state output found
+      return {
+        success: false,
+        output: {},
+        error: 'No STATE_OUTPUT JSON block found in response',
+      };
+    } catch (err) {
+      return {
+        success: false,
+        output: {},
+        error: `Failed to parse state output: ${err instanceof Error ? err.message : String(err)}`,
+      };
+    }
   }
 
   /**
@@ -657,6 +878,7 @@ export class AgentDaemon {
     // Always trigger AI for these types
     const aiRequired: AgentMessage['type'][] = [
       'task',
+      'state_task',           // State Machine task (TASK-109)
       'decision',
       'alert',
       'vote',
@@ -913,16 +1135,29 @@ export class AgentDaemon {
 
       // Build prompt
       const systemPrompt = generateSystemPrompt(this.profile);
-      let loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data }, pendingDecisions, ragContext, pendingTasks, kanbanIssues, brandConfig);
+      let loopPrompt: string;
 
-      // Add initiative context so agents can propose their own initiatives
-      try {
-        const initiativeContext = await getInitiativePromptContext(this.config.agentType as InitiativeAgentType);
-        if (initiativeContext) {
-          loopPrompt += '\n' + initiativeContext;
+      // TASK-109: Build special prompt for state machine tasks
+      if (this.currentStateTask) {
+        loopPrompt = this.buildStateMachinePrompt(this.currentStateTask, currentState, ragContext);
+        logger.info({
+          machineId: this.currentStateTask.machineId,
+          state: this.currentStateTask.state,
+          promptLength: loopPrompt.length,
+        }, 'Built state machine prompt');
+      } else {
+        // Standard loop prompt
+        loopPrompt = buildLoopPrompt(this.profile, currentState, { type: trigger, data }, pendingDecisions, ragContext, pendingTasks, kanbanIssues, brandConfig);
+
+        // Add initiative context so agents can propose their own initiatives
+        try {
+          const initiativeContext = await getInitiativePromptContext(this.config.agentType as InitiativeAgentType);
+          if (initiativeContext) {
+            loopPrompt += '\n' + initiativeContext;
+          }
+        } catch (initCtxErr) {
+          logger.debug({ error: initCtxErr }, 'Failed to get initiative context');
         }
-      } catch (initCtxErr) {
-        logger.debug({ error: initCtxErr }, 'Failed to get initiative context');
       }
 
       logger.debug({ systemPromptLength: systemPrompt.length, loopPromptLength: loopPrompt.length }, 'Prompt lengths');
@@ -1186,6 +1421,31 @@ export class AgentDaemon {
           }
         }
 
+        // TASK-109: Send state acknowledgment for state machine tasks
+        if (this.currentStateTask) {
+          try {
+            const stateResult = this.parseStateOutput(result.output, this.currentStateTask.requiredOutput);
+            await this.sendStateAck(
+              this.currentStateTask,
+              stateResult.success,
+              stateResult.output,
+              stateResult.error
+            );
+            logger.info({
+              machineId: this.currentStateTask.machineId,
+              state: this.currentStateTask.state,
+              success: stateResult.success,
+              outputFields: Object.keys(stateResult.output),
+            }, 'State task completed and acknowledged');
+          } catch (stateAckErr) {
+            const errMsg = stateAckErr instanceof Error ? stateAckErr.message : String(stateAckErr);
+            logger.error({ error: errMsg }, 'Failed to send state acknowledgment');
+          } finally {
+            // Clear the state task context
+            this.currentStateTask = null;
+          }
+        }
+
         // Update success count
         const successCount = (await this.state.get<number>(StateKeys.SUCCESS_COUNT)) || 0;
         await this.state.set(StateKeys.SUCCESS_COUNT, successCount + 1);
@@ -1207,6 +1467,29 @@ export class AgentDaemon {
 
       } else {
         logger.error({ error: result.error }, 'Loop execution failed');
+
+        // TASK-109: Send failure acknowledgment for state machine tasks
+        if (this.currentStateTask) {
+          try {
+            await this.sendStateAck(
+              this.currentStateTask,
+              false,
+              {},
+              result.error || 'Loop execution failed'
+            );
+            logger.info({
+              machineId: this.currentStateTask.machineId,
+              state: this.currentStateTask.state,
+              error: result.error,
+            }, 'State task failed and acknowledged');
+          } catch (stateAckErr) {
+            const errMsg = stateAckErr instanceof Error ? stateAckErr.message : String(stateAckErr);
+            logger.error({ error: errMsg }, 'Failed to send state failure acknowledgment');
+          } finally {
+            // Clear the state task context
+            this.currentStateTask = null;
+          }
+        }
 
         // Update error count
         const errorCount = (await this.state.get<number>(StateKeys.ERROR_COUNT)) || 0;
