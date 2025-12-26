@@ -141,12 +141,12 @@ Claude execution timed out after 300000ms
 - [x] INFRASTRUCTURE_CHECK Workflow (5 States)
 - [x] SECURITY_INCIDENT Workflow (9 States)
 
-#### TASK-109.8: CFO State Machine Definitionen
+#### TASK-109.8: CFO State Machine Definitionen ✅
 **Aufwand:** 3h
-- [ ] TREASURY_REPORT Workflow (6 States)
-- [ ] PAYMENT_PROCESSING Workflow (9 States)
-- [ ] BUDGET_ALLOCATION Workflow (6 States)
-- [ ] FINANCIAL_AUDIT Workflow (6 States)
+- [x] TREASURY_REPORT Workflow (6 States) - bereits in 010
+- [x] PAYMENT_PROCESSING Workflow (9 States)
+- [x] BUDGET_ALLOCATION Workflow (6 States)
+- [x] FINANCIAL_AUDIT Workflow (6 States)
 
 #### TASK-109.9: COO State Machine Definitionen
 **Aufwand:** 3h
