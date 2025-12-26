@@ -241,14 +241,93 @@ Claude execution timed out after 300000ms
 
 ---
 
+### TASK-110: daemon.ts Refactoring (2889 Zeilen → Module)
+**Status:** 🟡 MITTEL
+**Entdeckt:** 2025-12-26
+**Aufwand:** 8-12h
+
+**Problem:**
+- `src/agents/daemon.ts` hat **2889 Zeilen** - viel zu groß
+- Schwer zu testen, warten und verstehen
+- Viele verschiedene Verantwortlichkeiten vermischt
+
+**Vorgeschlagene Aufteilung:**
+
+| Neues Modul | Zeilen (ca.) | Verantwortlichkeit |
+|-------------|--------------|---------------------|
+| `daemon-core.ts` | ~300 | DaemonConfig, start(), stop(), Lifecycle |
+| `message-handler.ts` | ~400 | handleMessage(), shouldTriggerAI(), message queue |
+| `loop-executor.ts` | ~600 | runLoop(), prompt building, AI execution |
+| `action-executor.ts` | ~400 | executeActionWithRetry(), spawn_worker, tools |
+| `state-machine-handler.ts` | ~250 | buildStateMachinePrompt(), sendStateAck(), parseStateOutput() |
+| `worker-state-extractor.ts` | ~200 | extractAndSaveWorkerState() |
+| `initiative-handler.ts` | ~200 | runAIInitiativeGeneration() |
+| `stream-handlers.ts` | ~300 | setupStreamConsumers(), Redis stream logic |
+
+**Aufgaben:**
+- [ ] Module-Struktur planen
+- [ ] Shared interfaces definieren
+- [ ] daemon-core.ts extrahieren (Lifecycle)
+- [ ] message-handler.ts extrahieren
+- [ ] loop-executor.ts extrahieren
+- [ ] action-executor.ts extrahieren
+- [ ] state-machine-handler.ts extrahieren
+- [ ] Tests für jedes Modul anpassen
+- [ ] Imports in allen abhängigen Files updaten
+
+**Akzeptanzkriterien:**
+- [ ] Kein File > 500 Zeilen
+- [ ] Klare Separation of Concerns
+- [ ] Alle Tests passieren
+- [ ] Keine Circular Dependencies
+
+---
+
+### TASK-111: Test Suite reparieren + State Machine Tests
+**Status:** 🟡 MITTEL
+**Entdeckt:** 2025-12-26
+**Aufwand:** 4-6h
+
+**Problem:**
+- 6 Tests schlagen fehl (2 Test-Dateien)
+- Keine Tests für neue State Machine Funktionalität (TASK-109)
+
+**Fehlgeschlagene Tests:**
+1. `src/agents/claude.test.ts` (1 Fehler)
+   - `executeClaudeAgent > should execute claude with correct arguments`
+   - mockSpawn Expectations stimmen nicht mehr
+
+2. `src/agents/session-pool.test.ts` (5 Fehler)
+   - `injectProfile > should send profile prompt on first injection`
+   - `sendMessage > should send message and receive response`
+   - `stop > should send /exit and kill process`
+   - Stream/Session Mock-Probleme
+
+**Aufgaben:**
+- [ ] claude.test.ts Fehler fixen (spawn arguments anpassen)
+- [ ] session-pool.test.ts Fehler fixen (Stream Mocks korrigieren)
+- [ ] Neue Tests für State Machine Service schreiben:
+  - [ ] StateMachineService Unit Tests
+  - [ ] Daemon state_task handling Tests
+  - [ ] parseStateOutput() Tests
+  - [ ] sendStateAck() Tests
+- [ ] Integration Tests für State Machine Workflow
+
+**Akzeptanzkriterien:**
+- [ ] Alle 1256 Tests passieren (0 Fehler)
+- [ ] State Machine Service hat >80% Coverage
+- [ ] Daemon state_task Integration getestet
+
+---
+
 ## Zusammenfassung
 
 | Priorität | Tasks | Status |
 |-----------|-------|--------|
 | 🔴 KRITISCH | 0 | ✅ ALLE GEFIXT |
 | 🟠 HOCH | 4 | OFFEN |
-| 🟡 MITTEL | 2 | OFFEN |
-| **GESAMT** | **6** | **OFFEN** |
+| 🟡 MITTEL | 4 | OFFEN |
+| **GESAMT** | **8** | **OFFEN** |
 
 **Nächste Schritte:**
 1. ~~TASK-100 fixen (Backlog Grooming)~~ ✅ DONE
