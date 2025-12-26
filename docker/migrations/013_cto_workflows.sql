@@ -194,6 +194,102 @@ FROM state_machine_definitions
 WHERE type = 'cto_infrastructure_check'
 ON CONFLICT DO NOTHING;
 
+-- CTO: EXTEND_PROJECT
+-- Trigger: Scheduled or manual review of existing projects
+-- Flow: ANALYZE_PROJECT → IDENTIFY_IMPROVEMENTS → EVALUATE_FEASIBILITY → PRIORITIZE → CREATE_ISSUES → IMPLEMENT_QUICK_WINS → COMPLETE
+INSERT INTO state_machine_definitions (type, agent_type, name, description, initial_state, states, trigger_type, trigger_config)
+VALUES (
+    'cto_extend_project',
+    'cto',
+    'Extend Project',
+    'Analyze existing projects and identify enhancement opportunities',
+    'ANALYZE_PROJECT',
+    '[
+        {
+            "name": "ANALYZE_PROJECT",
+            "description": "Analyze the existing project thoroughly",
+            "agentPrompt": "Analyze existing project for enhancement opportunities:\n\nProject: {projectName}\nPath: {projectPath}\n\n1. Read the project README and documentation\n2. Analyze the codebase structure and architecture\n3. Check test coverage and identify gaps\n4. Review existing issues and user feedback\n5. Analyze dependencies - are any outdated?\n6. Check for technical debt indicators\n7. Review performance metrics if available\n\nCreate a comprehensive project health assessment.",
+            "requiredOutput": ["projectSummary", "techStack", "testCoverage", "dependencies", "technicalDebt", "healthScore"],
+            "onSuccess": "IDENTIFY_IMPROVEMENTS",
+            "onFailure": "ANALYZE_PROJECT",
+            "timeout": 300000,
+            "maxRetries": 2
+        },
+        {
+            "name": "IDENTIFY_IMPROVEMENTS",
+            "description": "Identify potential improvements and new features",
+            "agentPrompt": "Identify improvement opportunities:\n\nProject: {projectName}\nHealth Score: {healthScore}\nTech Debt: {technicalDebt}\n\nCategories to explore:\n\n1. **New Features**\n   - What features would users benefit from?\n   - What''s missing compared to similar projects?\n   - What would make this more useful for SHIBC?\n\n2. **Performance Improvements**\n   - Caching opportunities\n   - Query optimization\n   - Bundle size reduction\n\n3. **Code Quality**\n   - Refactoring opportunities\n   - Better error handling\n   - Improved logging/monitoring\n\n4. **Security Enhancements**\n   - Input validation\n   - Authentication/authorization\n   - Dependency vulnerabilities\n\n5. **Developer Experience**\n   - Better documentation\n   - Easier setup\n   - More tests\n\nList at least 5-10 concrete improvement ideas.",
+            "requiredOutput": ["newFeatures", "performanceImprovements", "codeQualityImprovements", "securityEnhancements", "dxImprovements"],
+            "onSuccess": "EVALUATE_FEASIBILITY",
+            "onFailure": "IDENTIFY_IMPROVEMENTS",
+            "timeout": 300000,
+            "maxRetries": 2
+        },
+        {
+            "name": "EVALUATE_FEASIBILITY",
+            "description": "Evaluate feasibility and effort for each improvement",
+            "agentPrompt": "Evaluate each improvement opportunity:\n\nImprovements identified:\n- Features: {newFeatures}\n- Performance: {performanceImprovements}\n- Quality: {codeQualityImprovements}\n- Security: {securityEnhancements}\n- DX: {dxImprovements}\n\nFor each improvement, assess:\n1. **Effort**: Low (< 2h), Medium (2-8h), High (> 8h)\n2. **Impact**: Low, Medium, High\n3. **Risk**: Breaking changes? Dependencies?\n4. **Prerequisites**: What needs to be done first?\n\nCalculate priority score = Impact / Effort\nIdentify quick wins (High impact, Low effort).",
+            "requiredOutput": ["evaluatedImprovements", "quickWins", "majorEnhancements", "technicalPrerequisites"],
+            "onSuccess": "PRIORITIZE",
+            "onFailure": "EVALUATE_FEASIBILITY",
+            "timeout": 240000,
+            "maxRetries": 2
+        },
+        {
+            "name": "PRIORITIZE",
+            "description": "Prioritize improvements and create roadmap",
+            "agentPrompt": "Create prioritized improvement roadmap:\n\nQuick Wins: {quickWins}\nMajor Enhancements: {majorEnhancements}\n\n1. Rank all improvements by priority score\n2. Group into phases:\n   - Phase 1: Quick wins (do immediately)\n   - Phase 2: High-value improvements\n   - Phase 3: Nice-to-haves\n3. Consider dependencies between improvements\n4. Estimate total effort per phase\n5. Get CEO input for major changes if needed",
+            "requiredOutput": ["prioritizedList", "phase1Items", "phase2Items", "phase3Items", "totalEffortEstimate"],
+            "onSuccess": "CREATE_ISSUES",
+            "onFailure": "PRIORITIZE",
+            "timeout": 180000,
+            "maxRetries": 2
+        },
+        {
+            "name": "CREATE_ISSUES",
+            "description": "Create GitHub issues for improvements",
+            "agentPrompt": "Create GitHub issues for prioritized improvements:\n\nPhase 1: {phase1Items}\nPhase 2: {phase2Items}\nPhase 3: {phase3Items}\n\nFor each improvement:\n1. Create detailed GitHub issue with:\n   - Clear title: [PROJECT] Enhancement: <description>\n   - Description with context and acceptance criteria\n   - Labels: enhancement, project:<name>, priority:<level>\n   - Effort estimate in description\n2. Link related issues together\n3. Create milestone for project improvements\n\nUse spawn_worker with github-mcp.",
+            "requiredOutput": ["issuesCreated", "issueNumbers", "milestoneCreated"],
+            "onSuccess": "IMPLEMENT_QUICK_WINS",
+            "onFailure": "CREATE_ISSUES",
+            "timeout": 300000,
+            "maxRetries": 3
+        },
+        {
+            "name": "IMPLEMENT_QUICK_WINS",
+            "description": "Implement quick wins immediately",
+            "agentPrompt": "Implement Phase 1 quick wins now:\n\nQuick Wins: {phase1Items}\nProject Path: {projectPath}\n\nFor each quick win:\n1. Implement the change\n2. Write/update tests\n3. Update documentation if needed\n4. Commit with descriptive message\n\nIf any quick win takes longer than expected, skip and leave for separate PR.\n\nThis is autonomous improvement - no PR needed for small fixes.",
+            "requiredOutput": ["implementedItems", "skippedItems", "commitHashes"],
+            "onSuccess": "COMPLETE",
+            "onFailure": "IMPLEMENT_QUICK_WINS",
+            "timeout": 600000,
+            "maxRetries": 2
+        },
+        {
+            "name": "COMPLETE",
+            "description": "Finalize project extension review",
+            "agentPrompt": "Complete project extension review:\n\n1. Update project README with improvements made\n2. Close quick-win issues that were implemented\n3. Create summary report of:\n   - Improvements identified: X\n   - Issues created: Y\n   - Quick wins implemented: Z\n4. Schedule next review (monthly?)\n5. Notify CEO of significant findings",
+            "requiredOutput": ["summaryReport", "nextReviewDate", "ceoNotified"],
+            "onSuccess": null,
+            "onFailure": null,
+            "timeout": 120000,
+            "maxRetries": 1
+        }
+    ]'::jsonb,
+    'scheduled',
+    '{"cron": "0 10 1 * *", "timezone": "Europe/Berlin"}'::jsonb
+) ON CONFLICT (type) DO UPDATE SET
+    states = EXCLUDED.states,
+    trigger_config = EXCLUDED.trigger_config,
+    updated_at = NOW();
+
+-- Create scheduled workflow entry for EXTEND_PROJECT (monthly)
+INSERT INTO scheduled_workflows (definition_id, definition_type, cron_expression, timezone, is_active)
+SELECT id, type, '0 10 1 * *', 'Europe/Berlin', true
+FROM state_machine_definitions
+WHERE type = 'cto_extend_project'
+ON CONFLICT DO NOTHING;
+
 -- ============================================================================
 -- VERIFICATION
 -- ============================================================================
