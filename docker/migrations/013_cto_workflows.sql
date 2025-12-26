@@ -208,8 +208,8 @@ VALUES (
         {
             "name": "ANALYZE_PROJECT",
             "description": "Analyze the existing project thoroughly",
-            "agentPrompt": "Analyze existing project for enhancement opportunities:\n\nProject: {projectName}\nPath: {projectPath}\n\n1. Read the project README and documentation\n2. Analyze the codebase structure and architecture\n3. Check test coverage and identify gaps\n4. Review existing issues and user feedback\n5. Analyze dependencies - are any outdated?\n6. Check for technical debt indicators\n7. Review performance metrics if available\n\nCreate a comprehensive project health assessment.",
-            "requiredOutput": ["projectSummary", "techStack", "testCoverage", "dependencies", "technicalDebt", "healthScore"],
+            "agentPrompt": "Analyze existing project for enhancement opportunities:\n\nProject: {projectName}\nPath: {projectPath}\n\n1. **IMPORTANT: Get GitHub repo** - Run `git remote get-url origin` in {projectPath} to get the repo URL (e.g., owner/repo)\n2. Read the project README and documentation\n3. Analyze the codebase structure and architecture\n4. Check test coverage and identify gaps\n5. Review existing issues and user feedback\n6. Analyze dependencies - are any outdated?\n7. Check for technical debt indicators\n8. Review performance metrics if available\n\nCreate a comprehensive project health assessment.\n\n**CRITICAL:** The githubRepo field MUST contain the repo in format owner/repo (e.g., Brunzendorf/my-project). Issues will be created in THIS repo!",
+            "requiredOutput": ["githubRepo", "projectSummary", "techStack", "testCoverage", "dependencies", "technicalDebt", "healthScore"],
             "onSuccess": "IDENTIFY_IMPROVEMENTS",
             "onFailure": "ANALYZE_PROJECT",
             "timeout": 300000,
@@ -248,7 +248,7 @@ VALUES (
         {
             "name": "CREATE_ISSUES",
             "description": "Create GitHub issues for improvements",
-            "agentPrompt": "Create GitHub issues for prioritized improvements:\n\nPhase 1: {phase1Items}\nPhase 2: {phase2Items}\nPhase 3: {phase3Items}\n\nFor each improvement:\n1. Create detailed GitHub issue with:\n   - Clear title: [PROJECT] Enhancement: <description>\n   - Description with context and acceptance criteria\n   - Labels: enhancement, project:<name>, priority:<level>\n   - Effort estimate in description\n2. Link related issues together\n3. Create milestone for project improvements\n\nUse spawn_worker with github-mcp.",
+            "agentPrompt": "Create GitHub issues for prioritized improvements:\n\n**TARGET REPO: {githubRepo}** ← Issues werden HIER erstellt!\n\nPhase 1: {phase1Items}\nPhase 2: {phase2Items}\nPhase 3: {phase3Items}\n\nFor each improvement:\n1. Create detailed GitHub issue in repo {githubRepo} with:\n   - Clear title: Enhancement: <description>\n   - Description with context and acceptance criteria\n   - Labels: enhancement, priority:<level>\n   - Effort estimate in description\n2. Link related issues together\n3. Create milestone for project improvements\n\nUse spawn_worker with github-mcp. Command: gh issue create --repo {githubRepo} --title ... --body ...",
             "requiredOutput": ["issuesCreated", "issueNumbers", "milestoneCreated"],
             "onSuccess": "IMPLEMENT_QUICK_WINS",
             "onFailure": "CREATE_ISSUES",
